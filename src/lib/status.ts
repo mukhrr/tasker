@@ -1,100 +1,56 @@
-import type { TaskStatus, TaskStatusGroup } from '@/types/database';
+import type { TaskStatusGroup, UserStatus } from '@/types/database';
 
-export interface StatusConfig {
-  label: string;
-  color: string;
-  dotColor: string;
-  group: TaskStatusGroup;
+export interface StatusColorConfig {
+  dot: string;
+  badge: string;
 }
 
-export const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
-  // To-do
-  in_proposal: {
-    label: 'In Proposal',
-    color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-    dotColor: 'bg-gray-500',
-    group: 'todo',
-  },
-  promising: {
-    label: 'Promising',
-    color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300',
-    dotColor: 'bg-yellow-500',
-    group: 'todo',
-  },
-  got_cplus: {
-    label: 'Got C+',
-    color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-    dotColor: 'bg-green-500',
-    group: 'todo',
-  },
-  update_proposal: {
-    label: 'Update Proposal',
-    color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-    dotColor: 'bg-red-500',
-    group: 'todo',
-  },
-  // In progress
-  assigned: {
-    label: 'Assigned',
-    color: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-    dotColor: 'bg-blue-500',
-    group: 'in_progress',
-  },
-  reviewing: {
-    label: 'Reviewing',
-    color: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-    dotColor: 'bg-purple-500',
-    group: 'in_progress',
-  },
-  changes_required: {
-    label: 'Changes Required',
-    color: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
-    dotColor: 'bg-red-400',
-    group: 'in_progress',
-  },
-  awaiting_payment: {
-    label: 'Awaiting Payment',
-    color: 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',
-    dotColor: 'bg-pink-500',
-    group: 'in_progress',
-  },
-  merged: {
-    label: 'Merged',
-    color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-    dotColor: 'bg-gray-500',
-    group: 'in_progress',
-  },
-  // Complete
-  regression: {
-    label: 'Regression',
-    color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-    dotColor: 'bg-red-500',
-    group: 'complete',
-  },
-  paid: {
-    label: 'Paid',
-    color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-    dotColor: 'bg-green-500',
-    group: 'complete',
-  },
-  wasted: {
-    label: 'Wasted',
-    color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-    dotColor: 'bg-red-500',
-    group: 'complete',
-  },
+export const STATUS_COLORS: Record<string, StatusColorConfig> = {
+  gray: { dot: 'bg-gray-500', badge: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' },
+  yellow: { dot: 'bg-yellow-500', badge: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' },
+  green: { dot: 'bg-green-500', badge: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+  red: { dot: 'bg-red-500', badge: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+  blue: { dot: 'bg-blue-500', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' },
+  purple: { dot: 'bg-purple-500', badge: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300' },
+  pink: { dot: 'bg-pink-500', badge: 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300' },
+  orange: { dot: 'bg-orange-500', badge: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300' },
 };
 
-export const STATUS_GROUPS: Record<TaskStatusGroup, TaskStatus[]> = {
-  todo: ['in_proposal', 'promising', 'got_cplus', 'update_proposal'],
-  in_progress: ['assigned', 'reviewing', 'changes_required', 'awaiting_payment', 'merged'],
-  complete: ['regression', 'paid', 'wasted'],
-};
-
-export const ALL_STATUSES = Object.keys(STATUS_CONFIG) as TaskStatus[];
+export const COLOR_NAMES = Object.keys(STATUS_COLORS);
 
 export const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
   in_progress: 'In Progress',
   complete: 'Complete',
 };
+
+export const STATUS_GROUP_ORDER: TaskStatusGroup[] = ['todo', 'in_progress', 'complete'];
+
+export function getStatusColor(colorName: string): StatusColorConfig {
+  return STATUS_COLORS[colorName] ?? STATUS_COLORS.gray;
+}
+
+export function getStatusByKey(statuses: UserStatus[], key: string): UserStatus | undefined {
+  return statuses.find((s) => s.key === key);
+}
+
+export function getStatusGroup(statuses: UserStatus[], statusKey: string): TaskStatusGroup {
+  const status = getStatusByKey(statuses, statusKey);
+  return status?.group_name ?? 'todo';
+}
+
+export function getStatusesByGroup(statuses: UserStatus[]): Record<TaskStatusGroup, UserStatus[]> {
+  const groups: Record<TaskStatusGroup, UserStatus[]> = {
+    todo: [],
+    in_progress: [],
+    complete: [],
+  };
+  for (const s of statuses) {
+    groups[s.group_name]?.push(s);
+  }
+  // Sort by position within each group
+  for (const group of STATUS_GROUP_ORDER) {
+    groups[group].sort((a, b) => a.position - b.position);
+  }
+  return groups;
+}

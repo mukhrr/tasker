@@ -47,17 +47,21 @@ export function useTasks(userId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
-  const syncTask = async (taskId: string) => {
+  const syncTask = async (taskId: string, opts?: { silent?: boolean }) => {
     setSyncingTaskIds((prev) => new Set(prev).add(taskId));
     try {
-      await fetch('/api/sync/task', {
+      const res = await fetch('/api/sync/task', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Sync failed');
+      }
       await fetchTasks();
-    } catch {
-      // Sync failure is non-critical for add flow
+    } catch (err) {
+      if (!opts?.silent) throw err;
     } finally {
       setSyncingTaskIds((prev) => {
         const next = new Set(prev);
@@ -74,6 +78,7 @@ export function useTasks(userId: string) {
       user_id: userId,
       issue_url: issueUrl,
       status: 'in_proposal' as TaskStatus,
+      status_group: 'todo',
       repo_owner: parsed?.owner ?? null,
       repo_name: parsed?.repo ?? null,
       issue_number: parsed?.number ?? null,
@@ -84,6 +89,7 @@ export function useTasks(userId: string) {
     const optimistic: Task = {
       ...newTask,
       id: tempId,
+      issue_title: null,
       pr_url: null,
       status_group: 'todo',
       amount: null,
@@ -130,7 +136,7 @@ export function useTasks(userId: string) {
     });
 
     // Auto-sync the newly added task in the background
-    syncTask(realTask.id);
+    syncTask(realTask.id, { silent: true });
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {

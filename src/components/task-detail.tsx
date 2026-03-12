@@ -6,7 +6,8 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { STATUS_CONFIG } from '@/lib/status';
+import { getStatusByKey, getStatusColor } from '@/lib/status';
+import { useStatuses } from '@/hooks/use-statuses';
 import { shortenGitHubUrl } from '@/lib/github';
 import type { Task } from '@/types/database';
 
@@ -14,7 +15,9 @@ export function TaskDetail({ task }: { task: Task }) {
   const [deleting, setDeleting] = useState(false);
   const router = useRouter();
   const supabase = createClient();
-  const statusConfig = STATUS_CONFIG[task.status];
+  const { statuses } = useStatuses(task.user_id);
+  const currentStatus = getStatusByKey(statuses, task.status);
+  const colorConfig = getStatusColor(currentStatus?.color ?? 'gray');
 
   const handleDelete = async () => {
     if (!confirm('Delete this task?')) return;
@@ -38,28 +41,25 @@ export function TaskDetail({ task }: { task: Task }) {
           <div className="flex items-start justify-between">
             <div className="space-y-2">
               <div className="flex items-center gap-3">
-                <h1 className="text-xl font-bold">
+                <a
+                  href={task.issue_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xl font-bold hover:underline"
+                >
                   {task.repo_owner && task.repo_name
                     ? `${task.repo_owner}/${task.repo_name}#${task.issue_number}`
                     : shortenGitHubUrl(task.issue_url)}
-                </h1>
+                </a>
                 <span
-                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusConfig.color}`}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${colorConfig.badge}`}
                 >
                   <span
-                    className={`h-1.5 w-1.5 rounded-full ${statusConfig.dotColor}`}
+                    className={`h-1.5 w-1.5 rounded-full ${colorConfig.dot}`}
                   />
-                  {statusConfig.label}
+                  {currentStatus?.label ?? task.status}
                 </span>
               </div>
-              <a
-                href={task.issue_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-600 hover:underline dark:text-blue-400"
-              >
-                {task.issue_url}
-              </a>
             </div>
             <Button
               variant="destructive"
@@ -70,6 +70,13 @@ export function TaskDetail({ task }: { task: Task }) {
               Delete
             </Button>
           </div>
+
+          {task.note && (
+            <div className="mt-6">
+              <h2 className="text-sm font-medium text-muted-foreground">Note</h2>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{task.note}</p>
+            </div>
+          )}
 
           <div className="mt-6 grid grid-cols-2 gap-4 rounded-lg border p-4 text-sm md:grid-cols-3">
             {task.pr_url && (
@@ -126,13 +133,6 @@ export function TaskDetail({ task }: { task: Task }) {
               </p>
             </div>
           </div>
-
-          {task.note && (
-            <div className="mt-6">
-              <h2 className="text-sm font-medium text-muted-foreground">Note</h2>
-              <p className="mt-2 whitespace-pre-wrap text-sm">{task.note}</p>
-            </div>
-          )}
 
           {task.ai_summary && (
             <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950">

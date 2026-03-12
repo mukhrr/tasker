@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph } from './graph';
 import { decrypt } from '@/lib/encryption';
-import type { Task } from '@/types/database';
+import type { Task, UserStatus } from '@/types/database';
 
 interface SyncCredentials {
   apiKey: string;
@@ -76,6 +76,28 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
     return { tasks_updated: 0, errors: [] };
   }
 
+  // Fetch user's custom statuses for the AI prompt
+  const { data: userStatuses } = await supabase
+    .from('user_statuses')
+    .select('*')
+    .eq('user_id', userId)
+    .order('group_name')
+    .order('position');
+
+  // Seed defaults if user has no statuses yet
+  if (!userStatuses || userStatuses.length === 0) {
+    await supabase.rpc('seed_default_statuses', { p_user_id: userId });
+  }
+
+  const { data: finalStatuses } = userStatuses && userStatuses.length > 0
+    ? { data: userStatuses }
+    : await supabase
+        .from('user_statuses')
+        .select('*')
+        .eq('user_id', userId)
+        .order('group_name')
+        .order('position');
+
   // Create sync log
   const { data: syncLog } = await supabase
     .from('sync_logs')
@@ -91,6 +113,7 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
       githubToken,
       apiKey,
       githubUsername,
+      userStatuses: (finalStatuses as UserStatus[]) ?? [],
       currentIndex: 0,
       updates: [],
       errors: [],
@@ -115,18 +138,22 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
           update.confidence >= 0.75
         ) {
           updateData.status = update.suggestedStatus;
+          // Derive status_group from user's statuses
+          const matchedStatus = (finalStatuses as UserStatus[])?.find(
+            (s) => s.key === update.suggestedStatus
+          );
+          if (matchedStatus) {
+            updateData.status_group = matchedStatus.group_name;
+          }
         }
 
         // Rich fields — only update if AI provided a value (non-null)
-        if (update.pr_url !== undefined && update.pr_url !== null) {
-          updateData.pr_url = update.pr_url;
+        if (update.issue_title !== undefined && update.issue_title !== null) {
+          updateData.issue_title = update.issue_title;
         }
 
-        if (update.note !== undefined && update.note !== null) {
-          // Only set note if it's currently empty or this is first sync
-          if (!currentTask.note || !currentTask.last_synced_at) {
-            updateData.note = update.note;
-          }
+        if (update.pr_url !== undefined && update.pr_url !== null) {
+          updateData.pr_url = update.pr_url;
         }
 
         if (update.assigned_date !== undefined && update.assigned_date !== null) {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { runSync } from '@/lib/agent/runner';
 import { decrypt } from '@/lib/encryption';
+import { friendlySyncError } from '@/lib/sync-errors';
 
 export async function POST() {
   const supabase = await createClient();
@@ -65,10 +66,19 @@ export async function POST() {
     const apiKey = decrypt(settings.ai_api_key_encrypted);
     const githubToken = settings.github_token_encrypted;
     const result = await runSync(user.id, { apiKey, githubToken, githubUsername });
+
+    if (result.errors?.length && result.tasks_updated === 0) {
+      return NextResponse.json(
+        { error: friendlySyncError(result.errors[0]), details: result.errors },
+        { status: 502 }
+      );
+    }
+
     return NextResponse.json(result);
   } catch (err) {
+    const message = err instanceof Error ? err.message : 'Sync failed';
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Sync failed' },
+      { error: friendlySyncError(message) },
       { status: 500 }
     );
   }

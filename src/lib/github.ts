@@ -159,6 +159,17 @@ export async function findLinkedPR(
   return null;
 }
 
+export function normalizeUrl(url: string): string {
+  // Strip markdown link format: [text](url) → url
+  const mdMatch = url.match(/\[.*?\]\((.*?)\)/);
+  const raw = mdMatch ? mdMatch[1] : url;
+  try {
+    return new URL(raw).href;
+  } catch {
+    return `https://${raw}`;
+  }
+}
+
 export function shortenGitHubUrl(url: string): string {
   const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (issueMatch) return `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;

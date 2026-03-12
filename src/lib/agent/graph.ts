@@ -1,7 +1,7 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { SYSTEM_PROMPT, buildAnalysisPrompt } from './prompts';
+import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
 import {
   fetchIssue,
   fetchPR,
@@ -12,7 +12,7 @@ import {
   parsePrUrl,
   findLinkedPR,
 } from '@/lib/github';
-import type { Task, TaskStatus } from '@/types/database';
+import type { Task, TaskStatus, UserStatus } from '@/types/database';
 
 export interface TaskUpdate {
   taskId: string;
@@ -21,8 +21,8 @@ export interface TaskUpdate {
   summary: string;
   flags: string[];
   // Rich fields the AI can populate
+  issue_title?: string | null;
   pr_url?: string | null;
-  note?: string | null;
   assigned_date?: string | null;
   payment_date?: string | null;
   amount?: number | null;
@@ -33,6 +33,7 @@ const GraphState = Annotation.Root({
   githubToken: Annotation<string>,
   apiKey: Annotation<string>,
   githubUsername: Annotation<string>,
+  userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
   updates: Annotation<TaskUpdate[]>,
   errors: Annotation<string[]>,
@@ -178,7 +179,6 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         : undefined,
       // Pre-extracted data for the AI to confirm or override
       existingPrUrl: task.pr_url,
-      existingNote: task.note,
       existingAssignedDate: task.assigned_date,
       existingAmount: task.amount,
       existingPaymentDate: task.payment_date,
@@ -195,8 +195,10 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       maxTokens: 1024,
     });
 
+    const systemPrompt = buildSystemPrompt(state.userStatuses);
+
     const response = await model.invoke([
-      new SystemMessage(SYSTEM_PROMPT),
+      new SystemMessage(systemPrompt),
       new HumanMessage(prompt),
     ]);
 
@@ -216,8 +218,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         summary: result.summary,
         flags: result.flags || [],
         // Rich fields — AI decides what to populate
+        issue_title: result.issue_title ?? undefined,
         pr_url: result.pr_url ?? discoveredPrUrl,
-        note: result.note ?? undefined,
         assigned_date: result.assigned_date ?? assignedDate,
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
@@ -229,10 +231,23 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       errors: [...state.errors, `Could not parse AI response for task ${task.id}`],
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    // Detect fatal config errors — no point processing more tasks
+    if (
+      message.includes('401') ||
+      message.includes('authentication') ||
+      message.includes('invalid x-api-key') ||
+      message.includes('invalid_api_key') ||
+      message.includes('rate limit')
+    ) {
+      throw err;
+    }
+
     return {
       errors: [
         ...state.errors,
-        `Error processing task ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Error processing task ${task.id}: ${message}`,
       ],
     };
   }

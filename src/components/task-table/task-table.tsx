@@ -5,19 +5,23 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
+import { useStatuses } from '@/hooks/use-statuses';
+import { getStatusGroup } from '@/lib/status';
 import { Toolbar } from './toolbar';
 import { AddRow } from './add-row';
 import { AddColumnButton } from './add-column-button';
 import { ColumnHeader } from './column-header';
 import { UrlCell } from './cells/url-cell';
 import { StatusCell } from './cells/status-cell';
+import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
 import { DateCell } from './cells/date-cell';
 import { AmountCell } from './cells/amount-cell';
 import { TextCell } from './cells/text-cell';
 import { NoteCell } from './cells/note-cell';
 import { Skeleton } from '@/components/ui/skeleton';
-import { RefreshCw, Trash2 } from 'lucide-react';
-import type { Task, TaskStatus, TaskStatusGroup } from '@/types/database';
+import { RefreshCw, Trash2, Eye, ExternalLink } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
+import type { Task, TaskStatusGroup } from '@/types/database';
 
 export function TaskTable({ userId }: { userId: string }) {
   const { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, syncTask } =
@@ -30,17 +34,24 @@ export function TaskTable({ userId }: { userId: string }) {
     setFieldValue,
     getFieldValue,
   } = useCustomColumns(userId);
+  const {
+    statuses,
+    addStatus,
+    updateStatus,
+    deleteStatus,
+  } = useStatuses(userId);
 
   const [activeTab, setActiveTab] = useState('all');
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const filteredTasks = useMemo(() => {
     let filtered = tasks;
 
     if (activeTab !== 'all') {
       filtered = filtered.filter(
-        (t) => t.status_group === (activeTab as TaskStatusGroup)
+        (t) => getStatusGroup(statuses, t.status) === (activeTab as TaskStatusGroup)
       );
     }
 
@@ -49,6 +60,7 @@ export function TaskTable({ userId }: { userId: string }) {
       filtered = filtered.filter(
         (t) =>
           t.issue_url.toLowerCase().includes(q) ||
+          t.issue_title?.toLowerCase().includes(q) ||
           t.pr_url?.toLowerCase().includes(q) ||
           t.note?.toLowerCase().includes(q) ||
           t.repo_owner?.toLowerCase().includes(q) ||
@@ -57,17 +69,21 @@ export function TaskTable({ userId }: { userId: string }) {
     }
 
     return filtered;
-  }, [tasks, activeTab, search]);
+  }, [tasks, statuses, activeTab, search]);
 
   const handleSync = async () => {
     setSyncing(true);
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         throw new Error(data.error || 'Sync failed');
       }
-      toast.success('Sync completed');
+      if (data.errors?.length) {
+        toast.warning(`Synced ${data.tasks_updated} tasks, ${data.errors.length} failed`);
+      } else {
+        toast.success(`Synced ${data.tasks_updated} tasks`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Sync failed');
     } finally {
@@ -182,21 +198,28 @@ export function TaskTable({ userId }: { userId: string }) {
                       key={task.id}
                       className="group/row border-b last:border-b-0 hover:bg-muted/30"
                     >
-                      <td className="px-3 py-2 sm:px-4">
-                        <div className="flex items-center gap-1">
-                          <Link
-                            href={`/tasks/${task.id}`}
-                            className="mr-1 text-sm text-muted-foreground hover:text-foreground"
+                      <td className="max-w-[280px] px-3 py-2 sm:px-4">
+                        {isSyncing && !task.issue_title ? (
+                          <Skeleton className="h-4 w-36" />
+                        ) : (
+                          <a
+                            href={normalizeUrl(task.issue_url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="group/issue block"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            View
-                          </Link>
-                          <UrlCell
-                            value={task.issue_url}
-                            onChange={(v) =>
-                              v && handleUpdate(task.id, { issue_url: v })
-                            }
-                          />
-                        </div>
+                            <span className="line-clamp-1 text-sm font-medium text-foreground group-hover/issue:underline">
+                              {task.issue_title || shortenGitHubUrl(task.issue_url)}
+                              <ExternalLink className="ml-1 inline-block h-3 w-3 opacity-0 transition-opacity group-hover/issue:opacity-100" />
+                            </span>
+                            {task.issue_title && (
+                              <span className="line-clamp-1 text-xs text-muted-foreground">
+                                {shortenGitHubUrl(task.issue_url)}
+                              </span>
+                            )}
+                          </a>
+                        )}
                       </td>
                       <td className="px-3 py-2 sm:px-4">
                         {isSyncing && !task.pr_url ? (
@@ -216,9 +239,13 @@ export function TaskTable({ userId }: { userId: string }) {
                         ) : (
                           <StatusCell
                             value={task.status}
-                            onChange={(status: TaskStatus) =>
+                            statuses={statuses}
+                            onChange={(status) =>
                               handleUpdate(task.id, { status })
                             }
+                            onAddStatus={addStatus}
+                            onUpdateStatus={updateStatus}
+                            onDeleteStatus={deleteStatus}
                           />
                         )}
                       </td>
@@ -281,22 +308,77 @@ export function TaskTable({ userId }: { userId: string }) {
                         </td>
                       ))}
                       <td className="px-2 py-2">
-                        <div className="flex items-center gap-1 opacity-0 group-hover/row:opacity-100">
-                          <button
-                            onClick={() => syncTask(task.id)}
-                            disabled={isSyncing}
-                            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
-                            title="Sync this task"
-                          >
-                            <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(task.id)}
-                            className="text-muted-foreground hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
+                        {deleteConfirmId === task.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                handleDelete(task.id);
+                                setDeleteConfirmId(null);
+                              }}
+                              className="rounded-md bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmId(null)}
+                              className="rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <TooltipProvider delay={400}>
+                            <div className="flex items-center">
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          await syncTask(task.id);
+                                          toast.success('Task synced');
+                                        } catch (err) {
+                                          toast.error(err instanceof Error ? err.message : 'Sync failed');
+                                        }
+                                      }}
+                                      disabled={isSyncing}
+                                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                    />
+                                  }
+                                >
+                                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                                </TooltipTrigger>
+                                <TooltipContent>Sync</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <button
+                                      onClick={() => setDeleteConfirmId(task.id)}
+                                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-100 hover:text-destructive dark:hover:bg-red-950"
+                                    />
+                                  }
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </TooltipTrigger>
+                                <TooltipContent>Delete</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Link
+                                      href={`/tasks/${task.id}`}
+                                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                    />
+                                  }
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                </TooltipTrigger>
+                                <TooltipContent>View</TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </TooltipProvider>
+                        )}
                       </td>
                     </tr>
                   );

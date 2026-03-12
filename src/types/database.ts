@@ -1,24 +1,19 @@
-export type TaskStatusTodo =
-  | 'in_proposal'
-  | 'promising'
-  | 'got_cplus'
-  | 'update_proposal';
-
-export type TaskStatusInProgress =
-  | 'assigned'
-  | 'reviewing'
-  | 'changes_required'
-  | 'awaiting_payment'
-  | 'merged';
-
-export type TaskStatusComplete = 'regression' | 'paid' | 'wasted';
-
-export type TaskStatus =
-  | TaskStatusTodo
-  | TaskStatusInProgress
-  | TaskStatusComplete;
+// Status is now dynamic per-user, so TaskStatus is just a string alias
+export type TaskStatus = string;
 
 export type TaskStatusGroup = 'todo' | 'in_progress' | 'complete';
+
+export interface UserStatus {
+  id: string;
+  user_id: string;
+  key: string;
+  label: string;
+  description: string;
+  color: string;
+  group_name: TaskStatusGroup;
+  position: number;
+  created_at: string;
+}
 
 export type CustomFieldType = 'text' | 'date' | 'number' | 'url' | 'select';
 
@@ -26,6 +21,7 @@ export interface Task {
   id: string;
   user_id: string;
   issue_url: string;
+  issue_title: string | null;
   pr_url: string | null;
   status: TaskStatus;
   status_group: TaskStatusGroup;
