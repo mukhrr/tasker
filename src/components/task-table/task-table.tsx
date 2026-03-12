@@ -315,9 +315,16 @@ export function TaskTable({ userId }: { userId: string }) {
                                     <StatusCell
                                       value={task.status}
                                       statuses={statuses}
-                                      onChange={(status) =>
-                                        handleUpdate(task.id, { status })
-                                      }
+                                      onChange={(status) => {
+                                        const matched = statuses.find(
+                                          (s) => s.key === status
+                                        );
+                                        handleUpdate(task.id, {
+                                          status,
+                                          status_group:
+                                            matched?.group_name ?? 'todo',
+                                        });
+                                      }}
                                       onAddStatus={addStatus}
                                       onUpdateStatus={updateStatus}
                                       onDeleteStatus={deleteStatus}

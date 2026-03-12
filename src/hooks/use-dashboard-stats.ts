@@ -41,8 +41,9 @@ export function useDashboardStats(tasks: Task[]): DashboardStats {
     for (const key of monthKeys) earningsMap.set(key, 0);
 
     for (const t of completeTasks) {
-      if (t.payment_date) {
-        const key = format(parseISO(t.payment_date), 'yyyy-MM');
+      const dateStr = t.payment_date ?? t.created_at;
+      if (dateStr) {
+        const key = format(parseISO(dateStr), 'yyyy-MM');
         if (earningsMap.has(key)) {
           earningsMap.set(key, earningsMap.get(key)! + (t.amount ?? 0));
         }
@@ -95,8 +96,9 @@ export function useDashboardStats(tasks: Task[]): DashboardStats {
         createdMap.set(createdKey, createdMap.get(createdKey)! + 1);
       }
 
-      if (t.status_group === 'complete' && t.payment_date) {
-        const compKey = format(parseISO(t.payment_date), 'yyyy-MM');
+      if (t.status_group === 'complete') {
+        const compDate = t.payment_date ?? t.created_at;
+        const compKey = format(parseISO(compDate), 'yyyy-MM');
         if (completedMap.has(compKey)) {
           completedMap.set(compKey, completedMap.get(compKey)! + 1);
         }

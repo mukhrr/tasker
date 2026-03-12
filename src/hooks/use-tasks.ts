@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { parseIssueUrl } from '@/lib/github';
 import type { Task, TaskStatus } from '@/types/database';
@@ -10,6 +10,7 @@ export function useTasks(userId: string) {
   const [loading, setLoading] = useState(true);
   const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
   const supabase = createClient();
+  const channelId = useRef(`tasks-realtime-${crypto.randomUUID()}`);
 
   const fetchTasks = useCallback(async () => {
     const { data } = await supabase
@@ -26,7 +27,7 @@ export function useTasks(userId: string) {
     fetchTasks();
 
     const channel = supabase
-      .channel('tasks-realtime')
+      .channel(channelId.current)
       .on(
         'postgres_changes',
         {
