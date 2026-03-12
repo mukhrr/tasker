@@ -10,6 +10,6 @@ export function useMediaQuery(query: string): boolean {
       return () => mql.removeEventListener('change', callback);
     },
     () => window.matchMedia(query).matches,
-    () => false,
+    () => false
   );
 }

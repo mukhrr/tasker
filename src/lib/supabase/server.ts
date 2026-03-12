@@ -31,6 +31,8 @@ export async function createClient() {
 // Deduplicated per-request: layout + page share one getUser() call
 export const getUser = cache(async () => {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   return user;
 });

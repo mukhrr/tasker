@@ -17,9 +17,7 @@ export function DateCell({
 
   const today = startOfDay(new Date());
   const disableDate =
-    mode === 'past'
-      ? (d: Date) => d < today
-      : (d: Date) => d > today;
+    mode === 'past' ? (d: Date) => d < today : (d: Date) => d > today;
 
   return (
     <DatePicker

@@ -49,7 +49,12 @@ export interface GitHubComment {
 export interface GitHubReview {
   id: number;
   user: GitHubUser;
-  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING';
+  state:
+    | 'APPROVED'
+    | 'CHANGES_REQUESTED'
+    | 'COMMENTED'
+    | 'DISMISSED'
+    | 'PENDING';
   body: string | null;
   submitted_at: string;
 }

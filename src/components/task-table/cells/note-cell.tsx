@@ -87,9 +87,7 @@ export function NoteCell({
   }
 
   const displayText =
-    !expanded && isTruncatable
-      ? text.slice(0, TRUNCATE_LENGTH) + '…'
-      : text;
+    !expanded && isTruncatable ? text.slice(0, TRUNCATE_LENGTH) + '…' : text;
 
   return (
     <div className="group/note">

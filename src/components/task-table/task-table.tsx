@@ -21,14 +21,31 @@ import { NoteCell } from './cells/note-cell';
 import { HighlightText } from './highlight-text';
 import { Skeleton } from '@/components/ui/skeleton';
 import { RefreshCw, Trash2, Eye, ExternalLink } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
 import type { Task, TaskStatusGroup } from '@/types/database';
 import type { ColumnKey } from './column-config';
-import { loadVisibleColumns, saveVisibleColumns, loadColumnOrder, saveColumnOrder } from './column-config';
+import {
+  loadVisibleColumns,
+  saveVisibleColumns,
+  loadColumnOrder,
+  saveColumnOrder,
+} from './column-config';
 
 export function TaskTable({ userId }: { userId: string }) {
-  const { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, syncTask } =
-    useTasks(userId);
+  const {
+    tasks,
+    loading,
+    syncingTaskIds,
+    addTask,
+    updateTask,
+    deleteTask,
+    syncTask,
+  } = useTasks(userId);
   const {
     columns,
     addColumn,
@@ -37,20 +54,23 @@ export function TaskTable({ userId }: { userId: string }) {
     setFieldValue,
     getFieldValue,
   } = useCustomColumns(userId);
-  const {
-    statuses,
-    addStatus,
-    updateStatus,
-    deleteStatus,
-  } = useStatuses(userId);
+  const { statuses, addStatus, updateStatus, deleteStatus } =
+    useStatuses(userId);
 
   const [activeTab, setActiveTab] = useState('all');
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
-  const [lastSyncResult, setLastSyncResult] = useState<{ failed: boolean; error?: string } | null>(null);
+  const [lastSyncResult, setLastSyncResult] = useState<{
+    failed: boolean;
+    error?: string;
+  } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() => loadVisibleColumns());
-  const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() => loadColumnOrder());
+  const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() =>
+    loadVisibleColumns()
+  );
+  const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() =>
+    loadColumnOrder()
+  );
 
   const toggleColumn = (key: ColumnKey) => {
     setVisibleColumns((prev) => {
@@ -74,7 +94,8 @@ export function TaskTable({ userId }: { userId: string }) {
 
     if (activeTab !== 'all') {
       filtered = filtered.filter(
-        (t) => getStatusGroup(statuses, t.status) === (activeTab as TaskStatusGroup)
+        (t) =>
+          getStatusGroup(statuses, t.status) === (activeTab as TaskStatusGroup)
       );
     }
 
@@ -105,8 +126,13 @@ export function TaskTable({ userId }: { userId: string }) {
         throw new Error(msg);
       }
       if (data.errors?.length) {
-        setLastSyncResult({ failed: true, error: `${data.errors.length} tasks failed` });
-        toast.warning(`Synced ${data.tasks_updated} tasks, ${data.errors.length} failed`);
+        setLastSyncResult({
+          failed: true,
+          error: `${data.errors.length} tasks failed`,
+        });
+        toast.warning(
+          `Synced ${data.tasks_updated} tasks, ${data.errors.length} failed`
+        );
       } else {
         setLastSyncResult({ failed: false });
         toast.success(`Synced ${data.tasks_updated} tasks`);
@@ -178,8 +204,13 @@ export function TaskTable({ userId }: { userId: string }) {
               <tr className="border-b bg-muted/50">
                 {columnOrder.filter(show).map((key) => {
                   const labels: Record<ColumnKey, string> = {
-                    issue: 'Issue', pr: 'PR', status: 'Status',
-                    amount: 'Amount', assigned: 'Assigned', payment: 'Payment', note: 'Note',
+                    issue: 'Issue',
+                    pr: 'PR',
+                    status: 'Status',
+                    amount: 'Amount',
+                    assigned: 'Assigned',
+                    payment: 'Payment',
+                    note: 'Note',
                   };
                   return (
                     <th key={key} className="px-3 py-2.5 text-left sm:px-4">
@@ -234,108 +265,144 @@ export function TaskTable({ userId }: { userId: string }) {
                             onClick={(e) => e.stopPropagation()}
                           >
                             <span className="line-clamp-1 text-sm font-medium text-foreground group-hover/issue:underline">
-                              <HighlightText text={task.issue_title || shortenGitHubUrl(task.issue_url)} query={search} />
+                              <HighlightText
+                                text={
+                                  task.issue_title ||
+                                  shortenGitHubUrl(task.issue_url)
+                                }
+                                query={search}
+                              />
                               <ExternalLink className="ml-1 inline-block h-3 w-3 opacity-0 transition-opacity group-hover/issue:opacity-100" />
                             </span>
                             {task.issue_title && (
                               <span className="line-clamp-1 text-xs text-muted-foreground">
-                                <HighlightText text={shortenGitHubUrl(task.issue_url)} query={search} />
+                                <HighlightText
+                                  text={shortenGitHubUrl(task.issue_url)}
+                                  query={search}
+                                />
                               </span>
                             )}
                           </a>
                         )}
                       </td>
-                      {columnOrder.filter(show).filter((k) => k !== 'issue').map((key) => {
-                        switch (key) {
-                          case 'pr':
-                            return (
-                              <td key={key} className="px-3 py-2 sm:px-4">
-                                {isSyncing && !task.pr_url ? (
-                                  <Skeleton className="h-4 w-28" />
-                                ) : (
-                                  <UrlCell
-                                    value={task.pr_url}
-                                    onChange={(v) => handleUpdate(task.id, { pr_url: v })}
-                                    highlight={search}
-                                  />
-                                )}
-                              </td>
-                            );
-                          case 'status':
-                            return (
-                              <td key={key} className="px-3 py-2 sm:px-4">
-                                {isSyncing && !task.last_synced_at ? (
-                                  <Skeleton className="h-5 w-20 rounded-full" />
-                                ) : (
-                                  <StatusCell
-                                    value={task.status}
-                                    statuses={statuses}
-                                    onChange={(status) => handleUpdate(task.id, { status })}
-                                    onAddStatus={addStatus}
-                                    onUpdateStatus={updateStatus}
-                                    onDeleteStatus={deleteStatus}
-                                  />
-                                )}
-                              </td>
-                            );
-                          case 'amount':
-                            return (
-                              <td key={key} className="whitespace-nowrap px-3 py-2 sm:px-4">
-                                {isSyncing && !task.amount ? (
-                                  <Skeleton className="h-4 w-14" />
-                                ) : (
-                                  <AmountCell
-                                    value={task.amount}
-                                    onChange={(amount) => handleUpdate(task.id, { amount })}
-                                  />
-                                )}
-                              </td>
-                            );
-                          case 'assigned':
-                            return (
-                              <td key={key} className="whitespace-nowrap px-3 py-2 sm:px-4">
-                                {isSyncing && !task.assigned_date ? (
-                                  <Skeleton className="h-4 w-20" />
-                                ) : (
-                                  <DateCell
-                                    value={task.assigned_date}
-                                    onChange={(assigned_date) => handleUpdate(task.id, { assigned_date })}
-                                  />
-                                )}
-                              </td>
-                            );
-                          case 'payment':
-                            return (
-                              <td key={key} className="whitespace-nowrap px-3 py-2 sm:px-4">
-                                {isSyncing && !task.payment_date ? (
-                                  <Skeleton className="h-4 w-20" />
-                                ) : (
-                                  <DateCell
-                                    value={task.payment_date}
-                                    onChange={(payment_date) => handleUpdate(task.id, { payment_date })}
-                                    mode="past"
-                                  />
-                                )}
-                              </td>
-                            );
-                          case 'note':
-                            return (
-                              <td key={key} className="min-w-[250px] max-w-[350px] px-3 py-2 sm:px-4">
-                                {isSyncing && !task.note ? (
-                                  <Skeleton className="h-4 w-36" />
-                                ) : (
-                                  <NoteCell
-                                    value={task.note}
-                                    onChange={(note) => handleUpdate(task.id, { note })}
-                                    highlight={search}
-                                  />
-                                )}
-                              </td>
-                            );
-                          default:
-                            return null;
-                        }
-                      })}
+                      {columnOrder
+                        .filter(show)
+                        .filter((k) => k !== 'issue')
+                        .map((key) => {
+                          switch (key) {
+                            case 'pr':
+                              return (
+                                <td key={key} className="px-3 py-2 sm:px-4">
+                                  {isSyncing && !task.pr_url ? (
+                                    <Skeleton className="h-4 w-28" />
+                                  ) : (
+                                    <UrlCell
+                                      value={task.pr_url}
+                                      onChange={(v) =>
+                                        handleUpdate(task.id, { pr_url: v })
+                                      }
+                                      highlight={search}
+                                    />
+                                  )}
+                                </td>
+                              );
+                            case 'status':
+                              return (
+                                <td key={key} className="px-3 py-2 sm:px-4">
+                                  {isSyncing && !task.last_synced_at ? (
+                                    <Skeleton className="h-5 w-20 rounded-full" />
+                                  ) : (
+                                    <StatusCell
+                                      value={task.status}
+                                      statuses={statuses}
+                                      onChange={(status) =>
+                                        handleUpdate(task.id, { status })
+                                      }
+                                      onAddStatus={addStatus}
+                                      onUpdateStatus={updateStatus}
+                                      onDeleteStatus={deleteStatus}
+                                    />
+                                  )}
+                                </td>
+                              );
+                            case 'amount':
+                              return (
+                                <td
+                                  key={key}
+                                  className="whitespace-nowrap px-3 py-2 sm:px-4"
+                                >
+                                  {isSyncing && !task.amount ? (
+                                    <Skeleton className="h-4 w-14" />
+                                  ) : (
+                                    <AmountCell
+                                      value={task.amount}
+                                      onChange={(amount) =>
+                                        handleUpdate(task.id, { amount })
+                                      }
+                                    />
+                                  )}
+                                </td>
+                              );
+                            case 'assigned':
+                              return (
+                                <td
+                                  key={key}
+                                  className="whitespace-nowrap px-3 py-2 sm:px-4"
+                                >
+                                  {isSyncing && !task.assigned_date ? (
+                                    <Skeleton className="h-4 w-20" />
+                                  ) : (
+                                    <DateCell
+                                      value={task.assigned_date}
+                                      onChange={(assigned_date) =>
+                                        handleUpdate(task.id, { assigned_date })
+                                      }
+                                    />
+                                  )}
+                                </td>
+                              );
+                            case 'payment':
+                              return (
+                                <td
+                                  key={key}
+                                  className="whitespace-nowrap px-3 py-2 sm:px-4"
+                                >
+                                  {isSyncing && !task.payment_date ? (
+                                    <Skeleton className="h-4 w-20" />
+                                  ) : (
+                                    <DateCell
+                                      value={task.payment_date}
+                                      onChange={(payment_date) =>
+                                        handleUpdate(task.id, { payment_date })
+                                      }
+                                      mode="past"
+                                    />
+                                  )}
+                                </td>
+                              );
+                            case 'note':
+                              return (
+                                <td
+                                  key={key}
+                                  className="min-w-[250px] max-w-[350px] px-3 py-2 sm:px-4"
+                                >
+                                  {isSyncing && !task.note ? (
+                                    <Skeleton className="h-4 w-36" />
+                                  ) : (
+                                    <NoteCell
+                                      value={task.note}
+                                      onChange={(note) =>
+                                        handleUpdate(task.id, { note })
+                                      }
+                                      highlight={search}
+                                    />
+                                  )}
+                                </td>
+                              );
+                            default:
+                              return null;
+                          }
+                        })}
                       {columns.map((col) => (
                         <td key={col.id} className="px-3 py-2 sm:px-4">
                           <TextCell
@@ -378,7 +445,11 @@ export function TaskTable({ userId }: { userId: string }) {
                                           await syncTask(task.id);
                                           toast.success('Task synced');
                                         } catch (err) {
-                                          toast.error(err instanceof Error ? err.message : 'Sync failed');
+                                          toast.error(
+                                            err instanceof Error
+                                              ? err.message
+                                              : 'Sync failed'
+                                          );
                                         }
                                       }}
                                       disabled={isSyncing}
@@ -386,7 +457,9 @@ export function TaskTable({ userId }: { userId: string }) {
                                     />
                                   }
                                 >
-                                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                                  <RefreshCw
+                                    className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`}
+                                  />
                                 </TooltipTrigger>
                                 <TooltipContent>Sync</TooltipContent>
                               </Tooltip>
@@ -394,7 +467,9 @@ export function TaskTable({ userId }: { userId: string }) {
                                 <TooltipTrigger
                                   render={
                                     <button
-                                      onClick={() => setDeleteConfirmId(task.id)}
+                                      onClick={() =>
+                                        setDeleteConfirmId(task.id)
+                                      }
                                       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-100 hover:text-destructive dark:hover:bg-red-950"
                                     />
                                   }

@@ -48,10 +48,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
   const parsed = parseIssueUrl(task.issue_url);
   if (!parsed) {
     return {
-      errors: [
-        ...state.errors,
-        `Could not parse issue URL: ${task.issue_url}`,
-      ],
+      errors: [...state.errors, `Could not parse issue URL: ${task.issue_url}`],
     };
   }
 
@@ -228,7 +225,10 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     }
 
     return {
-      errors: [...state.errors, `Could not parse AI response for task ${task.id}`],
+      errors: [
+        ...state.errors,
+        `Could not parse AI response for task ${task.id}`,
+      ],
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -245,10 +245,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     }
 
     return {
-      errors: [
-        ...state.errors,
-        `Error processing task ${task.id}: ${message}`,
-      ],
+      errors: [...state.errors, `Error processing task ${task.id}: ${message}`],
     };
   }
 }

@@ -65,7 +65,11 @@ export async function POST() {
   try {
     const apiKey = decrypt(settings.ai_api_key_encrypted);
     const githubToken = settings.github_token_encrypted;
-    const result = await runSync(user.id, { apiKey, githubToken, githubUsername });
+    const result = await runSync(user.id, {
+      apiKey,
+      githubToken,
+      githubUsername,
+    });
 
     if (result.errors?.length && result.tasks_updated === 0) {
       return NextResponse.json(

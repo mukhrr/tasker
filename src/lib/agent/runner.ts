@@ -9,10 +9,15 @@ interface SyncCredentials {
   githubUsername: string;
 }
 
-export async function runSync(userId: string, credentials?: SyncCredentials, taskId?: string) {
+export async function runSync(
+  userId: string,
+  credentials?: SyncCredentials,
+  taskId?: string
+) {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
   let apiKey: string;
@@ -54,15 +59,14 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
     }
 
     if (!githubUsername) {
-      throw new Error('No GitHub username configured. Go to Settings to add one.');
+      throw new Error(
+        'No GitHub username configured. Go to Settings to add one.'
+      );
     }
   }
 
   // Get tasks that need syncing
-  let query = supabase
-    .from('tasks')
-    .select('*')
-    .eq('user_id', userId);
+  let query = supabase.from('tasks').select('*').eq('user_id', userId);
 
   if (taskId) {
     query = query.eq('id', taskId);
@@ -89,14 +93,15 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
     await supabase.rpc('seed_default_statuses', { p_user_id: userId });
   }
 
-  const { data: finalStatuses } = userStatuses && userStatuses.length > 0
-    ? { data: userStatuses }
-    : await supabase
-        .from('user_statuses')
-        .select('*')
-        .eq('user_id', userId)
-        .order('group_name')
-        .order('position');
+  const { data: finalStatuses } =
+    userStatuses && userStatuses.length > 0
+      ? { data: userStatuses }
+      : await supabase
+          .from('user_statuses')
+          .select('*')
+          .eq('user_id', userId)
+          .order('group_name')
+          .order('position');
 
   // Create sync log
   const { data: syncLog } = await supabase
@@ -156,7 +161,10 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
           updateData.pr_url = update.pr_url;
         }
 
-        if (update.assigned_date !== undefined && update.assigned_date !== null) {
+        if (
+          update.assigned_date !== undefined &&
+          update.assigned_date !== null
+        ) {
           updateData.assigned_date = update.assigned_date;
         }
 
@@ -171,10 +179,7 @@ export async function runSync(userId: string, credentials?: SyncCredentials, tas
           }
         }
 
-        await supabase
-          .from('tasks')
-          .update(updateData)
-          .eq('id', update.taskId);
+        await supabase.from('tasks').update(updateData).eq('id', update.taskId);
 
         tasksUpdated++;
       }

@@ -29,11 +29,14 @@ export function Navbar({ user }: { user: User }) {
   };
 
   const avatarUrl = user.user_metadata?.avatar_url as string | undefined;
-  const initials = (user.user_metadata?.full_name as string | undefined)
-    ?.split(' ')
-    .map((n) => n[0])
-    .join('')
-    .toUpperCase() ?? user.email?.[0]?.toUpperCase() ?? '?';
+  const initials =
+    (user.user_metadata?.full_name as string | undefined)
+      ?.split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase() ??
+    user.email?.[0]?.toUpperCase() ??
+    '?';
 
   const navLinks = [
     { href: '/tasks', label: 'Tasks' },
@@ -45,7 +48,13 @@ export function Navbar({ user }: { user: User }) {
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 sm:gap-6">
           <Link href="/tasks" className="flex items-center gap-2">
-            <Image src="/logo.png" alt="Tasker" width={28} height={28} className="rounded" />
+            <Image
+              src="/logo.png"
+              alt="Tasker"
+              width={28}
+              height={28}
+              className="rounded"
+            />
             <span className="text-lg font-bold hidden sm:inline">Tasker</span>
           </Link>
           <Separator orientation="vertical" className="h-6 hidden sm:block" />
@@ -54,7 +63,9 @@ export function Navbar({ user }: { user: User }) {
               key={link.href}
               href={link.href}
               className={`text-sm transition-colors hover:text-foreground ${
-                pathname === link.href ? 'text-foreground font-medium' : 'text-muted-foreground'
+                pathname === link.href
+                  ? 'text-foreground font-medium'
+                  : 'text-muted-foreground'
               }`}
             >
               {link.label}
@@ -101,7 +112,10 @@ export function Navbar({ user }: { user: User }) {
               </Avatar>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem className="text-xs text-muted-foreground" disabled>
+              <DropdownMenuItem
+                className="text-xs text-muted-foreground"
+                disabled
+              >
                 {user.email}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleSignOut}>

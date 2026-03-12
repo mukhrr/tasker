@@ -13,7 +13,15 @@ import { cn } from '@/lib/utils';
 
 function IconBrain(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <path d="M12 2a5 5 0 0 1 4.546 2.914A4 4 0 0 1 18 11a4.002 4.002 0 0 1-1.382 3.025A3.5 3.5 0 0 1 13 18v4M12 2a5 5 0 0 0-4.546 2.914A4 4 0 0 0 6 11a4.002 4.002 0 0 0 1.382 3.025A3.5 3.5 0 0 0 11 18v4" />
       <path d="M12 8v2M12 14v.01" />
     </svg>
@@ -30,7 +38,15 @@ function IconGithub(props: React.SVGProps<SVGSVGElement>) {
 
 function IconTable(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
     </svg>
@@ -39,7 +55,15 @@ function IconTable(props: React.SVGProps<SVGSVGElement>) {
 
 function IconZap(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
     </svg>
   );
@@ -47,7 +71,15 @@ function IconZap(props: React.SVGProps<SVGSVGElement>) {
 
 function IconArrowRight(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <path d="M5 12h14M12 5l7 7-7 7" />
     </svg>
   );
@@ -55,7 +87,15 @@ function IconArrowRight(props: React.SVGProps<SVGSVGElement>) {
 
 function IconSun(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <circle cx="12" cy="12" r="4" />
       <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
     </svg>
@@ -64,7 +104,15 @@ function IconSun(props: React.SVGProps<SVGSVGElement>) {
 
 function IconMoon(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
     </svg>
   );
@@ -85,7 +133,7 @@ const FEATURES = [
     icon: IconGithub,
     title: 'Deep GitHub Awareness',
     description:
-      'The agent understands pull requests, reviews, and timeline events. It follows the full lifecycle of your contributions so you don\'t have to.',
+      "The agent understands pull requests, reviews, and timeline events. It follows the full lifecycle of your contributions so you don't have to.",
   },
   {
     icon: IconTable,
@@ -100,7 +148,6 @@ const FEATURES = [
       'From backlog to paid — 12 precise statuses your agent uses to classify tasks. You always know where every bounty stands.',
   },
 ];
-
 
 /* ------------------------------------------------------------------ */
 /*  JSON-LD structured data for SEO + AI search engines                */
@@ -154,7 +201,7 @@ function useParallax() {
 
   const transform = useCallback(
     (speed: number) => `translateY(${scrollY * speed}px)`,
-    [scrollY],
+    [scrollY]
   );
 
   return { scrollY, transform };
@@ -176,7 +223,7 @@ function useReveal() {
           observer.disconnect();
         }
       },
-      { threshold: 0.15 },
+      { threshold: 0.15 }
     );
     observer.observe(node);
   }, []);
@@ -190,7 +237,10 @@ function useReveal() {
 
 function Background({ transform }: { transform: (speed: number) => string }) {
   return (
-    <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
+    <div
+      className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
+      aria-hidden="true"
+    >
       <div
         className="absolute inset-0 opacity-[0.04] dark:opacity-[0.08]"
         style={{
@@ -235,7 +285,11 @@ function Background({ transform }: { transform: (speed: number) => string }) {
 /*  Floating SVG lines with parallax                                   */
 /* ------------------------------------------------------------------ */
 
-function FloatingLines({ transform }: { transform: (speed: number) => string }) {
+function FloatingLines({
+  transform,
+}: {
+  transform: (speed: number) => string;
+}) {
   return (
     <svg
       className="pointer-events-none absolute inset-0 -z-10 h-full w-full opacity-[0.03] will-change-transform dark:opacity-[0.05]"
@@ -244,15 +298,45 @@ function FloatingLines({ transform }: { transform: (speed: number) => string }) 
       style={{ transform: transform(-0.05) }}
     >
       <defs>
-        <linearGradient id="landing-line-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <linearGradient
+          id="landing-line-grad"
+          x1="0%"
+          y1="0%"
+          x2="100%"
+          y2="0%"
+        >
           <stop offset="0%" stopColor="transparent" />
           <stop offset="50%" stopColor="#8b5cf6" />
           <stop offset="100%" stopColor="transparent" />
         </linearGradient>
       </defs>
-      <line x1="0" y1="18%" x2="100%" y2="22%" stroke="url(#landing-line-grad)" strokeWidth="1" className="animate-[drift_14s_ease-in-out_infinite]" />
-      <line x1="0" y1="45%" x2="100%" y2="42%" stroke="url(#landing-line-grad)" strokeWidth="1" className="animate-[drift_18s_ease-in-out_infinite_reverse]" />
-      <line x1="0" y1="72%" x2="100%" y2="75%" stroke="url(#landing-line-grad)" strokeWidth="1" className="animate-[drift_22s_ease-in-out_infinite]" />
+      <line
+        x1="0"
+        y1="18%"
+        x2="100%"
+        y2="22%"
+        stroke="url(#landing-line-grad)"
+        strokeWidth="1"
+        className="animate-[drift_14s_ease-in-out_infinite]"
+      />
+      <line
+        x1="0"
+        y1="45%"
+        x2="100%"
+        y2="42%"
+        stroke="url(#landing-line-grad)"
+        strokeWidth="1"
+        className="animate-[drift_18s_ease-in-out_infinite_reverse]"
+      />
+      <line
+        x1="0"
+        y1="72%"
+        x2="100%"
+        y2="75%"
+        stroke="url(#landing-line-grad)"
+        strokeWidth="1"
+        className="animate-[drift_22s_ease-in-out_infinite]"
+      />
     </svg>
   );
 }
@@ -262,11 +346,41 @@ function FloatingLines({ transform }: { transform: (speed: number) => string }) 
 /* ------------------------------------------------------------------ */
 
 const MOCK_ROWS = [
-  { title: 'Fix auth redirect loop', repo: 'acme/web', status: 'In Review', statusColor: 'bg-amber-500/20 text-amber-600 dark:text-amber-400', amount: '$250' },
-  { title: 'Add dark mode support', repo: 'acme/ui', status: 'Merged', statusColor: 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400', amount: '$500' },
-  { title: 'Refactor API client', repo: 'acme/sdk', status: 'In Progress', statusColor: 'bg-violet-500/20 text-violet-600 dark:text-violet-400', amount: '$750' },
-  { title: 'Update documentation', repo: 'acme/docs', status: 'Paid', statusColor: 'bg-sky-500/20 text-sky-600 dark:text-sky-400', amount: '$150' },
-  { title: 'Optimize bundle size', repo: 'acme/web', status: 'Todo', statusColor: 'bg-zinc-500/20 text-zinc-500', amount: '$400' },
+  {
+    title: 'Fix auth redirect loop',
+    repo: 'acme/web',
+    status: 'In Review',
+    statusColor: 'bg-amber-500/20 text-amber-600 dark:text-amber-400',
+    amount: '$250',
+  },
+  {
+    title: 'Add dark mode support',
+    repo: 'acme/ui',
+    status: 'Merged',
+    statusColor: 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+    amount: '$500',
+  },
+  {
+    title: 'Refactor API client',
+    repo: 'acme/sdk',
+    status: 'In Progress',
+    statusColor: 'bg-violet-500/20 text-violet-600 dark:text-violet-400',
+    amount: '$750',
+  },
+  {
+    title: 'Update documentation',
+    repo: 'acme/docs',
+    status: 'Paid',
+    statusColor: 'bg-sky-500/20 text-sky-600 dark:text-sky-400',
+    amount: '$150',
+  },
+  {
+    title: 'Optimize bundle size',
+    repo: 'acme/web',
+    status: 'Todo',
+    statusColor: 'bg-zinc-500/20 text-zinc-500',
+    amount: '$400',
+  },
 ];
 
 function TablePreview({ scrollY }: { scrollY: number }) {
@@ -276,15 +390,21 @@ function TablePreview({ scrollY }: { scrollY: number }) {
       ref={ref}
       className={cn(
         'relative mx-auto mt-16 max-w-4xl overflow-hidden rounded-xl border border-border/60 bg-card/50 shadow-2xl shadow-violet-500/[0.03] backdrop-blur-sm transition-all duration-700 will-change-transform dark:border-white/[0.06] dark:bg-white/[0.02]',
-        visible ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0',
+        visible ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0'
       )}
-      style={{ transform: visible ? `translateY(${Math.max(0, (scrollY - 200) * -0.04)}px)` : undefined }}
+      style={{
+        transform: visible
+          ? `translateY(${Math.max(0, (scrollY - 200) * -0.04)}px)`
+          : undefined,
+      }}
     >
       <div className="flex items-center gap-2 border-b border-border/40 px-5 py-3 dark:border-white/[0.04]">
         <div className="h-3 w-3 rounded-full bg-red-400/60" />
         <div className="h-3 w-3 rounded-full bg-amber-400/60" />
         <div className="h-3 w-3 rounded-full bg-emerald-400/60" />
-        <span className="ml-3 text-xs text-muted-foreground/60">tasks — Tasker</span>
+        <span className="ml-3 text-xs text-muted-foreground/60">
+          tasks — Tasker
+        </span>
       </div>
       <div className="grid grid-cols-[1fr_120px_100px_80px] gap-px border-b border-border/30 bg-muted/30 px-5 py-2.5 text-xs font-medium text-muted-foreground dark:border-white/[0.03] dark:bg-white/[0.02]">
         <span>Task</span>
@@ -298,18 +418,26 @@ function TablePreview({ scrollY }: { scrollY: number }) {
           className={cn(
             'grid grid-cols-[1fr_120px_100px_80px] gap-px px-5 py-3 text-sm transition-all duration-500',
             visible ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0',
-            i < MOCK_ROWS.length - 1 && 'border-b border-border/20 dark:border-white/[0.03]',
+            i < MOCK_ROWS.length - 1 &&
+              'border-b border-border/20 dark:border-white/[0.03]'
           )}
           style={{ transitionDelay: visible ? `${200 + i * 80}ms` : '0ms' }}
         >
           <span className="truncate font-medium">{row.title}</span>
           <span className="truncate text-muted-foreground">{row.repo}</span>
           <span>
-            <span className={cn('inline-block rounded-md px-2 py-0.5 text-xs font-medium', row.statusColor)}>
+            <span
+              className={cn(
+                'inline-block rounded-md px-2 py-0.5 text-xs font-medium',
+                row.statusColor
+              )}
+            >
               {row.status}
             </span>
           </span>
-          <span className="text-right font-mono text-muted-foreground">{row.amount}</span>
+          <span className="text-right font-mono text-muted-foreground">
+            {row.amount}
+          </span>
         </div>
       ))}
       <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-24 bg-gradient-to-t from-background/80 to-transparent" />
@@ -321,7 +449,6 @@ function TablePreview({ scrollY }: { scrollY: number }) {
 /*  Self-contained section components (refs stay internal)             */
 /* ------------------------------------------------------------------ */
 
-
 function FeaturesSection() {
   const [ref, visible] = useReveal();
   return (
@@ -330,10 +457,13 @@ function FeaturesSection() {
         <div
           className={cn(
             'text-center transition-all duration-700',
-            visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0',
+            visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0'
           )}
         >
-          <h2 id="features-heading" className="text-3xl font-bold tracking-tight sm:text-4xl">
+          <h2
+            id="features-heading"
+            className="text-3xl font-bold tracking-tight sm:text-4xl"
+          >
             Your agent handles the busywork
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base text-muted-foreground">
@@ -350,9 +480,13 @@ function FeaturesSection() {
                 key={i}
                 className={cn(
                   'group relative overflow-hidden rounded-xl border border-border/50 bg-card/40 p-6 backdrop-blur-sm transition-all duration-500 hover:border-violet-500/20 hover:shadow-lg hover:shadow-violet-500/[0.03] dark:border-white/[0.05] dark:bg-white/[0.02] dark:hover:border-violet-400/15',
-                  visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0',
+                  visible
+                    ? 'translate-y-0 opacity-100'
+                    : 'translate-y-6 opacity-0'
                 )}
-                style={{ transitionDelay: visible ? `${200 + i * 100}ms` : '0ms' }}
+                style={{
+                  transitionDelay: visible ? `${200 + i * 100}ms` : '0ms',
+                }}
               >
                 <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:bg-violet-400/10 dark:text-violet-400">
                   <Icon className="h-5 w-5" />
@@ -379,12 +513,18 @@ function CtaSection() {
         ref={ref}
         className={cn(
           'relative mx-auto max-w-3xl overflow-hidden rounded-2xl border border-violet-500/15 bg-gradient-to-br from-violet-500/[0.06] to-blue-500/[0.04] p-10 text-center backdrop-blur-sm transition-all duration-700 sm:p-14 dark:border-violet-400/10',
-          visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0',
+          visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0'
         )}
       >
-        <div className="pointer-events-none absolute -top-24 left-1/2 h-48 w-48 -translate-x-1/2 rounded-full bg-violet-500/10 blur-[80px]" aria-hidden="true" />
+        <div
+          className="pointer-events-none absolute -top-24 left-1/2 h-48 w-48 -translate-x-1/2 rounded-full bg-violet-500/10 blur-[80px]"
+          aria-hidden="true"
+        />
 
-        <h2 id="cta-heading" className="relative text-2xl font-bold tracking-tight sm:text-3xl">
+        <h2
+          id="cta-heading"
+          className="relative text-2xl font-bold tracking-tight sm:text-3xl"
+        >
           Let your AI agent take over
         </h2>
         <p className="relative mx-auto mt-4 max-w-md text-base text-muted-foreground">
@@ -396,7 +536,7 @@ function CtaSection() {
             href="/auth/signup"
             className={cn(
               buttonVariants({ size: 'lg' }),
-              'gap-2 bg-violet-600 px-6 text-white hover:bg-violet-700 dark:bg-violet-600 dark:text-white dark:hover:bg-violet-500',
+              'gap-2 bg-violet-600 px-6 text-white hover:bg-violet-700 dark:bg-violet-600 dark:text-white dark:hover:bg-violet-500'
             )}
           >
             Get started — it&apos;s free
@@ -413,7 +553,11 @@ function CtaSection() {
 /* ------------------------------------------------------------------ */
 
 export default function HomePage() {
-  const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
   const { theme, setTheme } = useTheme();
   const { scrollY, transform } = useParallax();
 
@@ -428,9 +572,18 @@ export default function HomePage() {
       <FloatingLines transform={transform} />
 
       <header className="sticky top-0 z-50 border-b border-border/40 bg-background/70 backdrop-blur-xl dark:border-white/[0.04]">
-        <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5" aria-label="Main navigation">
+        <nav
+          className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5"
+          aria-label="Main navigation"
+        >
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.png" alt="Tasker" width={28} height={28} className="rounded-lg" />
+            <Image
+              src="/logo.png"
+              alt="Tasker"
+              width={28}
+              height={28}
+              className="rounded-lg"
+            />
             <span className="text-base font-bold tracking-tight">Tasker</span>
           </Link>
           <div className="flex items-center gap-2">
@@ -440,14 +593,18 @@ export default function HomePage() {
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:text-foreground"
                 aria-label="Toggle theme"
               >
-                {theme === 'dark' ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
+                {theme === 'dark' ? (
+                  <IconSun className="h-4 w-4" />
+                ) : (
+                  <IconMoon className="h-4 w-4" />
+                )}
               </button>
             )}
             <Link
               href="/auth/login"
               className={cn(
                 buttonVariants({ variant: 'ghost', size: 'sm' }),
-                'text-muted-foreground',
+                'text-muted-foreground'
               )}
             >
               Sign in
@@ -463,7 +620,10 @@ export default function HomePage() {
       </header>
 
       <main>
-        <section className="relative px-5 pt-24 pb-8 sm:pt-32" aria-labelledby="hero-heading">
+        <section
+          className="relative px-5 pt-24 pb-8 sm:pt-32"
+          aria-labelledby="hero-heading"
+        >
           <div className="mx-auto max-w-3xl text-center">
             <div
               className="inline-flex items-center gap-2 rounded-full border border-violet-500/20 bg-violet-500/[0.06] px-3.5 py-1.5 text-xs font-medium text-violet-600 dark:border-violet-400/15 dark:text-violet-400"
@@ -489,8 +649,7 @@ export default function HomePage() {
                 AI agent
               </span>{' '}
               <br className="hidden sm:block" />
-              that manages your{' '}
-              <br className="hidden sm:block" />
+              that manages your <br className="hidden sm:block" />
               open source tasks
             </h1>
 
@@ -501,9 +660,10 @@ export default function HomePage() {
                 transform: `translateY(${scrollY * 0.03}px)`,
               }}
             >
-              Tasker is an AI-powered assistant that watches your GitHub activity,
-              automatically updates task statuses, and keeps your bounties and payments
-              organized — so you can focus on writing code.
+              Tasker is an AI-powered assistant that watches your GitHub
+              activity, automatically updates task statuses, and keeps your
+              bounties and payments organized — so you can focus on writing
+              code.
             </p>
 
             <div
@@ -514,7 +674,7 @@ export default function HomePage() {
                 href="/auth/signup"
                 className={cn(
                   buttonVariants({ size: 'lg' }),
-                  'gap-2 bg-violet-600 px-5 text-white hover:bg-violet-700 dark:bg-violet-600 dark:text-white dark:hover:bg-violet-500',
+                  'gap-2 bg-violet-600 px-5 text-white hover:bg-violet-700 dark:bg-violet-600 dark:text-white dark:hover:bg-violet-500'
                 )}
               >
                 Start for free
@@ -524,7 +684,7 @@ export default function HomePage() {
                 href="/auth/login"
                 className={cn(
                   buttonVariants({ variant: 'outline', size: 'lg' }),
-                  'px-5',
+                  'px-5'
                 )}
               >
                 Sign in
@@ -542,7 +702,13 @@ export default function HomePage() {
       <footer className="border-t border-border/40 dark:border-white/[0.04]">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 sm:flex-row">
           <div className="flex items-center gap-2.5">
-            <Image src="/logo.png" alt="Tasker" width={20} height={20} className="rounded" />
+            <Image
+              src="/logo.png"
+              alt="Tasker"
+              width={20}
+              height={20}
+              className="rounded"
+            />
             <span className="text-sm font-medium text-muted-foreground">
               Tasker
             </span>

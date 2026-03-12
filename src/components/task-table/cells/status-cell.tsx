@@ -1,9 +1,23 @@
 'use client';
 
 import { useState } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
-import { Drawer, DrawerContent, DrawerTrigger, DrawerTitle } from '@/components/ui/drawer';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  TooltipProvider,
+} from '@/components/ui/tooltip';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerTrigger,
+  DrawerTitle,
+} from '@/components/ui/drawer';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import {
   getStatusColor,
@@ -21,8 +35,19 @@ interface StatusCellProps {
   value: string;
   statuses: UserStatus[];
   onChange: (status: string) => void;
-  onAddStatus: (data: { key: string; label: string; description: string; color: string; group_name: TaskStatusGroup }) => Promise<{ error: unknown }>;
-  onUpdateStatus: (id: string, updates: Partial<Pick<UserStatus, 'label' | 'description' | 'color' | 'group_name' | 'key'>>) => Promise<{ error: unknown }>;
+  onAddStatus: (data: {
+    key: string;
+    label: string;
+    description: string;
+    color: string;
+    group_name: TaskStatusGroup;
+  }) => Promise<{ error: unknown }>;
+  onUpdateStatus: (
+    id: string,
+    updates: Partial<
+      Pick<UserStatus, 'label' | 'description' | 'color' | 'group_name' | 'key'>
+    >
+  ) => Promise<{ error: unknown }>;
   onDeleteStatus: (id: string) => Promise<{ error: unknown }>;
 }
 
@@ -97,7 +122,12 @@ export function StatusCell({
         key: editState.key,
       });
     } else if (view === 'add') {
-      const key = editState.key || editState.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      const key =
+        editState.key ||
+        editState.label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_|_$/g, '');
       await onAddStatus({
         key,
         label: editState.label,
@@ -172,7 +202,16 @@ export function StatusCell({
 
   if (isDesktop) {
     return (
-      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setView('list'); setDeleteTarget(null); } }}>
+      <Popover
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) {
+            setView('list');
+            setDeleteTarget(null);
+          }
+        }}
+      >
         <PopoverTrigger render={trigger} />
         <PopoverContent className="w-72 p-0" align="start">
           {content}
@@ -182,13 +221,20 @@ export function StatusCell({
   }
 
   return (
-    <Drawer open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setView('list'); setDeleteTarget(null); } }}>
+    <Drawer
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setView('list');
+          setDeleteTarget(null);
+        }
+      }}
+    >
       <DrawerTrigger render={trigger} />
       <DrawerContent>
         <DrawerTitle className="sr-only">Change status</DrawerTitle>
-        <div className="overflow-y-auto pb-6">
-          {content}
-        </div>
+        <div className="overflow-y-auto pb-6">{content}</div>
       </DrawerContent>
     </Drawer>
   );
@@ -235,7 +281,9 @@ function StatusListView({
                       onClick={() => onSelect(status.key)}
                       className="flex flex-1 items-center gap-2 px-2 py-1.5 text-sm"
                     >
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${color.dot}`} />
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${color.dot}`}
+                      />
                       <span className="flex-1 text-left">{status.label}</span>
                     </button>
                     <div className="flex items-center gap-0.5 pr-1.5">
@@ -248,7 +296,9 @@ function StatusListView({
                                 setExpandedId(isExpanded ? null : status.id);
                               }}
                               className={`rounded p-0.5 hover:text-foreground ${
-                                isExpanded ? 'text-foreground' : 'text-muted-foreground'
+                                isExpanded
+                                  ? 'text-foreground'
+                                  : 'text-muted-foreground'
                               }`}
                             />
                           }
@@ -256,7 +306,10 @@ function StatusListView({
                           <Info className="h-3 w-3" />
                         </TooltipTrigger>
                         {status.description && (
-                          <TooltipContent side="right" className="max-w-56 text-xs">
+                          <TooltipContent
+                            side="right"
+                            className="max-w-56 text-xs"
+                          >
                             {status.description}
                           </TooltipContent>
                         )}
@@ -328,7 +381,10 @@ function StatusFormView({
         <h4 className="text-xs font-semibold">
           {isNew ? 'Add Status' : 'Edit Status'}
         </h4>
-        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+        <button
+          onClick={onCancel}
+          className="text-muted-foreground hover:text-foreground"
+        >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -344,7 +400,9 @@ function StatusFormView({
         />
         <textarea
           value={editState.description}
-          onChange={(e) => onChange({ ...editState, description: e.target.value })}
+          onChange={(e) =>
+            onChange({ ...editState, description: e.target.value })
+          }
           placeholder="Description (helps AI decide when to use this status)"
           rows={2}
           className="w-full resize-none rounded-md border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
@@ -416,7 +474,10 @@ function DeleteConfirmView({
     <div className="space-y-3 p-3">
       <div className="flex items-center justify-between">
         <h4 className="text-xs font-semibold">Delete Status</h4>
-        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+        <button
+          onClick={onCancel}
+          className="text-muted-foreground hover:text-foreground"
+        >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -427,7 +488,8 @@ function DeleteConfirmView({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Are you sure? Tasks using this status won&apos;t be affected, but you won&apos;t be able to select it anymore.
+        Are you sure? Tasks using this status won&apos;t be affected, but you
+        won&apos;t be able to select it anymore.
       </p>
 
       <div className="flex gap-2">

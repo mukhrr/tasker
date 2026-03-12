@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import type { CustomColumn, CustomFieldValue, CustomFieldType } from '@/types/database';
+import type {
+  CustomColumn,
+  CustomFieldValue,
+  CustomFieldType,
+} from '@/types/database';
 
 export function useCustomColumns(userId: string) {
   const [columns, setColumns] = useState<CustomColumn[]>([]);
@@ -19,9 +23,7 @@ export function useCustomColumns(userId: string) {
   }, [userId, supabase]);
 
   const fetchFieldValues = useCallback(async () => {
-    const { data } = await supabase
-      .from('custom_field_values')
-      .select('*');
+    const { data } = await supabase.from('custom_field_values').select('*');
     setFieldValues((data as CustomFieldValue[]) ?? []);
   }, [supabase]);
 
@@ -72,13 +74,23 @@ export function useCustomColumns(userId: string) {
             : fv
         );
       }
-      return [...prev, { id: crypto.randomUUID(), task_id: taskId, column_id: columnId, value }];
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          task_id: taskId,
+          column_id: columnId,
+          value,
+        },
+      ];
     });
 
-    await supabase.from('custom_field_values').upsert(
-      { task_id: taskId, column_id: columnId, value },
-      { onConflict: 'task_id,column_id' }
-    );
+    await supabase
+      .from('custom_field_values')
+      .upsert(
+        { task_id: taskId, column_id: columnId, value },
+        { onConflict: 'task_id,column_id' }
+      );
   };
 
   const getFieldValue = (taskId: string, columnId: string): string | null => {

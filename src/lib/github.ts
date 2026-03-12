@@ -16,7 +16,9 @@ async function githubFetch<T>(path: string, token: string): Promise<T> {
     },
   });
   if (!res.ok) {
-    throw new Error(`GitHub API error: ${res.status} ${res.statusText} for ${path}`);
+    throw new Error(
+      `GitHub API error: ${res.status} ${res.statusText} for ${path}`
+    );
   }
   return res.json() as Promise<T>;
 }
@@ -26,9 +28,7 @@ export function parseIssueUrl(url: string): {
   repo: string;
   number: number;
 } | null {
-  const match = url.match(
-    /github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/
-  );
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
 }
@@ -38,9 +38,7 @@ export function parsePrUrl(url: string): {
   repo: string;
   number: number;
 } | null {
-  const match = url.match(
-    /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/
-  );
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
 }
@@ -51,7 +49,10 @@ export async function fetchIssue(
   number: number,
   token: string
 ): Promise<GitHubIssue> {
-  return githubFetch<GitHubIssue>(`/repos/${owner}/${repo}/issues/${number}`, token);
+  return githubFetch<GitHubIssue>(
+    `/repos/${owner}/${repo}/issues/${number}`,
+    token
+  );
 }
 
 export async function fetchPR(
@@ -60,7 +61,10 @@ export async function fetchPR(
   number: number,
   token: string
 ): Promise<GitHubPullRequest> {
-  return githubFetch<GitHubPullRequest>(`/repos/${owner}/${repo}/pulls/${number}`, token);
+  return githubFetch<GitHubPullRequest>(
+    `/repos/${owner}/${repo}/pulls/${number}`,
+    token
+  );
 }
 
 export async function fetchIssueComments(

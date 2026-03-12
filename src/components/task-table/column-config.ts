@@ -1,4 +1,11 @@
-export type ColumnKey = 'issue' | 'pr' | 'status' | 'amount' | 'assigned' | 'payment' | 'note';
+export type ColumnKey =
+  | 'issue'
+  | 'pr'
+  | 'status'
+  | 'amount'
+  | 'assigned'
+  | 'payment'
+  | 'note';
 
 export interface ColumnDef {
   key: ColumnKey;
@@ -19,7 +26,15 @@ export const BUILT_IN_COLUMNS: ColumnDef[] = [
 const VISIBILITY_KEY = 'tasker-visible-columns';
 const ORDER_KEY = 'tasker-column-order';
 
-const DEFAULT_ORDER: ColumnKey[] = ['issue', 'pr', 'status', 'amount', 'assigned', 'payment', 'note'];
+const DEFAULT_ORDER: ColumnKey[] = [
+  'issue',
+  'pr',
+  'status',
+  'amount',
+  'assigned',
+  'payment',
+  'note',
+];
 
 export function loadVisibleColumns(): Set<ColumnKey> {
   if (typeof window === 'undefined') return new Set(DEFAULT_ORDER);

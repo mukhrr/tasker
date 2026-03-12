@@ -48,10 +48,13 @@ export function useStatuses(userId: string) {
     group_name: TaskStatusGroup;
   }) => {
     // Position = max position in group + 1
-    const groupStatuses = statuses.filter((s) => s.group_name === data.group_name);
-    const position = groupStatuses.length > 0
-      ? Math.max(...groupStatuses.map((s) => s.position)) + 1
-      : 0;
+    const groupStatuses = statuses.filter(
+      (s) => s.group_name === data.group_name
+    );
+    const position =
+      groupStatuses.length > 0
+        ? Math.max(...groupStatuses.map((s) => s.position)) + 1
+        : 0;
 
     const { error } = await supabase.from('user_statuses').insert({
       user_id: userId,
@@ -62,7 +65,12 @@ export function useStatuses(userId: string) {
     return { error };
   };
 
-  const updateStatus = async (id: string, updates: Partial<Pick<UserStatus, 'label' | 'description' | 'color' | 'group_name' | 'key'>>) => {
+  const updateStatus = async (
+    id: string,
+    updates: Partial<
+      Pick<UserStatus, 'label' | 'description' | 'color' | 'group_name' | 'key'>
+    >
+  ) => {
     // Optimistic
     setStatuses((prev) =>
       prev.map((s) => (s.id === id ? { ...s, ...updates } : s))
@@ -85,5 +93,12 @@ export function useStatuses(userId: string) {
     return { error };
   };
 
-  return { statuses, loading, addStatus, updateStatus, deleteStatus, refetch: fetchStatuses };
+  return {
+    statuses,
+    loading,
+    addStatus,
+    updateStatus,
+    deleteStatus,
+    refetch: fetchStatuses,
+  };
 }

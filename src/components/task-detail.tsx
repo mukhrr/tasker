@@ -73,7 +73,9 @@ export function TaskDetail({ task }: { task: Task }) {
 
           {task.note && (
             <div className="mt-6">
-              <h2 className="text-sm font-medium text-muted-foreground">Note</h2>
+              <h2 className="text-sm font-medium text-muted-foreground">
+                Note
+              </h2>
               <p className="mt-2 whitespace-pre-wrap text-sm">{task.note}</p>
             </div>
           )}
@@ -106,7 +108,9 @@ export function TaskDetail({ task }: { task: Task }) {
               <span className="text-muted-foreground">Assigned Date</span>
               <p className="mt-1">
                 {task.assigned_date
-                  ? new Date(task.assigned_date + 'T00:00:00').toLocaleDateString()
+                  ? new Date(
+                      task.assigned_date + 'T00:00:00'
+                    ).toLocaleDateString()
                   : '—'}
               </p>
             </div>
@@ -114,7 +118,9 @@ export function TaskDetail({ task }: { task: Task }) {
               <span className="text-muted-foreground">Payment Date</span>
               <p className="mt-1">
                 {task.payment_date
-                  ? new Date(task.payment_date + 'T00:00:00').toLocaleDateString()
+                  ? new Date(
+                      task.payment_date + 'T00:00:00'
+                    ).toLocaleDateString()
                   : '—'}
               </p>
             </div>

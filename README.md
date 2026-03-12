@@ -64,13 +64,13 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anonymous key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-only) |
-| `ENCRYPTION_KEY` | Yes | 32-byte hex string for AES-256-GCM encryption |
-| `CRON_SECRET` | Yes | Bearer token for cron endpoint auth |
+| Variable                        | Required | Description                                   |
+| ------------------------------- | -------- | --------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Yes      | Supabase project URL                          |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes      | Supabase anonymous key                        |
+| `SUPABASE_SERVICE_ROLE_KEY`     | Yes      | Supabase service role key (server-only)       |
+| `ENCRYPTION_KEY`                | Yes      | 32-byte hex string for AES-256-GCM encryption |
+| `CRON_SECRET`                   | Yes      | Bearer token for cron endpoint auth           |
 
 Generate an encryption key:
 
@@ -89,13 +89,13 @@ The cron workflow at `.github/workflows/sync-cron.yml` calls `/api/cron/sync` ev
 
 Tasks follow a 12-status workflow grouped into three phases:
 
-| To-do | In Progress | Complete |
-|-------|-------------|----------|
-| In Proposal | Assigned | Paid |
-| Promising | Reviewing | Wasted |
-| Got C+ | Changes Required | Regression |
-| Update Proposal | Awaiting Payment | |
-| | Merged | |
+| To-do           | In Progress      | Complete   |
+| --------------- | ---------------- | ---------- |
+| In Proposal     | Assigned         | Paid       |
+| Promising       | Reviewing        | Wasted     |
+| Got C+          | Changes Required | Regression |
+| Update Proposal | Awaiting Payment |            |
+|                 | Merged           |            |
 
 The AI agent detects transitions by analyzing GitHub events (assignments, PR reviews, merges, payment-related comments).
 

@@ -50,7 +50,9 @@ export function ColumnHeader({
   }
 
   if (!isCustom) {
-    return <span className="text-sm font-medium text-muted-foreground">{name}</span>;
+    return (
+      <span className="text-sm font-medium text-muted-foreground">{name}</span>
+    );
   }
 
   return (
@@ -63,10 +65,7 @@ export function ColumnHeader({
         <DropdownMenuItem onClick={() => setRenaming(true)}>
           Rename
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={onDelete}
-          className="text-destructive"
-        >
+        <DropdownMenuItem onClick={onDelete} className="text-destructive">
           Delete
         </DropdownMenuItem>
       </DropdownMenuContent>

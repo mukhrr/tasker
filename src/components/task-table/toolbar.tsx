@@ -4,7 +4,11 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from '@/components/ui/popover';
 import { RefreshCw, Columns3, Eye, EyeOff, GripVertical } from 'lucide-react';
 import type { ColumnKey } from './column-config';
 import { BUILT_IN_COLUMNS } from './column-config';
@@ -121,7 +125,9 @@ export function Toolbar({
     reordered.splice(dragOverItem.current, 0, moved);
 
     // Rebuild full order: locked columns first, then reordered
-    const locked = columnOrder.filter((k) => BUILT_IN_COLUMNS.find((c) => c.key === k)?.locked);
+    const locked = columnOrder.filter(
+      (k) => BUILT_IN_COLUMNS.find((c) => c.key === k)?.locked
+    );
     onReorderColumns([...locked, ...reordered.map((c) => c.key)]);
 
     dragItem.current = null;
@@ -190,7 +196,11 @@ export function Toolbar({
                   ) : (
                     <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
                   )}
-                  <span className={visibleColumns.has(col.key) ? '' : 'text-muted-foreground'}>
+                  <span
+                    className={
+                      visibleColumns.has(col.key) ? '' : 'text-muted-foreground'
+                    }
+                  >
                     {col.label}
                   </span>
                 </button>
@@ -205,7 +215,9 @@ export function Toolbar({
           disabled={syncing}
           className="gap-2 w-full sm:w-auto"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`}
+          />
           {syncing ? 'Syncing...' : 'Sync Now'}
         </Button>
       </div>

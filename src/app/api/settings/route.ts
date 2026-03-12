@@ -88,8 +88,14 @@ export async function POST(request: Request) {
   }
 
   if (body.github_username !== undefined) {
-    if (typeof body.github_username === 'string' && !body.github_username.trim()) {
-      return NextResponse.json({ error: 'GitHub username cannot be empty' }, { status: 400 });
+    if (
+      typeof body.github_username === 'string' &&
+      !body.github_username.trim()
+    ) {
+      return NextResponse.json(
+        { error: 'GitHub username cannot be empty' },
+        { status: 400 }
+      );
     }
     updates.github_username = body.github_username;
   }

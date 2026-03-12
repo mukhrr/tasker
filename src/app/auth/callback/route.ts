@@ -21,11 +21,15 @@ export async function GET(request: Request) {
       if (githubUsername) upsertData.github_username = githubUsername;
       if (providerToken) upsertData.github_token_encrypted = providerToken;
 
-      await supabase.from('user_settings').upsert(upsertData, { onConflict: 'id' });
+      await supabase
+        .from('user_settings')
+        .upsert(upsertData, { onConflict: 'id' });
 
       return NextResponse.redirect(`${origin}${next}`);
     }
   }
 
-  return NextResponse.redirect(`${origin}/auth/login?error=Could not authenticate`);
+  return NextResponse.redirect(
+    `${origin}/auth/login?error=Could not authenticate`
+  );
 }

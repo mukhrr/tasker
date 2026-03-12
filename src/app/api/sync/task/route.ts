@@ -26,7 +26,10 @@ export async function POST(request: Request) {
     .single();
 
   if (!settings?.ai_api_key_encrypted || !settings?.github_token_encrypted) {
-    return NextResponse.json({ error: 'Missing API key or GitHub token' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Missing API key or GitHub token' },
+      { status: 400 }
+    );
   }
 
   const githubUsername =
@@ -35,13 +38,20 @@ export async function POST(request: Request) {
     '';
 
   if (!githubUsername) {
-    return NextResponse.json({ error: 'No GitHub username configured' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'No GitHub username configured' },
+      { status: 400 }
+    );
   }
 
   try {
     const apiKey = decrypt(settings.ai_api_key_encrypted);
     const githubToken = settings.github_token_encrypted;
-    const result = await runSync(user.id, { apiKey, githubToken, githubUsername }, taskId);
+    const result = await runSync(
+      user.id,
+      { apiKey, githubToken, githubUsername },
+      taskId
+    );
 
     if (result.errors?.length && result.tasks_updated === 0) {
       return NextResponse.json(

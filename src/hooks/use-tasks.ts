@@ -123,9 +123,7 @@ export function useTasks(userId: string) {
 
     // Replace optimistic with real task
     const realTask = data as Task;
-    setTasks((prev) =>
-      prev.map((t) => (t.id === tempId ? realTask : t))
-    );
+    setTasks((prev) => prev.map((t) => (t.id === tempId ? realTask : t)));
 
     // Transfer syncing state from temp to real ID
     setSyncingTaskIds((prev) => {
@@ -145,10 +143,7 @@ export function useTasks(userId: string) {
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
 
-    const { error } = await supabase
-      .from('tasks')
-      .update(updates)
-      .eq('id', id);
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
 
     if (error) {
       await fetchTasks();
@@ -165,5 +160,14 @@ export function useTasks(userId: string) {
     }
   };
 
-  return { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, syncTask, refetch: fetchTasks };
+  return {
+    tasks,
+    loading,
+    syncingTaskIds,
+    addTask,
+    updateTask,
+    deleteTask,
+    syncTask,
+    refetch: fetchTasks,
+  };
 }

@@ -15,7 +15,7 @@ export default function AuthLayout({
           className="absolute inset-0 opacity-[0.03]"
           style={{
             backgroundImage:
-              'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\'/%3E%3C/svg%3E")',
+              "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")",
           }}
         />
 
@@ -35,7 +35,13 @@ export default function AuthLayout({
         <div className="relative z-10 flex flex-1 flex-col justify-between p-10">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.png" alt="Tasker" width={32} height={32} className="rounded-lg" />
+            <Image
+              src="/logo.png"
+              alt="Tasker"
+              width={32}
+              height={32}
+              className="rounded-lg"
+            />
             <span className="text-base font-semibold tracking-tight text-white/80">
               Tasker
             </span>
@@ -50,7 +56,8 @@ export default function AuthLayout({
                 for open source
               </h2>
               <p className="mt-3 max-w-[280px] text-[14px] leading-relaxed text-white/40">
-                Automatically tracks tasks, syncs with GitHub, and keeps your bounties organized.
+                Automatically tracks tasks, syncs with GitHub, and keeps your
+                bounties organized.
               </p>
             </div>
 
@@ -63,7 +70,15 @@ export default function AuthLayout({
               ].map((item) => (
                 <div key={item} className="flex items-center gap-2.5">
                   <div className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-500/10">
-                    <svg className="h-3 w-3 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                    <svg
+                      className="h-3 w-3 text-violet-400"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
                   </div>
@@ -74,9 +89,7 @@ export default function AuthLayout({
           </div>
 
           {/* Bottom */}
-          <p className="text-[12px] text-white/20">
-            Powered by GitHub & AI
-          </p>
+          <p className="text-[12px] text-white/20">Powered by GitHub & AI</p>
         </div>
       </div>
 
@@ -85,10 +98,14 @@ export default function AuthLayout({
         {/* Mobile logo */}
         <div className="flex items-center gap-2.5 p-6 lg:hidden">
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.png" alt="Tasker" width={32} height={32} className="rounded-lg" />
-            <span className="text-lg font-semibold tracking-tight">
-              Tasker
-            </span>
+            <Image
+              src="/logo.png"
+              alt="Tasker"
+              width={32}
+              height={32}
+              className="rounded-lg"
+            />
+            <span className="text-lg font-semibold tracking-tight">Tasker</span>
           </Link>
         </div>
 

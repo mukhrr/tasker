@@ -17,7 +17,11 @@ function buildStatusTaxonomy(statuses: UserStatus[]): string {
   }
 
   let section = '## Status Taxonomy\n\n';
-  for (const group of ['todo', 'in_progress', 'complete'] as TaskStatusGroup[]) {
+  for (const group of [
+    'todo',
+    'in_progress',
+    'complete',
+  ] as TaskStatusGroup[]) {
     section += `### ${STATUS_GROUP_LABELS[group]}\n`;
     for (const s of groups[group].sort((a, b) => a.position - b.position)) {
       section += `- **${s.key}** (${s.label})`;

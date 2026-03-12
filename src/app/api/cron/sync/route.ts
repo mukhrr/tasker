@@ -10,7 +10,8 @@ export async function GET(request: Request) {
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
   // Find users with auto_sync_enabled and their sync interval
@@ -37,7 +38,8 @@ export async function GET(request: Request) {
 
     if (lastSync) {
       const hoursSinceLastSync =
-        (Date.now() - new Date(lastSync.started_at).getTime()) / (1000 * 60 * 60);
+        (Date.now() - new Date(lastSync.started_at).getTime()) /
+        (1000 * 60 * 60);
       if (hoursSinceLastSync < (user.sync_interval_hours || 6)) {
         results.push({ userId: user.id, status: 'skipped' });
         continue;
