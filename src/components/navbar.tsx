@@ -3,6 +3,15 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Separator } from '@/components/ui/separator';
 import type { User } from '@supabase/supabase-js';
 
 export function Navbar({ user }: { user: User }) {
@@ -15,31 +24,46 @@ export function Navbar({ user }: { user: User }) {
     router.refresh();
   };
 
+  const initials = (user.user_metadata?.full_name as string | undefined)
+    ?.split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase() ?? user.email?.[0]?.toUpperCase() ?? '?';
+
   return (
-    <nav className="border-b border-foreground/10">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-8">
-          <Link href="/tasks" className="text-xl font-bold">
+    <nav className="border-b">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-6">
+          <Link href="/tasks" className="text-lg font-bold">
             Tasker
           </Link>
-          <div className="flex items-center gap-4">
-            <Link
-              href="/tasks"
-              className="text-sm text-foreground/60 transition-colors hover:text-foreground"
-            >
-              Tasks
-            </Link>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-foreground/60">{user.email}</span>
-          <button
-            onClick={handleSignOut}
-            className="rounded-lg border border-foreground/20 px-3 py-1.5 text-sm transition-colors hover:bg-foreground/5"
+          <Separator orientation="vertical" className="h-6" />
+          <Link
+            href="/tasks"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            Sign out
-          </button>
+            Tasks
+          </Link>
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="ghost" size="icon" className="rounded-full" />
+            }
+          >
+            <Avatar className="h-8 w-8">
+              <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            </Avatar>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem className="text-xs text-muted-foreground" disabled>
+              {user.email}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleSignOut}>
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </nav>
   );
