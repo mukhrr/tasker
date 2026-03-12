@@ -99,6 +99,66 @@ export async function fetchIssueEvents(
   );
 }
 
+export async function fetchIssueTimeline(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<Record<string, unknown>[]> {
+  return githubFetch<Record<string, unknown>[]>(
+    `/repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    token
+  );
+}
+
+export async function findLinkedPR(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  githubUsername: string,
+  token: string
+): Promise<GitHubPullRequest | null> {
+  try {
+    // Use timeline API to find cross-referenced PRs
+    const timeline = await fetchIssueTimeline(owner, repo, issueNumber, token);
+    for (const event of timeline) {
+      if (
+        event.event === 'cross-referenced' &&
+        event.source &&
+        typeof event.source === 'object'
+      ) {
+        const source = event.source as Record<string, unknown>;
+        const issue = source.issue as Record<string, unknown> | undefined;
+        if (
+          issue?.pull_request &&
+          (issue.user as Record<string, unknown>)?.login === githubUsername
+        ) {
+          const prNumber = issue.number as number;
+          return fetchPR(owner, repo, prNumber, token);
+        }
+      }
+    }
+  } catch {
+    // Timeline API may not be available; fall back to search
+  }
+
+  // Fallback: search for PRs by user mentioning the issue
+  try {
+    const searchResult = await githubFetch<{ items: GitHubPullRequest[] }>(
+      `/search/issues?q=repo:${owner}/${repo}+is:pr+author:${githubUsername}+${issueNumber}&per_page=5`,
+      token
+    );
+    if (searchResult.items?.length) {
+      // Fetch full PR data for the first match
+      return fetchPR(owner, repo, searchResult.items[0].number, token);
+    }
+  } catch {
+    // Search may fail; that's okay
+  }
+
+  return null;
+}
+
 export function shortenGitHubUrl(url: string): string {
   const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (issueMatch) return `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;

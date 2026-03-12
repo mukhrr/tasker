@@ -11,6 +11,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [githubUsername, setGithubUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -25,7 +26,7 @@ export default function SignupPage() {
       email,
       password,
       options: {
-        data: { full_name: fullName },
+        data: { full_name: fullName, user_name: githubUsername.trim() },
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -130,6 +131,20 @@ export default function SignupPage() {
             onChange={(e) => setFullName(e.target.value)}
             required
             placeholder="Jane Smith"
+            className="h-11 rounded-xl border-border/60 bg-transparent px-4 text-[14px] transition-all duration-200 placeholder:text-muted-foreground/40 focus:border-violet-500/50 focus:ring-violet-500/20"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="githubUsername" className="text-[13px] font-medium">
+            GitHub username
+          </Label>
+          <Input
+            id="githubUsername"
+            value={githubUsername}
+            onChange={(e) => setGithubUsername(e.target.value)}
+            required
+            placeholder="octocat"
             className="h-11 rounded-xl border-border/60 bg-transparent px-4 text-[14px] transition-all duration-200 placeholder:text-muted-foreground/40 focus:border-violet-500/50 focus:ring-violet-500/20"
           />
         </div>

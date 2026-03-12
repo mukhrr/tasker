@@ -8,6 +8,7 @@ import type { Task, TaskStatus } from '@/types/database';
 export function useTasks(userId: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
   const supabase = createClient();
 
   const fetchTasks = useCallback(async () => {
@@ -46,6 +47,26 @@ export function useTasks(userId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
+  const syncTask = async (taskId: string) => {
+    setSyncingTaskIds((prev) => new Set(prev).add(taskId));
+    try {
+      await fetch('/api/sync/task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      await fetchTasks();
+    } catch {
+      // Sync failure is non-critical for add flow
+    } finally {
+      setSyncingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
   const addTask = async (issueUrl: string) => {
     const parsed = parseIssueUrl(issueUrl);
 
@@ -76,14 +97,40 @@ export function useTasks(userId: string) {
     };
 
     setTasks((prev) => [optimistic, ...prev]);
+    setSyncingTaskIds((prev) => new Set(prev).add(tempId));
 
-    const { error } = await supabase.from('tasks').insert(newTask);
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert(newTask)
+      .select()
+      .single();
+
     if (error) {
       setTasks((prev) => prev.filter((t) => t.id !== tempId));
+      setSyncingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(tempId);
+        return next;
+      });
       throw error;
     }
 
-    await fetchTasks();
+    // Replace optimistic with real task
+    const realTask = data as Task;
+    setTasks((prev) =>
+      prev.map((t) => (t.id === tempId ? realTask : t))
+    );
+
+    // Transfer syncing state from temp to real ID
+    setSyncingTaskIds((prev) => {
+      const next = new Set(prev);
+      next.delete(tempId);
+      next.add(realTask.id);
+      return next;
+    });
+
+    // Auto-sync the newly added task in the background
+    syncTask(realTask.id);
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {
@@ -112,5 +159,5 @@ export function useTasks(userId: string) {
     }
   };
 
-  return { tasks, loading, addTask, updateTask, deleteTask, refetch: fetchTasks };
+  return { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, refetch: fetchTasks };
 }

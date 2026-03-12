@@ -65,6 +65,7 @@ export interface UserSettings {
   auto_sync_enabled: boolean;
   sync_interval_hours: number;
   github_token_encrypted: string | null;
+  github_username: string | null;
   created_at: string;
   updated_at: string;
 }

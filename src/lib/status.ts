@@ -48,8 +48,8 @@ export const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
   },
   changes_required: {
     label: 'Changes Required',
-    color: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
-    dotColor: 'bg-orange-500',
+    color: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
+    dotColor: 'bg-red-400',
     group: 'in_progress',
   },
   awaiting_payment: {

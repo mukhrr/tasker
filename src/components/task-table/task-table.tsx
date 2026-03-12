@@ -14,12 +14,13 @@ import { StatusCell } from './cells/status-cell';
 import { DateCell } from './cells/date-cell';
 import { AmountCell } from './cells/amount-cell';
 import { TextCell } from './cells/text-cell';
+import { NoteCell } from './cells/note-cell';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2 } from 'lucide-react';
 import type { Task, TaskStatus, TaskStatusGroup } from '@/types/database';
 
 export function TaskTable({ userId }: { userId: string }) {
-  const { tasks, loading, addTask, updateTask, deleteTask } =
+  const { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask } =
     useTasks(userId);
   const {
     columns,
@@ -174,96 +175,122 @@ export function TaskTable({ userId }: { userId: string }) {
                   </td>
                 </tr>
               ) : (
-                filteredTasks.map((task) => (
-                  <tr
-                    key={task.id}
-                    className="group/row border-b last:border-b-0 hover:bg-muted/30"
-                  >
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-1">
-                        <Link
-                          href={`/tasks/${task.id}`}
-                          className="mr-1 text-xs text-muted-foreground hover:text-foreground"
-                        >
-                          View
-                        </Link>
-                        <UrlCell
-                          value={task.issue_url}
-                          onChange={(v) =>
-                            v && handleUpdate(task.id, { issue_url: v })
-                          }
-                        />
-                      </div>
-                    </td>
-                    <td className="px-4 py-2">
-                      <UrlCell
-                        value={task.pr_url}
-                        onChange={(v) =>
-                          handleUpdate(task.id, { pr_url: v })
-                        }
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusCell
-                        value={task.status}
-                        onChange={(status: TaskStatus) =>
-                          handleUpdate(task.id, { status })
-                        }
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <AmountCell
-                        value={task.amount}
-                        onChange={(amount) =>
-                          handleUpdate(task.id, { amount })
-                        }
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <DateCell
-                        value={task.assigned_date}
-                        onChange={(assigned_date) =>
-                          handleUpdate(task.id, { assigned_date })
-                        }
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <DateCell
-                        value={task.payment_date}
-                        onChange={(payment_date) =>
-                          handleUpdate(task.id, { payment_date })
-                        }
-                      />
-                    </td>
-                    <td className="max-w-[200px] px-4 py-2">
-                      <TextCell
-                        value={task.note}
-                        onChange={(note) =>
-                          handleUpdate(task.id, { note })
-                        }
-                        placeholder="Add a note..."
-                      />
-                    </td>
-                    {columns.map((col) => (
-                      <td key={col.id} className="px-4 py-2">
-                        <TextCell
-                          value={getFieldValue(task.id, col.id)}
-                          onChange={(value) =>
-                            setFieldValue(task.id, col.id, value)
-                          }
-                        />
+                filteredTasks.map((task) => {
+                  const isSyncing = syncingTaskIds.has(task.id);
+                  return (
+                    <tr
+                      key={task.id}
+                      className="group/row border-b last:border-b-0 hover:bg-muted/30"
+                    >
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-1">
+                          <Link
+                            href={`/tasks/${task.id}`}
+                            className="mr-1 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            View
+                          </Link>
+                          <UrlCell
+                            value={task.issue_url}
+                            onChange={(v) =>
+                              v && handleUpdate(task.id, { issue_url: v })
+                            }
+                          />
+                        </div>
                       </td>
-                    ))}
-                    <td className="px-2 py-2">
-                      <button
-                        onClick={() => handleDelete(task.id)}
-                        className="opacity-0 group-hover/row:opacity-100 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                      <td className="px-4 py-2">
+                        {isSyncing && !task.pr_url ? (
+                          <Skeleton className="h-4 w-28" />
+                        ) : (
+                          <UrlCell
+                            value={task.pr_url}
+                            onChange={(v) =>
+                              handleUpdate(task.id, { pr_url: v })
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {isSyncing && !task.last_synced_at ? (
+                          <Skeleton className="h-5 w-20 rounded-full" />
+                        ) : (
+                          <StatusCell
+                            value={task.status}
+                            onChange={(status: TaskStatus) =>
+                              handleUpdate(task.id, { status })
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {isSyncing && !task.amount ? (
+                          <Skeleton className="h-4 w-14" />
+                        ) : (
+                          <AmountCell
+                            value={task.amount}
+                            onChange={(amount) =>
+                              handleUpdate(task.id, { amount })
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {isSyncing && !task.assigned_date ? (
+                          <Skeleton className="h-4 w-20" />
+                        ) : (
+                          <DateCell
+                            value={task.assigned_date}
+                            onChange={(assigned_date) =>
+                              handleUpdate(task.id, { assigned_date })
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {isSyncing && !task.payment_date ? (
+                          <Skeleton className="h-4 w-20" />
+                        ) : (
+                          <DateCell
+                            value={task.payment_date}
+                            onChange={(payment_date) =>
+                              handleUpdate(task.id, { payment_date })
+                            }
+                          />
+                        )}
+                      </td>
+                      <td className="max-w-[300px] px-4 py-2">
+                        {isSyncing && !task.note ? (
+                          <Skeleton className="h-4 w-36" />
+                        ) : (
+                          <NoteCell
+                            value={task.note}
+                            onChange={(note) =>
+                              handleUpdate(task.id, { note })
+                            }
+                          />
+                        )}
+                      </td>
+                      {columns.map((col) => (
+                        <td key={col.id} className="px-4 py-2">
+                          <TextCell
+                            value={getFieldValue(task.id, col.id)}
+                            onChange={(value) =>
+                              setFieldValue(task.id, col.id, value)
+                            }
+                          />
+                        </td>
+                      ))}
+                      <td className="px-2 py-2">
+                        <button
+                          onClick={() => handleDelete(task.id)}
+                          className="opacity-0 group-hover/row:opacity-100 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

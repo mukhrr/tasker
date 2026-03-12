@@ -1,6 +1,18 @@
 import { createClient } from '@/lib/supabase/server';
 import { SettingsForm } from '@/components/settings-form';
+import { decrypt } from '@/lib/encryption';
 import type { UserSettings } from '@/types/database';
+
+function maskApiKey(encrypted: string | null): string | null {
+  if (!encrypted) return null;
+  try {
+    const key = decrypt(encrypted);
+    const last4 = key.slice(-4);
+    return `${'•'.repeat(key.length - 4)}${last4}`;
+  } catch {
+    return '••••••••••••';
+  }
+}
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -14,6 +26,9 @@ export default async function SettingsPage() {
     .eq('id', user!.id)
     .single();
 
+  const typedSettings = settings as UserSettings | null;
+  const apiKeyMasked = maskApiKey(typedSettings?.ai_api_key_encrypted ?? null);
+
   return (
     <div className="mx-auto max-w-2xl">
       <h1 className="text-2xl font-bold">Settings</h1>
@@ -23,7 +38,8 @@ export default async function SettingsPage() {
       <div className="mt-8">
         <SettingsForm
           user={user!}
-          settings={settings as UserSettings | null}
+          settings={typedSettings}
+          apiKeyMasked={apiKeyMasked}
         />
       </div>
     </div>

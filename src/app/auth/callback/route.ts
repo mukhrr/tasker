@@ -11,16 +11,17 @@ export async function GET(request: Request) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error && data.session) {
-      // Store GitHub provider token (Supabase doesn't persist it after exchange)
+      const userId = data.session.user.id;
+      const userMeta = data.session.user.user_metadata;
+      const githubUsername = userMeta?.user_name as string | undefined;
       const providerToken = data.session.provider_token;
-      if (providerToken) {
-        const userId = data.session.user.id;
-        // Store token in user_settings for sync usage
-        await supabase.from('user_settings').upsert(
-          { id: userId, github_token_encrypted: providerToken },
-          { onConflict: 'id' }
-        );
-      }
+
+      // Upsert user_settings with GitHub username and optional provider token
+      const upsertData: Record<string, unknown> = { id: userId };
+      if (githubUsername) upsertData.github_username = githubUsername;
+      if (providerToken) upsertData.github_token_encrypted = providerToken;
+
+      await supabase.from('user_settings').upsert(upsertData, { onConflict: 'id' });
 
       return NextResponse.redirect(`${origin}${next}`);
     }

@@ -10,6 +10,7 @@ import {
   fetchIssueEvents,
   parseIssueUrl,
   parsePrUrl,
+  findLinkedPR,
 } from '@/lib/github';
 import type { Task, TaskStatus } from '@/types/database';
 
@@ -19,12 +20,19 @@ export interface TaskUpdate {
   confidence: number;
   summary: string;
   flags: string[];
+  // Rich fields the AI can populate
+  pr_url?: string | null;
+  note?: string | null;
+  assigned_date?: string | null;
+  payment_date?: string | null;
+  amount?: number | null;
 }
 
 const GraphState = Annotation.Root({
   tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
   apiKey: Annotation<string>,
+  githubUsername: Annotation<string>,
   currentIndex: Annotation<number>,
   updates: Annotation<TaskUpdate[]>,
   errors: Annotation<string[]>,
@@ -49,16 +57,23 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
   try {
     const { owner, repo, number } = parsed;
     const token = state.githubToken;
+    const username = state.githubUsername;
+    const isFirstSync = !task.last_synced_at;
 
+    // Fetch issue data, comments, and events in parallel
     const [issue, comments, events] = await Promise.all([
       fetchIssue(owner, repo, number, token),
       fetchIssueComments(owner, repo, number, token),
       fetchIssueEvents(owner, repo, number, token),
     ]);
 
+    // Find or fetch linked PR
     let prData = null;
     let reviews = null;
+    let discoveredPrUrl: string | null = null;
+
     if (task.pr_url) {
+      // PR already known
       const prParsed = parsePrUrl(task.pr_url);
       if (prParsed) {
         [prData, reviews] = await Promise.all([
@@ -66,11 +81,35 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
           fetchPRReviews(prParsed.owner, prParsed.repo, prParsed.number, token),
         ]);
       }
+    } else if (username) {
+      // Try to discover linked PR by user
+      const linkedPR = await findLinkedPR(owner, repo, number, username, token);
+      if (linkedPR) {
+        prData = linkedPR;
+        discoveredPrUrl = linkedPR.html_url;
+        reviews = await fetchPRReviews(owner, repo, linkedPR.number, token);
+      }
     }
 
-    // Build analysis prompt
+    // Find assignment date from events
+    let assignedDate: string | null = null;
+    if (username) {
+      const assignEvent = events.find(
+        (e) =>
+          e.event === 'assigned' &&
+          e.assignee?.login?.toLowerCase() === username.toLowerCase()
+      );
+      if (assignEvent) {
+        assignedDate = assignEvent.created_at;
+      }
+    }
+
+    // Build analysis prompt with all context
     const analysisData = {
       currentStatus: task.status,
+      isFirstSync,
+      githubUsername: username,
+      issueTitle: issue.title,
       issueData: JSON.stringify(
         {
           title: issue.title,
@@ -93,6 +132,10 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
               merged_at: prData.merged_at,
               draft: prData.draft,
               review_comments: prData.review_comments,
+              html_url: prData.html_url,
+              user: prData.user.login,
+              created_at: prData.created_at,
+              updated_at: prData.updated_at,
             },
             null,
             2
@@ -100,7 +143,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         : undefined,
       comments: comments.length
         ? JSON.stringify(
-            comments.slice(-20).map((c) => ({
+            comments.slice(-30).map((c) => ({
               user: c.user.login,
               body: c.body.slice(0, 500),
               created_at: c.created_at,
@@ -123,7 +166,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         : undefined,
       events: events.length
         ? JSON.stringify(
-            events.slice(-20).map((e) => ({
+            events.slice(-30).map((e) => ({
               event: e.event,
               actor: e.actor.login,
               created_at: e.created_at,
@@ -133,6 +176,14 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
             2
           )
         : undefined,
+      // Pre-extracted data for the AI to confirm or override
+      existingPrUrl: task.pr_url,
+      existingNote: task.note,
+      existingAssignedDate: task.assigned_date,
+      existingAmount: task.amount,
+      existingPaymentDate: task.payment_date,
+      discoveredPrUrl,
+      discoveredAssignedDate: assignedDate,
     };
 
     const prompt = buildAnalysisPrompt(analysisData);
@@ -164,6 +215,12 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         confidence: result.confidence,
         summary: result.summary,
         flags: result.flags || [],
+        // Rich fields — AI decides what to populate
+        pr_url: result.pr_url ?? discoveredPrUrl,
+        note: result.note ?? undefined,
+        assigned_date: result.assigned_date ?? assignedDate,
+        payment_date: result.payment_date ?? undefined,
+        amount: result.amount ?? undefined,
       };
       return { updates: [...state.updates, update] };
     }

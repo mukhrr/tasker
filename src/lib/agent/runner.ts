@@ -6,9 +6,10 @@ import type { Task } from '@/types/database';
 interface SyncCredentials {
   apiKey: string;
   githubToken: string;
+  githubUsername: string;
 }
 
-export async function runSync(userId: string, credentials?: SyncCredentials) {
+export async function runSync(userId: string, credentials?: SyncCredentials, taskId?: string) {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -16,11 +17,12 @@ export async function runSync(userId: string, credentials?: SyncCredentials) {
 
   let apiKey: string;
   let githubToken: string;
+  let githubUsername: string;
 
   if (credentials) {
-    // Credentials passed from authenticated caller (sync API route)
     apiKey = credentials.apiKey;
     githubToken = credentials.githubToken;
+    githubUsername = credentials.githubUsername;
   } else {
     // Fallback for cron route (uses service role key to bypass RLS)
     const { data: settings } = await supabase
@@ -39,14 +41,36 @@ export async function runSync(userId: string, credentials?: SyncCredentials) {
 
     apiKey = decrypt(settings.ai_api_key_encrypted);
     githubToken = settings.github_token_encrypted;
+
+    // Get github_username from settings or profile
+    githubUsername = settings.github_username || '';
+    if (!githubUsername) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('github_username')
+        .eq('id', userId)
+        .single();
+      githubUsername = profile?.github_username || '';
+    }
+
+    if (!githubUsername) {
+      throw new Error('No GitHub username configured. Go to Settings to add one.');
+    }
   }
 
   // Get tasks that need syncing
-  const { data: tasks } = await supabase
+  let query = supabase
     .from('tasks')
     .select('*')
-    .eq('user_id', userId)
-    .not('status', 'in', '("paid","wasted")');
+    .eq('user_id', userId);
+
+  if (taskId) {
+    query = query.eq('id', taskId);
+  } else {
+    query = query.not('status', 'in', '("paid","wasted")');
+  }
+
+  const { data: tasks } = await query;
 
   if (!tasks || tasks.length === 0) {
     return { tasks_updated: 0, errors: [] };
@@ -66,6 +90,7 @@ export async function runSync(userId: string, credentials?: SyncCredentials) {
       tasks: tasks as Task[],
       githubToken,
       apiKey,
+      githubUsername,
       currentIndex: 0,
       updates: [],
       errors: [],
@@ -76,15 +101,47 @@ export async function runSync(userId: string, credentials?: SyncCredentials) {
     // Apply updates
     for (const update of result.updates) {
       if (update.confidence >= 0.6) {
+        const currentTask = tasks.find((t) => t.id === update.taskId);
+        if (!currentTask) continue;
+
         const updateData: Record<string, unknown> = {
           ai_summary: update.summary,
           last_synced_at: new Date().toISOString(),
         };
 
-        // Only update status if confidence is high enough and status changed
-        const currentTask = tasks.find((t) => t.id === update.taskId);
-        if (currentTask && update.suggestedStatus !== currentTask.status && update.confidence >= 0.75) {
+        // Status change at high confidence
+        if (
+          update.suggestedStatus !== currentTask.status &&
+          update.confidence >= 0.75
+        ) {
           updateData.status = update.suggestedStatus;
+        }
+
+        // Rich fields — only update if AI provided a value (non-null)
+        if (update.pr_url !== undefined && update.pr_url !== null) {
+          updateData.pr_url = update.pr_url;
+        }
+
+        if (update.note !== undefined && update.note !== null) {
+          // Only set note if it's currently empty or this is first sync
+          if (!currentTask.note || !currentTask.last_synced_at) {
+            updateData.note = update.note;
+          }
+        }
+
+        if (update.assigned_date !== undefined && update.assigned_date !== null) {
+          updateData.assigned_date = update.assigned_date;
+        }
+
+        if (update.payment_date !== undefined && update.payment_date !== null) {
+          updateData.payment_date = update.payment_date;
+        }
+
+        if (update.amount !== undefined && update.amount !== null) {
+          // Only set amount if not already set by user
+          if (!currentTask.amount) {
+            updateData.amount = update.amount;
+          }
         }
 
         await supabase
