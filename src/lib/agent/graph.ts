@@ -190,7 +190,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     // Call Claude
     const model = new ChatAnthropic({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       apiKey: state.apiKey,
       maxTokens: 1024,
     });
