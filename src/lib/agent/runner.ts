@@ -3,29 +3,43 @@ import { createSyncGraph } from './graph';
 import { decrypt } from '@/lib/encryption';
 import type { Task } from '@/types/database';
 
-export async function runSync(userId: string) {
+interface SyncCredentials {
+  apiKey: string;
+  githubToken: string;
+}
+
+export async function runSync(userId: string, credentials?: SyncCredentials) {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  // Get user settings
-  const { data: settings } = await supabase
-    .from('user_settings')
-    .select('*')
-    .eq('id', userId)
-    .single();
+  let apiKey: string;
+  let githubToken: string;
 
-  if (!settings?.ai_api_key_encrypted) {
-    throw new Error('No AI API key configured. Go to Settings to add one.');
+  if (credentials) {
+    // Credentials passed from authenticated caller (sync API route)
+    apiKey = credentials.apiKey;
+    githubToken = credentials.githubToken;
+  } else {
+    // Fallback for cron route (uses service role key to bypass RLS)
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (!settings?.ai_api_key_encrypted) {
+      throw new Error('No AI API key configured. Go to Settings to add one.');
+    }
+
+    if (!settings?.github_token_encrypted) {
+      throw new Error('No GitHub token. Please reconnect with GitHub OAuth.');
+    }
+
+    apiKey = decrypt(settings.ai_api_key_encrypted);
+    githubToken = settings.github_token_encrypted;
   }
-
-  if (!settings?.github_token_encrypted) {
-    throw new Error('No GitHub token. Please reconnect with GitHub OAuth.');
-  }
-
-  const apiKey = decrypt(settings.ai_api_key_encrypted);
-  const githubToken = settings.github_token_encrypted; // stored as plaintext from OAuth for now
 
   // Get tasks that need syncing
   const { data: tasks } = await supabase
@@ -89,7 +103,7 @@ export async function runSync(userId: string) {
         .update({
           status: 'completed',
           completed_at: new Date().toISOString(),
-          bounties_updated: tasksUpdated, // DB column name
+          bounties_updated: tasksUpdated,
           details: { updates: result.updates, errors: result.errors },
         })
         .eq('id', syncLog.id);

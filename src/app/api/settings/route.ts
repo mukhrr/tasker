@@ -46,7 +46,14 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const updates: Record<string, unknown> = { id: user.id };
+
+  // Ensure the row exists first
+  await supabase
+    .from('user_settings')
+    .upsert({ id: user.id }, { onConflict: 'id', ignoreDuplicates: true });
+
+  // Then update only the fields that were provided
+  const updates: Record<string, unknown> = {};
 
   if (body.ai_api_key) {
     updates.ai_api_key_encrypted = encrypt(body.ai_api_key);
@@ -62,7 +69,8 @@ export async function POST(request: Request) {
 
   const { error } = await supabase
     .from('user_settings')
-    .upsert(updates, { onConflict: 'id' });
+    .update(updates)
+    .eq('id', user.id);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -24,7 +24,7 @@ export function SettingsForm({
     settings?.sync_interval_hours?.toString() ?? '6'
   );
 
-  const hasApiKey = !!settings?.ai_api_key_encrypted;
+  const [hasApiKey, setHasApiKey] = useState(!!settings?.ai_api_key_encrypted);
   const githubUsername = user.user_metadata?.user_name as string | undefined;
 
   const saveApiKey = async () => {
@@ -38,6 +38,7 @@ export function SettingsForm({
       });
       if (!res.ok) throw new Error('Failed to save');
       setApiKey('');
+      setHasApiKey(true);
       toast.success('API key saved');
     } catch {
       toast.error('Failed to save API key');

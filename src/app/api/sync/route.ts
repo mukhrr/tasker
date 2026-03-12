@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { runSync } from '@/lib/agent/runner';
+import { decrypt } from '@/lib/encryption';
 
 export async function POST() {
   const supabase = await createClient();
@@ -10,6 +11,27 @@ export async function POST() {
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Fetch settings with the authenticated client (RLS-safe)
+  const { data: settings } = await supabase
+    .from('user_settings')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  if (!settings?.ai_api_key_encrypted) {
+    return NextResponse.json(
+      { error: 'No AI API key configured. Go to Settings to add one.' },
+      { status: 400 }
+    );
+  }
+
+  if (!settings?.github_token_encrypted) {
+    return NextResponse.json(
+      { error: 'No GitHub token. Please reconnect with GitHub OAuth.' },
+      { status: 400 }
+    );
   }
 
   // Check for concurrent sync
@@ -28,7 +50,9 @@ export async function POST() {
   }
 
   try {
-    const result = await runSync(user.id);
+    const apiKey = decrypt(settings.ai_api_key_encrypted);
+    const githubToken = settings.github_token_encrypted;
+    const result = await runSync(user.id, { apiKey, githubToken });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
