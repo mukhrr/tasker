@@ -1,15 +1,32 @@
 'use client';
 
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartTooltip } from './chart-tooltip';
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  ChartLegend,
+  ChartLegendContent,
+} from '@/components/ui/chart';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+
+const chartConfig = {
+  created: {
+    label: 'Created',
+    color: 'var(--chart-1)',
+  },
+  completed: {
+    label: 'Completed',
+    color: 'var(--chart-3)',
+  },
+} satisfies ChartConfig;
 
 interface ActivityChartProps {
   data: { month: string; created: number; completed: number }[];
@@ -20,61 +37,51 @@ export function ActivityChart({ data }: ActivityChartProps) {
 
   return (
     <Card className="lg:col-span-2">
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader>
         <CardTitle>Monthly Activity</CardTitle>
-        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-[3px] bg-[var(--chart-1)]" />
-            Created
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-[3px] bg-[var(--chart-3)]" />
-            Completed
-          </span>
-        </div>
+        <CardDescription>
+          {hasData
+            ? 'Tasks created and completed over the last 6 months'
+            : 'No activity data yet'}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!hasData ? (
-          <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-            No activity data yet
+          <div className="flex h-[250px] items-center justify-center text-sm text-muted-foreground">
+            Start adding and completing tasks to see activity
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart
-              data={data}
-              margin={{ top: 8, right: 8, bottom: 0, left: -12 }}
-              barGap={4}
-            >
+          <ChartContainer config={chartConfig} className="h-[250px] w-full">
+            <BarChart data={data} accessibilityLayer barGap={4}>
+              <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="month"
-                tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
                 tickLine={false}
                 axisLine={false}
-                dy={8}
+                tickMargin={8}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
                 tickLine={false}
                 axisLine={false}
+                tickMargin={8}
                 allowDecimals={false}
               />
-              <Tooltip content={<ChartTooltip />} />
+              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartLegend content={<ChartLegendContent />} />
               <Bar
                 dataKey="created"
-                name="Created"
-                fill="var(--chart-1)"
-                radius={[6, 6, 0, 0]}
+                fill="var(--color-created)"
+                radius={[4, 4, 0, 0]}
                 maxBarSize={32}
               />
               <Bar
                 dataKey="completed"
-                name="Completed"
-                fill="var(--chart-3)"
-                radius={[6, 6, 0, 0]}
+                fill="var(--color-completed)"
+                radius={[4, 4, 0, 0]}
                 maxBarSize={32}
               />
             </BarChart>
-          </ResponsiveContainer>
+          </ChartContainer>
         )}
       </CardContent>
     </Card>

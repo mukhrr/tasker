@@ -28,12 +28,14 @@ import {
   TooltipProvider,
 } from '@/components/ui/tooltip';
 import type { Task, TaskStatusGroup } from '@/types/database';
-import type { ColumnKey } from './column-config';
+import type { ColumnKey, SortConfig } from './column-config';
 import {
   loadVisibleColumns,
   saveVisibleColumns,
   loadColumnOrder,
   saveColumnOrder,
+  loadSortConfig,
+  saveSortConfig,
 } from './column-config';
 
 export function TaskTable({ userId }: { userId: string }) {
@@ -71,6 +73,9 @@ export function TaskTable({ userId }: { userId: string }) {
   const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() =>
     loadColumnOrder()
   );
+  const [sortConfig, setSortConfig] = useState<SortConfig>(() =>
+    loadSortConfig()
+  );
 
   const toggleColumn = (key: ColumnKey) => {
     setVisibleColumns((prev) => {
@@ -85,6 +90,22 @@ export function TaskTable({ userId }: { userId: string }) {
   const reorderColumns = (order: ColumnKey[]) => {
     setColumnOrder(order);
     saveColumnOrder(order);
+  };
+
+  const handleSortChange = (config: SortConfig) => {
+    setSortConfig(config);
+    saveSortConfig(config);
+  };
+
+  const toggleColumnSort = (key: ColumnKey) => {
+    if (sortConfig.key === key) {
+      handleSortChange({
+        key,
+        direction: sortConfig.direction === 'asc' ? 'desc' : 'asc',
+      });
+    } else {
+      handleSortChange({ key, direction: 'asc' });
+    }
   };
 
   const show = (key: ColumnKey) => visibleColumns.has(key);
@@ -112,8 +133,37 @@ export function TaskTable({ userId }: { userId: string }) {
       );
     }
 
-    return filtered;
-  }, [tasks, statuses, activeTab, search]);
+    // Sort
+    const sorted = [...filtered].sort((a, b) => {
+      const dir = sortConfig.direction === 'asc' ? 1 : -1;
+      const fieldMap: Record<string, (t: Task) => string | number | null> = {
+        issue: (t) => (t.issue_title || t.issue_url).toLowerCase(),
+        pr: (t) => t.pr_url?.toLowerCase() ?? null,
+        status: (t) => t.status,
+        amount: (t) => t.amount,
+        assigned: (t) => t.assigned_date,
+        payment: (t) => t.payment_date,
+        note: (t) => t.note?.toLowerCase() ?? null,
+        created_at: (t) => t.created_at,
+        updated_at: (t) => t.updated_at,
+      };
+      const getter = fieldMap[sortConfig.key];
+      if (!getter) return 0;
+      const aVal = getter(a);
+      const bVal = getter(b);
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return dir; // nulls last regardless of direction
+      if (bVal == null) return -dir;
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return aVal.localeCompare(bVal) * dir;
+      }
+      if (aVal < bVal) return -dir;
+      if (aVal > bVal) return dir;
+      return 0;
+    });
+
+    return sorted;
+  }, [tasks, statuses, activeTab, search, sortConfig]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -195,6 +245,8 @@ export function TaskTable({ userId }: { userId: string }) {
         columnOrder={columnOrder}
         onReorderColumns={reorderColumns}
         lastSyncResult={lastSyncResult}
+        sortConfig={sortConfig}
+        onSortChange={handleSortChange}
       />
 
       <div className="rounded-lg border">
@@ -214,7 +266,15 @@ export function TaskTable({ userId }: { userId: string }) {
                   };
                   return (
                     <th key={key} className="px-3 py-2.5 text-left sm:px-4">
-                      <ColumnHeader name={labels[key]} />
+                      <ColumnHeader
+                        name={labels[key]}
+                        sortDirection={
+                          sortConfig.key === key
+                            ? sortConfig.direction
+                            : null
+                        }
+                        onSort={() => toggleColumnSort(key)}
+                      />
                     </th>
                   );
                 })}

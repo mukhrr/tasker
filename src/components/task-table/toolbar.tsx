@@ -9,8 +9,16 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from '@/components/ui/popover';
-import { RefreshCw, Columns3, Eye, EyeOff, GripVertical } from 'lucide-react';
-import type { ColumnKey } from './column-config';
+import {
+  RefreshCw,
+  Columns3,
+  Eye,
+  EyeOff,
+  GripVertical,
+  ArrowUpDown,
+  Check,
+} from 'lucide-react';
+import type { ColumnKey, SortConfig } from './column-config';
 import { BUILT_IN_COLUMNS } from './column-config';
 
 function timeAgo(date: string): string {
@@ -42,6 +50,8 @@ export function Toolbar({
   columnOrder,
   onReorderColumns,
   lastSyncResult,
+  sortConfig,
+  onSortChange,
 }: {
   activeTab: string;
   onTabChange: (tab: string) => void;
@@ -54,6 +64,8 @@ export function Toolbar({
   columnOrder: ColumnKey[];
   onReorderColumns: (order: ColumnKey[]) => void;
   lastSyncResult: { failed: boolean; error?: string } | null;
+  sortConfig: SortConfig;
+  onSortChange: (config: SortConfig) => void;
 }) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const dragItem = useRef<number | null>(null);
@@ -162,6 +174,58 @@ export function Toolbar({
             </span>
           </div>
         )}
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button variant="outline" size="sm" className="gap-2">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Sort</span>
+              </Button>
+            }
+          />
+          <PopoverContent align="end" className="w-48 p-2">
+            <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
+              Sort by
+            </p>
+            {(
+              [
+                { key: 'created_at', label: 'Date created' },
+                { key: 'updated_at', label: 'Last updated' },
+                ...BUILT_IN_COLUMNS.map((c) => ({
+                  key: c.key,
+                  label: c.label,
+                })),
+              ] as { key: SortConfig['key']; label: string }[]
+            ).map((item) => {
+              const isActive = sortConfig.key === item.key;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() =>
+                    onSortChange({
+                      key: item.key,
+                      direction: isActive
+                        ? sortConfig.direction === 'asc'
+                          ? 'desc'
+                          : 'asc'
+                        : 'asc',
+                    })
+                  }
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted"
+                >
+                  <span className={isActive ? 'font-medium' : ''}>
+                    {item.label}
+                  </span>
+                  {isActive && (
+                    <span className="text-xs text-muted-foreground">
+                      {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </PopoverContent>
+        </Popover>
         <Popover>
           <PopoverTrigger
             render={

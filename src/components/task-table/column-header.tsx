@@ -8,18 +8,23 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
+import type { SortDirection } from './column-config';
 
 export function ColumnHeader({
   name,
   isCustom,
   onRename,
   onDelete,
+  sortDirection,
+  onSort,
 }: {
   name: string;
   isCustom?: boolean;
   onRename?: (name: string) => void;
   onDelete?: () => void;
+  sortDirection?: SortDirection | null;
+  onSort?: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(name);
@@ -51,7 +56,14 @@ export function ColumnHeader({
 
   if (!isCustom) {
     return (
-      <span className="text-sm font-medium text-muted-foreground">{name}</span>
+      <button
+        onClick={onSort}
+        className="flex cursor-pointer items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {name}
+        {sortDirection === 'asc' && <ArrowUp className="h-3 w-3" />}
+        {sortDirection === 'desc' && <ArrowDown className="h-3 w-3" />}
+      </button>
     );
   }
 

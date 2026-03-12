@@ -23,8 +23,16 @@ export const BUILT_IN_COLUMNS: ColumnDef[] = [
   { key: 'note', label: 'Note' },
 ];
 
+export type SortDirection = 'asc' | 'desc';
+
+export interface SortConfig {
+  key: ColumnKey | 'created_at' | 'updated_at';
+  direction: SortDirection;
+}
+
 const VISIBILITY_KEY = 'tasker-visible-columns';
 const ORDER_KEY = 'tasker-column-order';
+const SORT_KEY = 'tasker-sort-config';
 
 const DEFAULT_ORDER: ColumnKey[] = [
   'issue',
@@ -77,5 +85,22 @@ export function loadColumnOrder(): ColumnKey[] {
 export function saveColumnOrder(order: ColumnKey[]): void {
   try {
     localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  } catch {}
+}
+
+const DEFAULT_SORT: SortConfig = { key: 'created_at', direction: 'desc' };
+
+export function loadSortConfig(): SortConfig {
+  if (typeof window === 'undefined') return DEFAULT_SORT;
+  try {
+    const stored = localStorage.getItem(SORT_KEY);
+    if (stored) return JSON.parse(stored) as SortConfig;
+  } catch {}
+  return DEFAULT_SORT;
+}
+
+export function saveSortConfig(config: SortConfig): void {
+  try {
+    localStorage.setItem(SORT_KEY, JSON.stringify(config));
   } catch {}
 }

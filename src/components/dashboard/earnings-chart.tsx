@@ -1,15 +1,26 @@
 'use client';
 
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartTooltip } from './chart-tooltip';
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '@/components/ui/chart';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+
+const chartConfig = {
+  amount: {
+    label: 'Earnings',
+    color: 'var(--chart-1)',
+  },
+} satisfies ChartConfig;
 
 interface EarningsChartProps {
   data: { month: string; amount: number }[];
@@ -17,74 +28,76 @@ interface EarningsChartProps {
 
 export function EarningsChart({ data }: EarningsChartProps) {
   const hasData = data.some((d) => d.amount > 0);
+  const total = data.reduce((sum, d) => sum + d.amount, 0);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Earnings Over Time</CardTitle>
+        <CardDescription>
+          {hasData
+            ? `$${total.toLocaleString()} in the last 12 months`
+            : 'No earnings data yet'}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!hasData ? (
-          <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-            No earnings data yet
+          <div className="flex h-[250px] items-center justify-center text-sm text-muted-foreground">
+            Add amounts and mark tasks as complete to see earnings
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart
-              data={data}
-              margin={{ top: 8, right: 8, bottom: 0, left: -12 }}
-            >
+          <ChartContainer config={chartConfig} className="h-[250px] w-full">
+            <AreaChart data={data} accessibilityLayer>
               <defs>
-                <linearGradient id="earningsFill" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="fillAmount" x1="0" y1="0" x2="0" y2="1">
                   <stop
                     offset="0%"
-                    stopColor="var(--chart-1)"
-                    stopOpacity={0.2}
+                    stopColor="var(--color-amount)"
+                    stopOpacity={0.3}
                   />
                   <stop
                     offset="100%"
-                    stopColor="var(--chart-1)"
-                    stopOpacity={0}
+                    stopColor="var(--color-amount)"
+                    stopOpacity={0.02}
                   />
                 </linearGradient>
               </defs>
+              <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="month"
-                tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
                 tickLine={false}
                 axisLine={false}
-                dy={8}
+                tickMargin={8}
+                tickFormatter={(v) => v.slice(0, 3)}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
                 tickLine={false}
                 axisLine={false}
+                tickMargin={8}
                 tickFormatter={(v) => `$${v}`}
               />
-              <Tooltip
+              <ChartTooltip
                 content={
-                  <ChartTooltip
-                    formatter={(v) => `$${v.toLocaleString()}`}
+                  <ChartTooltipContent
+                    formatter={(value) => (
+                      <span className="font-mono font-medium tabular-nums">
+                        ${(value as number).toLocaleString()}
+                      </span>
+                    )}
                   />
                 }
               />
               <Area
                 type="monotone"
                 dataKey="amount"
-                name="Earnings"
-                stroke="var(--chart-1)"
-                strokeWidth={2.5}
-                fill="url(#earningsFill)"
+                stroke="var(--color-amount)"
+                strokeWidth={2}
+                fill="url(#fillAmount)"
                 dot={false}
-                activeDot={{
-                  r: 5,
-                  fill: 'var(--chart-1)',
-                  stroke: 'var(--background)',
-                  strokeWidth: 2,
-                }}
+                activeDot={{ r: 4, strokeWidth: 0 }}
               />
             </AreaChart>
-          </ResponsiveContainer>
+          </ChartContainer>
         )}
       </CardContent>
     </Card>
