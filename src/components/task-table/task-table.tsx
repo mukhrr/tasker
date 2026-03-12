@@ -282,6 +282,7 @@ export function TaskTable({ userId }: { userId: string }) {
                             onChange={(payment_date) =>
                               handleUpdate(task.id, { payment_date })
                             }
+                            mode="past"
                           />
                         )}
                       </td>
