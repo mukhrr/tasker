@@ -2,15 +2,18 @@
 
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
+import { HighlightText } from '../highlight-text';
 
 export function TextCell({
   value,
   onChange,
   placeholder,
+  highlight,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
   placeholder?: string;
+  highlight?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
@@ -46,7 +49,7 @@ export function TextCell({
       onClick={() => setEditing(true)}
       className="cursor-pointer truncate text-sm text-foreground"
     >
-      {value || '—'}
+      {value ? <HighlightText text={value} query={highlight ?? ''} /> : '—'}
     </span>
   );
 }

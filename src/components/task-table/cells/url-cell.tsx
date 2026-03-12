@@ -3,13 +3,16 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { shortenGitHubUrl } from '@/lib/github';
+import { HighlightText } from '../highlight-text';
 
 export function UrlCell({
   value,
   onChange,
+  highlight,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
+  highlight?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
@@ -59,7 +62,7 @@ export function UrlCell({
         className="truncate text-sm text-blue-600 hover:underline dark:text-blue-400"
         onClick={(e) => e.stopPropagation()}
       >
-        {shortenGitHubUrl(value)}
+        <HighlightText text={shortenGitHubUrl(value)} query={highlight ?? ''} />
       </a>
       <button
         onClick={() => setEditing(true)}

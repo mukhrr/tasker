@@ -1,15 +1,18 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { HighlightText } from '../highlight-text';
 
 const TRUNCATE_LENGTH = 80;
 
 export function NoteCell({
   value,
   onChange,
+  highlight,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
+  highlight?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -97,7 +100,7 @@ export function NoteCell({
         }}
         className="cursor-pointer whitespace-pre-wrap text-sm text-foreground"
       >
-        {displayText}
+        <HighlightText text={displayText} query={highlight ?? ''} />
       </span>
       {isTruncatable && (
         <button
