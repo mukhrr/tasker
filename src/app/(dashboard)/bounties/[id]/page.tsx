@@ -1,9 +1,9 @@
 import { notFound } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { TaskDetail } from '@/components/task-detail';
-import type { Task } from '@/types/database';
+import { BountyDetail } from '@/components/bounty-detail';
+import type { Bounty } from '@/types/database';
 
-export default async function TaskPage({
+export default async function BountyPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -11,15 +11,15 @@ export default async function TaskPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data: task } = await supabase
-    .from('tasks')
+  const { data: bounty } = await supabase
+    .from('bounties')
     .select('*')
     .eq('id', id)
     .single();
 
-  if (!task) {
+  if (!bounty) {
     notFound();
   }
 
-  return <TaskDetail task={task as Task} />;
+  return <BountyDetail bounty={bounty as Bounty} />;
 }

@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import type { User } from '@supabase/supabase-js';
 
@@ -24,6 +24,7 @@ export function Navbar({ user }: { user: User }) {
     router.refresh();
   };
 
+  const avatarUrl = user.user_metadata?.avatar_url as string | undefined;
   const initials = (user.user_metadata?.full_name as string | undefined)
     ?.split(' ')
     .map((n) => n[0])
@@ -34,15 +35,21 @@ export function Navbar({ user }: { user: User }) {
     <nav className="border-b">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-6">
-          <Link href="/tasks" className="text-lg font-bold">
+          <Link href="/bounties" className="text-lg font-bold">
             Tasker
           </Link>
           <Separator orientation="vertical" className="h-6" />
           <Link
-            href="/tasks"
+            href="/bounties"
             className="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            Tasks
+            Bounties
+          </Link>
+          <Link
+            href="/settings"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Settings
           </Link>
         </div>
         <DropdownMenu>
@@ -52,6 +59,7 @@ export function Navbar({ user }: { user: User }) {
             }
           >
             <Avatar className="h-8 w-8">
+              {avatarUrl && <AvatarImage src={avatarUrl} />}
               <AvatarFallback className="text-xs">{initials}</AvatarFallback>
             </Avatar>
           </DropdownMenuTrigger>
