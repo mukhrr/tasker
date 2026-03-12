@@ -21,7 +21,7 @@ export function AddRow({ onAdd }: { onAdd: (issueUrl: string) => void }) {
     return (
       <button
         onClick={() => setActive(true)}
-        className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-xs text-muted-foreground hover:bg-muted/50"
+        className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-sm text-muted-foreground hover:bg-muted/50"
       >
         <Plus className="h-3.5 w-3.5" />
         Add Task
@@ -30,12 +30,12 @@ export function AddRow({ onAdd }: { onAdd: (issueUrl: string) => void }) {
   }
 
   return (
-    <div className="flex items-center gap-2 border-t px-4 py-2">
+    <div className="flex items-center gap-2 border-t px-3 py-2 sm:px-4">
       <Input
         autoFocus
         value={url}
         onChange={(e) => setUrl(e.target.value)}
-        placeholder="Paste GitHub issue URL (e.g. https://github.com/org/repo/issues/123)"
+        placeholder="Paste GitHub issue URL..."
         onBlur={() => {
           if (!url.trim()) setActive(false);
         }}
@@ -46,7 +46,7 @@ export function AddRow({ onAdd }: { onAdd: (issueUrl: string) => void }) {
             setActive(false);
           }
         }}
-        className="h-8 text-xs"
+        className="h-8 text-sm"
       />
     </div>
   );

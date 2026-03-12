@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { getUser } from '@/lib/supabase/server';
 import { Navbar } from '@/components/navbar';
 
 export default async function DashboardLayout({
@@ -7,10 +7,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getUser();
 
   if (!user) {
     redirect('/auth/login');
@@ -19,7 +16,7 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-background">
       <Navbar user={user} />
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-7xl px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
         {children}
       </main>
     </div>

@@ -29,13 +29,15 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  // Use getSession (from cookie, no network call) for fast routing decisions.
+  // The dashboard layout does the secure getUser() check.
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
 
   // Redirect unauthenticated users to login (except for auth pages)
   if (
-    !user &&
+    !session &&
     !request.nextUrl.pathname.startsWith('/auth') &&
     request.nextUrl.pathname !== '/'
   ) {
@@ -45,7 +47,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Redirect authenticated users away from auth pages to dashboard
-  if (user && request.nextUrl.pathname.startsWith('/auth')) {
+  if (session && request.nextUrl.pathname.startsWith('/auth')) {
     const url = request.nextUrl.clone();
     url.pathname = '/tasks';
     return NextResponse.redirect(url);

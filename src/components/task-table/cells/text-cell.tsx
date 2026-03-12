@@ -35,7 +35,7 @@ export function TextCell({
             setEditing(false);
           }
         }}
-        className="h-8 text-xs"
+        className="h-8 text-sm"
         placeholder={placeholder}
       />
     );
@@ -44,7 +44,7 @@ export function TextCell({
   return (
     <span
       onClick={() => setEditing(true)}
-      className="cursor-pointer truncate text-xs text-foreground"
+      className="cursor-pointer truncate text-sm text-foreground"
     >
       {value || '—'}
     </span>

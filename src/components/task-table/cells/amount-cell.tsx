@@ -35,7 +35,7 @@ export function AmountCell({
             setEditing(false);
           }
         }}
-        className="h-8 text-xs"
+        className="h-8 text-sm"
       />
     );
   }
@@ -43,7 +43,7 @@ export function AmountCell({
   return (
     <span
       onClick={() => setEditing(true)}
-      className="cursor-pointer text-xs text-foreground"
+      className="cursor-pointer text-sm text-foreground"
     >
       {value != null
         ? `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`

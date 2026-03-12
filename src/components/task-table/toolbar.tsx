@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { RefreshCw } from 'lucide-react';
-import type { TaskStatusGroup } from '@/types/database';
+
 
 export function Toolbar({
   activeTab,
@@ -29,8 +29,8 @@ export function Toolbar({
   ];
 
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <Tabs value={activeTab} onValueChange={onTabChange}>
           <TabsList>
             {tabs.map((tab) => (
@@ -44,7 +44,7 @@ export function Toolbar({
           placeholder="Search tasks..."
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          className="h-8 w-[200px] text-xs"
+          className="h-8 w-full text-sm sm:w-[200px]"
         />
       </div>
       <Button
@@ -52,7 +52,7 @@ export function Toolbar({
         size="sm"
         onClick={onSync}
         disabled={syncing}
-        className="gap-2"
+        className="gap-2 w-full sm:w-auto"
       >
         <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
         {syncing ? 'Syncing...' : 'Sync Now'}

@@ -20,7 +20,7 @@ export function StatusCell({
       <PopoverTrigger
         render={
           <button
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${config.color}`}
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-sm font-medium ${config.color}`}
           />
         }
       >
@@ -42,7 +42,7 @@ export function StatusCell({
                     onChange(status);
                     setOpen(false);
                   }}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted ${
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted ${
                     status === value ? 'bg-muted' : ''
                   }`}
                 >

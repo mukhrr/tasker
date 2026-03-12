@@ -122,33 +122,33 @@ export function TaskTable({ userId }: { userId: string }) {
       />
 
       <div className="rounded-lg border">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <div className="-mx-px overflow-x-auto">
+          <table className="w-full min-w-[700px] text-[0.9rem]">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Issue" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="PR" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Status" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Amount" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Assigned" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Payment" />
                 </th>
-                <th className="px-4 py-2.5 text-left">
+                <th className="px-3 py-2.5 text-left sm:px-4">
                   <ColumnHeader name="Note" />
                 </th>
                 {columns.map((col) => (
-                  <th key={col.id} className="px-4 py-2.5 text-left">
+                  <th key={col.id} className="px-3 py-2.5 text-left sm:px-4">
                     <ColumnHeader
                       name={col.name}
                       isCustom
@@ -182,11 +182,11 @@ export function TaskTable({ userId }: { userId: string }) {
                       key={task.id}
                       className="group/row border-b last:border-b-0 hover:bg-muted/30"
                     >
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-2 sm:px-4">
                         <div className="flex items-center gap-1">
                           <Link
                             href={`/tasks/${task.id}`}
-                            className="mr-1 text-xs text-muted-foreground hover:text-foreground"
+                            className="mr-1 text-sm text-muted-foreground hover:text-foreground"
                           >
                             View
                           </Link>
@@ -198,7 +198,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         </div>
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-2 sm:px-4">
                         {isSyncing && !task.pr_url ? (
                           <Skeleton className="h-4 w-28" />
                         ) : (
@@ -210,7 +210,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-2 sm:px-4">
                         {isSyncing && !task.last_synced_at ? (
                           <Skeleton className="h-5 w-20 rounded-full" />
                         ) : (
@@ -222,7 +222,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="whitespace-nowrap px-3 py-2 sm:px-4">
                         {isSyncing && !task.amount ? (
                           <Skeleton className="h-4 w-14" />
                         ) : (
@@ -234,7 +234,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="whitespace-nowrap px-3 py-2 sm:px-4">
                         {isSyncing && !task.assigned_date ? (
                           <Skeleton className="h-4 w-20" />
                         ) : (
@@ -246,7 +246,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="whitespace-nowrap px-3 py-2 sm:px-4">
                         {isSyncing && !task.payment_date ? (
                           <Skeleton className="h-4 w-20" />
                         ) : (
@@ -258,7 +258,7 @@ export function TaskTable({ userId }: { userId: string }) {
                           />
                         )}
                       </td>
-                      <td className="max-w-[300px] px-4 py-2">
+                      <td className="min-w-[250px] max-w-[350px] px-3 py-2 sm:px-4">
                         {isSyncing && !task.note ? (
                           <Skeleton className="h-4 w-36" />
                         ) : (
@@ -271,7 +271,7 @@ export function TaskTable({ userId }: { userId: string }) {
                         )}
                       </td>
                       {columns.map((col) => (
-                        <td key={col.id} className="px-4 py-2">
+                        <td key={col.id} className="px-3 py-2 sm:px-4">
                           <TextCell
                             value={getFieldValue(task.id, col.id)}
                             onChange={(value) =>
@@ -309,7 +309,7 @@ export function TaskTable({ userId }: { userId: string }) {
       </div>
 
       {tasks.length > 0 && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {filteredTasks.length} of {tasks.length} tasks
         </p>
       )}

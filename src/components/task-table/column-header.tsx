@@ -44,18 +44,18 @@ export function ColumnHeader({
             setRenaming(false);
           }
         }}
-        className="h-6 text-xs font-medium"
+        className="h-6 text-sm font-medium"
       />
     );
   }
 
   if (!isCustom) {
-    return <span className="text-xs font-medium text-muted-foreground">{name}</span>;
+    return <span className="text-sm font-medium text-muted-foreground">{name}</span>;
   }
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground">
+      <DropdownMenuTrigger className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
         {name}
         <ChevronDown className="h-3 w-3" />
       </DropdownMenuTrigger>

@@ -34,7 +34,7 @@ export function UrlCell({
             setEditing(false);
           }
         }}
-        className="h-8 text-xs"
+        className="h-8 text-sm"
       />
     );
   }
@@ -43,7 +43,7 @@ export function UrlCell({
     return (
       <span
         onClick={() => setEditing(true)}
-        className="cursor-pointer text-xs text-muted-foreground"
+        className="cursor-pointer text-sm text-muted-foreground"
       >
         —
       </span>
@@ -56,14 +56,14 @@ export function UrlCell({
         href={value}
         target="_blank"
         rel="noopener noreferrer"
-        className="truncate text-xs text-blue-600 hover:underline dark:text-blue-400"
+        className="truncate text-sm text-blue-600 hover:underline dark:text-blue-400"
         onClick={(e) => e.stopPropagation()}
       >
         {shortenGitHubUrl(value)}
       </a>
       <button
         onClick={() => setEditing(true)}
-        className="ml-auto shrink-0 opacity-0 group-hover/row:opacity-100 text-xs text-muted-foreground hover:text-foreground"
+        className="ml-auto shrink-0 opacity-0 group-hover/row:opacity-100 text-sm text-muted-foreground hover:text-foreground"
       >
         Edit
       </button>

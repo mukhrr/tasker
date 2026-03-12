@@ -25,7 +25,7 @@ export function DateCell({
         onKeyDown={(e) => {
           if (e.key === 'Escape') setEditing(false);
         }}
-        className="h-8 text-xs"
+        className="h-8 text-sm"
       />
     );
   }
@@ -33,7 +33,7 @@ export function DateCell({
   return (
     <span
       onClick={() => setEditing(true)}
-      className="cursor-pointer text-xs text-foreground"
+      className="cursor-pointer text-sm text-foreground"
     >
       {value
         ? new Date(value + 'T00:00:00').toLocaleDateString('en-US', {

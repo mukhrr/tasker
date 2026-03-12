@@ -59,10 +59,10 @@ export function NoteCell({
           }}
           onBlur={cancel}
           rows={3}
-          className="w-full resize-none rounded-md border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+          className="w-full resize-none rounded-md border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
           placeholder="Add a note..."
         />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Enter to save · Shift+Enter for new line · Esc to cancel
         </p>
       </div>
@@ -76,7 +76,7 @@ export function NoteCell({
           setDraft('');
           setEditing(true);
         }}
-        className="cursor-pointer text-xs text-muted-foreground"
+        className="cursor-pointer text-sm text-muted-foreground"
       >
         —
       </span>
@@ -95,7 +95,7 @@ export function NoteCell({
           setDraft(text);
           setEditing(true);
         }}
-        className="cursor-pointer whitespace-pre-wrap text-xs text-foreground"
+        className="cursor-pointer whitespace-pre-wrap text-sm text-foreground"
       >
         {displayText}
       </span>
@@ -105,7 +105,7 @@ export function NoteCell({
             e.stopPropagation();
             setExpanded(!expanded);
           }}
-          className="ml-1 text-[10px] text-muted-foreground hover:text-foreground"
+          className="ml-1 text-sm text-muted-foreground hover:text-foreground"
         >
           {expanded ? 'show less' : 'more'}
         </button>
