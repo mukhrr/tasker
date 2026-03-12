@@ -162,7 +162,7 @@ export function SettingsForm({
                   id="sync-interval"
                   value={syncInterval}
                   onChange={(e) => setSyncInterval(e.target.value)}
-                  className="flex h-9 w-full max-w-[200px] rounded-md border bg-transparent px-3 py-1 text-sm"
+                  className="flex h-9 w-full max-w-[200px] rounded-md border bg-background px-3 py-1 text-sm"
                 >
                   <option value="1">Every hour</option>
                   <option value="3">Every 3 hours</option>
