@@ -39,6 +39,7 @@ export function Navbar({ user }: { user: User }) {
     '?';
 
   const navLinks = [
+    { href: '/dashboard', label: 'Dashboard' },
     { href: '/tasks', label: 'Tasks' },
     { href: '/settings', label: 'Settings' },
   ];
