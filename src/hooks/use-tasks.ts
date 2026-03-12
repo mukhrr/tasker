@@ -159,5 +159,5 @@ export function useTasks(userId: string) {
     }
   };
 
-  return { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, refetch: fetchTasks };
+  return { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, syncTask, refetch: fetchTasks };
 }

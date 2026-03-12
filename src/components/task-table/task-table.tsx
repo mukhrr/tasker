@@ -16,11 +16,11 @@ import { AmountCell } from './cells/amount-cell';
 import { TextCell } from './cells/text-cell';
 import { NoteCell } from './cells/note-cell';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Trash2 } from 'lucide-react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import type { Task, TaskStatus, TaskStatusGroup } from '@/types/database';
 
 export function TaskTable({ userId }: { userId: string }) {
-  const { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask } =
+  const { tasks, loading, syncingTaskIds, addTask, updateTask, deleteTask, syncTask } =
     useTasks(userId);
   const {
     columns,
@@ -281,12 +281,22 @@ export function TaskTable({ userId }: { userId: string }) {
                         </td>
                       ))}
                       <td className="px-2 py-2">
-                        <button
-                          onClick={() => handleDelete(task.id)}
-                          className="opacity-0 group-hover/row:opacity-100 text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover/row:opacity-100">
+                          <button
+                            onClick={() => syncTask(task.id)}
+                            disabled={isSyncing}
+                            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+                            title="Sync this task"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(task.id)}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
