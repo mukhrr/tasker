@@ -35,15 +35,15 @@ export function Navbar({ user }: { user: User }) {
     <nav className="border-b">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-6">
-          <Link href="/bounties" className="text-lg font-bold">
+          <Link href="/tasks" className="text-lg font-bold">
             Tasker
           </Link>
           <Separator orientation="vertical" className="h-6" />
           <Link
-            href="/bounties"
+            href="/tasks"
             className="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            Bounties
+            Tasks
           </Link>
           <Link
             href="/settings"

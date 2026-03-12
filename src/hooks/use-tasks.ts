@@ -3,39 +3,39 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { parseIssueUrl } from '@/lib/github';
-import type { Bounty, BountyStatus } from '@/types/database';
+import type { Task, TaskStatus } from '@/types/database';
 
-export function useBounties(userId: string) {
-  const [bounties, setBounties] = useState<Bounty[]>([]);
+export function useTasks(userId: string) {
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
 
-  const fetchBounties = useCallback(async () => {
+  const fetchTasks = useCallback(async () => {
     const { data } = await supabase
-      .from('bounties')
+      .from('tasks')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    setBounties((data as Bounty[]) ?? []);
+    setTasks((data as Task[]) ?? []);
     setLoading(false);
   }, [userId, supabase]);
 
   useEffect(() => {
-    fetchBounties();
+    fetchTasks();
 
     const channel = supabase
-      .channel('bounties-realtime')
+      .channel('tasks-realtime')
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: 'bounties',
+          table: 'tasks',
           filter: `user_id=eq.${userId}`,
         },
         () => {
-          fetchBounties();
+          fetchTasks();
         }
       )
       .subscribe();
@@ -46,22 +46,22 @@ export function useBounties(userId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
-  const addBounty = async (issueUrl: string) => {
+  const addTask = async (issueUrl: string) => {
     const parsed = parseIssueUrl(issueUrl);
 
-    const newBounty = {
+    const newTask = {
       user_id: userId,
       issue_url: issueUrl,
-      status: 'in_proposal' as BountyStatus,
+      status: 'in_proposal' as TaskStatus,
       repo_owner: parsed?.owner ?? null,
       repo_name: parsed?.repo ?? null,
       issue_number: parsed?.number ?? null,
     };
 
-    // Optimistic: add a temp bounty
+    // Optimistic: add a temp task
     const tempId = crypto.randomUUID();
-    const optimistic: Bounty = {
-      ...newBounty,
+    const optimistic: Task = {
+      ...newTask,
       id: tempId,
       pr_url: null,
       status_group: 'todo',
@@ -75,42 +75,42 @@ export function useBounties(userId: string) {
       updated_at: new Date().toISOString(),
     };
 
-    setBounties((prev) => [optimistic, ...prev]);
+    setTasks((prev) => [optimistic, ...prev]);
 
-    const { error } = await supabase.from('bounties').insert(newBounty);
+    const { error } = await supabase.from('tasks').insert(newTask);
     if (error) {
-      setBounties((prev) => prev.filter((b) => b.id !== tempId));
+      setTasks((prev) => prev.filter((t) => t.id !== tempId));
       throw error;
     }
 
-    await fetchBounties();
+    await fetchTasks();
   };
 
-  const updateBounty = async (id: string, updates: Partial<Bounty>) => {
+  const updateTask = async (id: string, updates: Partial<Task>) => {
     // Optimistic update
-    setBounties((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, ...updates } : b))
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
 
     const { error } = await supabase
-      .from('bounties')
+      .from('tasks')
       .update(updates)
       .eq('id', id);
 
     if (error) {
-      await fetchBounties();
+      await fetchTasks();
       throw error;
     }
   };
 
-  const deleteBounty = async (id: string) => {
-    setBounties((prev) => prev.filter((b) => b.id !== id));
-    const { error } = await supabase.from('bounties').delete().eq('id', id);
+  const deleteTask = async (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
     if (error) {
-      await fetchBounties();
+      await fetchTasks();
       throw error;
     }
   };
 
-  return { bounties, loading, addBounty, updateBounty, deleteBounty, refetch: fetchBounties };
+  return { tasks, loading, addTask, updateTask, deleteTask, refetch: fetchTasks };
 }

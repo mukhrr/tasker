@@ -56,35 +56,35 @@ export function useCustomColumns(userId: string) {
   };
 
   const setFieldValue = async (
-    bountyId: string,
+    taskId: string,
     columnId: string,
     value: string | null
   ) => {
     // Optimistic
     setFieldValues((prev) => {
       const existing = prev.find(
-        (fv) => fv.bounty_id === bountyId && fv.column_id === columnId
+        (fv) => fv.task_id === taskId && fv.column_id === columnId
       );
       if (existing) {
         return prev.map((fv) =>
-          fv.bounty_id === bountyId && fv.column_id === columnId
+          fv.task_id === taskId && fv.column_id === columnId
             ? { ...fv, value }
             : fv
         );
       }
-      return [...prev, { id: crypto.randomUUID(), bounty_id: bountyId, column_id: columnId, value }];
+      return [...prev, { id: crypto.randomUUID(), task_id: taskId, column_id: columnId, value }];
     });
 
     await supabase.from('custom_field_values').upsert(
-      { bounty_id: bountyId, column_id: columnId, value },
-      { onConflict: 'bounty_id,column_id' }
+      { task_id: taskId, column_id: columnId, value },
+      { onConflict: 'task_id,column_id' }
     );
   };
 
-  const getFieldValue = (bountyId: string, columnId: string): string | null => {
+  const getFieldValue = (taskId: string, columnId: string): string | null => {
     return (
       fieldValues.find(
-        (fv) => fv.bounty_id === bountyId && fv.column_id === columnId
+        (fv) => fv.task_id === taskId && fv.column_id === columnId
       )?.value ?? null
     );
   };

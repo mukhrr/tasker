@@ -1,13 +1,13 @@
-import type { BountyStatus, BountyStatusGroup } from '@/types/database';
+import type { TaskStatus, TaskStatusGroup } from '@/types/database';
 
 export interface StatusConfig {
   label: string;
   color: string;
   dotColor: string;
-  group: BountyStatusGroup;
+  group: TaskStatusGroup;
 }
 
-export const STATUS_CONFIG: Record<BountyStatus, StatusConfig> = {
+export const STATUS_CONFIG: Record<TaskStatus, StatusConfig> = {
   // To-do
   in_proposal: {
     label: 'In Proposal',
@@ -85,15 +85,15 @@ export const STATUS_CONFIG: Record<BountyStatus, StatusConfig> = {
   },
 };
 
-export const STATUS_GROUPS: Record<BountyStatusGroup, BountyStatus[]> = {
+export const STATUS_GROUPS: Record<TaskStatusGroup, TaskStatus[]> = {
   todo: ['in_proposal', 'promising', 'got_cplus', 'update_proposal'],
   in_progress: ['assigned', 'reviewing', 'changes_required', 'awaiting_payment', 'merged'],
   complete: ['regression', 'paid', 'wasted'],
 };
 
-export const ALL_STATUSES = Object.keys(STATUS_CONFIG) as BountyStatus[];
+export const ALL_STATUSES = Object.keys(STATUS_CONFIG) as TaskStatus[];
 
-export const STATUS_GROUP_LABELS: Record<BountyStatusGroup, string> = {
+export const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
   in_progress: 'In Progress',
   complete: 'Complete',

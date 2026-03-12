@@ -24,7 +24,7 @@ export function AddRow({ onAdd }: { onAdd: (issueUrl: string) => void }) {
         className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-xs text-muted-foreground hover:bg-muted/50"
       >
         <Plus className="h-3.5 w-3.5" />
-        Add Bounty
+        Add Task
       </button>
     );
   }

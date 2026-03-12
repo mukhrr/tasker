@@ -1,34 +1,34 @@
-export type BountyStatusTodo =
+export type TaskStatusTodo =
   | 'in_proposal'
   | 'promising'
   | 'got_cplus'
   | 'update_proposal';
 
-export type BountyStatusInProgress =
+export type TaskStatusInProgress =
   | 'assigned'
   | 'reviewing'
   | 'changes_required'
   | 'awaiting_payment'
   | 'merged';
 
-export type BountyStatusComplete = 'regression' | 'paid' | 'wasted';
+export type TaskStatusComplete = 'regression' | 'paid' | 'wasted';
 
-export type BountyStatus =
-  | BountyStatusTodo
-  | BountyStatusInProgress
-  | BountyStatusComplete;
+export type TaskStatus =
+  | TaskStatusTodo
+  | TaskStatusInProgress
+  | TaskStatusComplete;
 
-export type BountyStatusGroup = 'todo' | 'in_progress' | 'complete';
+export type TaskStatusGroup = 'todo' | 'in_progress' | 'complete';
 
 export type CustomFieldType = 'text' | 'date' | 'number' | 'url' | 'select';
 
-export interface Bounty {
+export interface Task {
   id: string;
   user_id: string;
   issue_url: string;
   pr_url: string | null;
-  status: BountyStatus;
-  status_group: BountyStatusGroup;
+  status: TaskStatus;
+  status_group: TaskStatusGroup;
   amount: number | null;
   payment_date: string | null;
   assigned_date: string | null;
@@ -54,7 +54,7 @@ export interface CustomColumn {
 
 export interface CustomFieldValue {
   id: string;
-  bounty_id: string;
+  task_id: string;
   column_id: string;
   value: string | null;
 }
@@ -75,7 +75,7 @@ export interface SyncLog {
   started_at: string;
   completed_at: string | null;
   status: 'running' | 'completed' | 'failed';
-  bounties_updated: number;
+  tasks_updated: number;
   error_message: string | null;
   details: Record<string, unknown>;
   created_at: string;

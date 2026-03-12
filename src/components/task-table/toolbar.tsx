@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { RefreshCw } from 'lucide-react';
-import type { BountyStatusGroup } from '@/types/database';
+import type { TaskStatusGroup } from '@/types/database';
 
 export function Toolbar({
   activeTab,
@@ -41,7 +41,7 @@ export function Toolbar({
           </TabsList>
         </Tabs>
         <Input
-          placeholder="Search bounties..."
+          placeholder="Search tasks..."
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
           className="h-8 w-[200px] text-xs"

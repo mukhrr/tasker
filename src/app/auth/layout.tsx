@@ -104,7 +104,7 @@ export default function AuthLayout({
                 2.4k+
               </p>
               <p className="mt-0.5 text-[13px] text-white/40">
-                Bounties tracked
+                Tasks tracked
               </p>
             </div>
             <div className="rounded-xl border border-white/6 bg-white/3 px-5 py-4 backdrop-blur-md">
@@ -118,7 +118,7 @@ export default function AuthLayout({
           </div>
           <div className="max-w-[320px]">
             <h2 className="text-[22px] leading-snug font-semibold tracking-tight text-white/80">
-              Track bounties.
+              Track tasks.
               <br />
               Ship faster.
               <br />
@@ -130,7 +130,7 @@ export default function AuthLayout({
         {/* Bottom */}
         <div className="relative z-10 p-10">
           <p className="text-[13px] leading-relaxed text-white/25">
-            Open source bounty tracking
+            Open source task tracking
             <br />
             powered by GitHub
           </p>

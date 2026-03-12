@@ -136,7 +136,7 @@ export function SettingsForm({
               <div>
                 <Label>Auto-sync</Label>
                 <p className="text-xs text-muted-foreground">
-                  Automatically sync bounty statuses from GitHub
+                  Automatically sync task statuses from GitHub
                 </p>
               </div>
               <button

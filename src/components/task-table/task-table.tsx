@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { useBounties } from '@/hooks/use-bounties';
+import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
 import { Toolbar } from './toolbar';
 import { AddRow } from './add-row';
@@ -16,11 +16,11 @@ import { AmountCell } from './cells/amount-cell';
 import { TextCell } from './cells/text-cell';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2 } from 'lucide-react';
-import type { Bounty, BountyStatus, BountyStatusGroup } from '@/types/database';
+import type { Task, TaskStatus, TaskStatusGroup } from '@/types/database';
 
-export function BountyTable({ userId }: { userId: string }) {
-  const { bounties, loading, addBounty, updateBounty, deleteBounty } =
-    useBounties(userId);
+export function TaskTable({ userId }: { userId: string }) {
+  const { tasks, loading, addTask, updateTask, deleteTask } =
+    useTasks(userId);
   const {
     columns,
     addColumn,
@@ -34,29 +34,29 @@ export function BountyTable({ userId }: { userId: string }) {
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
 
-  const filteredBounties = useMemo(() => {
-    let filtered = bounties;
+  const filteredTasks = useMemo(() => {
+    let filtered = tasks;
 
     if (activeTab !== 'all') {
       filtered = filtered.filter(
-        (b) => b.status_group === (activeTab as BountyStatusGroup)
+        (t) => t.status_group === (activeTab as TaskStatusGroup)
       );
     }
 
     if (search) {
       const q = search.toLowerCase();
       filtered = filtered.filter(
-        (b) =>
-          b.issue_url.toLowerCase().includes(q) ||
-          b.pr_url?.toLowerCase().includes(q) ||
-          b.note?.toLowerCase().includes(q) ||
-          b.repo_owner?.toLowerCase().includes(q) ||
-          b.repo_name?.toLowerCase().includes(q)
+        (t) =>
+          t.issue_url.toLowerCase().includes(q) ||
+          t.pr_url?.toLowerCase().includes(q) ||
+          t.note?.toLowerCase().includes(q) ||
+          t.repo_owner?.toLowerCase().includes(q) ||
+          t.repo_name?.toLowerCase().includes(q)
       );
     }
 
     return filtered;
-  }, [bounties, activeTab, search]);
+  }, [tasks, activeTab, search]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -74,18 +74,18 @@ export function BountyTable({ userId }: { userId: string }) {
     }
   };
 
-  const handleAddBounty = async (issueUrl: string) => {
+  const handleAddTask = async (issueUrl: string) => {
     try {
-      await addBounty(issueUrl);
-      toast.success('Bounty added');
+      await addTask(issueUrl);
+      toast.success('Task added');
     } catch {
-      toast.error('Failed to add bounty');
+      toast.error('Failed to add task');
     }
   };
 
-  const handleUpdate = async (id: string, updates: Partial<Bounty>) => {
+  const handleUpdate = async (id: string, updates: Partial<Task>) => {
     try {
-      await updateBounty(id, updates);
+      await updateTask(id, updates);
     } catch {
       toast.error('Failed to update');
     }
@@ -93,8 +93,8 @@ export function BountyTable({ userId }: { userId: string }) {
 
   const handleDelete = async (id: string) => {
     try {
-      await deleteBounty(id);
-      toast.success('Bounty deleted');
+      await deleteTask(id);
+      toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete');
     }
@@ -162,84 +162,84 @@ export function BountyTable({ userId }: { userId: string }) {
               </tr>
             </thead>
             <tbody>
-              {filteredBounties.length === 0 ? (
+              {filteredTasks.length === 0 ? (
                 <tr>
                   <td
                     colSpan={8 + columns.length}
                     className="px-4 py-12 text-center text-sm text-muted-foreground"
                   >
-                    {bounties.length === 0
-                      ? 'No bounties yet. Add your first bounty below.'
-                      : 'No bounties match your filters.'}
+                    {tasks.length === 0
+                      ? 'No tasks yet. Add your first task below.'
+                      : 'No tasks match your filters.'}
                   </td>
                 </tr>
               ) : (
-                filteredBounties.map((bounty) => (
+                filteredTasks.map((task) => (
                   <tr
-                    key={bounty.id}
+                    key={task.id}
                     className="group/row border-b last:border-b-0 hover:bg-muted/30"
                   >
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-1">
                         <Link
-                          href={`/bounties/${bounty.id}`}
+                          href={`/tasks/${task.id}`}
                           className="mr-1 text-xs text-muted-foreground hover:text-foreground"
                         >
                           View
                         </Link>
                         <UrlCell
-                          value={bounty.issue_url}
+                          value={task.issue_url}
                           onChange={(v) =>
-                            v && handleUpdate(bounty.id, { issue_url: v })
+                            v && handleUpdate(task.id, { issue_url: v })
                           }
                         />
                       </div>
                     </td>
                     <td className="px-4 py-2">
                       <UrlCell
-                        value={bounty.pr_url}
+                        value={task.pr_url}
                         onChange={(v) =>
-                          handleUpdate(bounty.id, { pr_url: v })
+                          handleUpdate(task.id, { pr_url: v })
                         }
                       />
                     </td>
                     <td className="px-4 py-2">
                       <StatusCell
-                        value={bounty.status}
-                        onChange={(status: BountyStatus) =>
-                          handleUpdate(bounty.id, { status })
+                        value={task.status}
+                        onChange={(status: TaskStatus) =>
+                          handleUpdate(task.id, { status })
                         }
                       />
                     </td>
                     <td className="px-4 py-2">
                       <AmountCell
-                        value={bounty.amount}
+                        value={task.amount}
                         onChange={(amount) =>
-                          handleUpdate(bounty.id, { amount })
+                          handleUpdate(task.id, { amount })
                         }
                       />
                     </td>
                     <td className="px-4 py-2">
                       <DateCell
-                        value={bounty.assigned_date}
+                        value={task.assigned_date}
                         onChange={(assigned_date) =>
-                          handleUpdate(bounty.id, { assigned_date })
+                          handleUpdate(task.id, { assigned_date })
                         }
                       />
                     </td>
                     <td className="px-4 py-2">
                       <DateCell
-                        value={bounty.payment_date}
+                        value={task.payment_date}
                         onChange={(payment_date) =>
-                          handleUpdate(bounty.id, { payment_date })
+                          handleUpdate(task.id, { payment_date })
                         }
                       />
                     </td>
                     <td className="max-w-[200px] px-4 py-2">
                       <TextCell
-                        value={bounty.note}
+                        value={task.note}
                         onChange={(note) =>
-                          handleUpdate(bounty.id, { note })
+                          handleUpdate(task.id, { note })
                         }
                         placeholder="Add a note..."
                       />
@@ -247,16 +247,16 @@ export function BountyTable({ userId }: { userId: string }) {
                     {columns.map((col) => (
                       <td key={col.id} className="px-4 py-2">
                         <TextCell
-                          value={getFieldValue(bounty.id, col.id)}
+                          value={getFieldValue(task.id, col.id)}
                           onChange={(value) =>
-                            setFieldValue(bounty.id, col.id, value)
+                            setFieldValue(task.id, col.id, value)
                           }
                         />
                       </td>
                     ))}
                     <td className="px-2 py-2">
                       <button
-                        onClick={() => handleDelete(bounty.id)}
+                        onClick={() => handleDelete(task.id)}
                         className="opacity-0 group-hover/row:opacity-100 text-muted-foreground hover:text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -268,12 +268,12 @@ export function BountyTable({ userId }: { userId: string }) {
             </tbody>
           </table>
         </div>
-        <AddRow onAdd={handleAddBounty} />
+        <AddRow onAdd={handleAddTask} />
       </div>
 
-      {bounties.length > 0 && (
+      {tasks.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          {filteredBounties.length} of {bounties.length} bounties
+          {filteredTasks.length} of {tasks.length} tasks
         </p>
       )}
     </div>

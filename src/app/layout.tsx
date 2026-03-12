@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tasker - Bounty Tracker for Open Source Developers",
-  description: "Track bounties, proposals, and payments across open source repositories",
+  title: "Tasker - Task Tracker for Open Source Developers",
+  description: "Track tasks, proposals, and payments across open source repositories",
 };
 
 export default function RootLayout({

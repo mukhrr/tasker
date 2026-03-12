@@ -9,7 +9,7 @@ export default function HomePage() {
       <div className="max-w-2xl text-center">
         <h1 className="text-5xl font-bold tracking-tight">Tasker</h1>
         <p className="mt-4 text-lg text-muted-foreground">
-          Track bounties, proposals, and payments across open source
+          Track tasks, proposals, and payments across open source
           repositories. AI-powered GitHub sync keeps your workflow up to date.
         </p>
         <div className="mt-8 flex items-center justify-center gap-4">

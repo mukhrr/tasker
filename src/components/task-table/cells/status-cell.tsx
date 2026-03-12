@@ -3,14 +3,14 @@
 import { useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { STATUS_CONFIG, STATUS_GROUPS, STATUS_GROUP_LABELS } from '@/lib/status';
-import type { BountyStatus, BountyStatusGroup } from '@/types/database';
+import type { TaskStatus, TaskStatusGroup } from '@/types/database';
 
 export function StatusCell({
   value,
   onChange,
 }: {
-  value: BountyStatus;
-  onChange: (status: BountyStatus) => void;
+  value: TaskStatus;
+  onChange: (status: TaskStatus) => void;
 }) {
   const [open, setOpen] = useState(false);
   const config = STATUS_CONFIG[value];
@@ -28,7 +28,7 @@ export function StatusCell({
         {config.label}
       </PopoverTrigger>
       <PopoverContent className="w-56 p-2" align="start">
-        {(Object.keys(STATUS_GROUPS) as BountyStatusGroup[]).map((group) => (
+        {(Object.keys(STATUS_GROUPS) as TaskStatusGroup[]).map((group) => (
           <div key={group} className="mb-2 last:mb-0">
             <p className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">
               {STATUS_GROUP_LABELS[group]}

@@ -11,37 +11,37 @@ import {
   parseIssueUrl,
   parsePrUrl,
 } from '@/lib/github';
-import type { Bounty, BountyStatus } from '@/types/database';
+import type { Task, TaskStatus } from '@/types/database';
 
-export interface BountyUpdate {
-  bountyId: string;
-  suggestedStatus: BountyStatus;
+export interface TaskUpdate {
+  taskId: string;
+  suggestedStatus: TaskStatus;
   confidence: number;
   summary: string;
   flags: string[];
 }
 
 const GraphState = Annotation.Root({
-  bounties: Annotation<Bounty[]>,
+  tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
   apiKey: Annotation<string>,
   currentIndex: Annotation<number>,
-  updates: Annotation<BountyUpdate[]>,
+  updates: Annotation<TaskUpdate[]>,
   errors: Annotation<string[]>,
 });
 
 type State = typeof GraphState.State;
 
 async function fetchGithubData(state: State): Promise<Partial<State>> {
-  const bounty = state.bounties[state.currentIndex];
-  if (!bounty) return state;
+  const task = state.tasks[state.currentIndex];
+  if (!task) return state;
 
-  const parsed = parseIssueUrl(bounty.issue_url);
+  const parsed = parseIssueUrl(task.issue_url);
   if (!parsed) {
     return {
       errors: [
         ...state.errors,
-        `Could not parse issue URL: ${bounty.issue_url}`,
+        `Could not parse issue URL: ${task.issue_url}`,
       ],
     };
   }
@@ -58,8 +58,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     let prData = null;
     let reviews = null;
-    if (bounty.pr_url) {
-      const prParsed = parsePrUrl(bounty.pr_url);
+    if (task.pr_url) {
+      const prParsed = parsePrUrl(task.pr_url);
       if (prParsed) {
         [prData, reviews] = await Promise.all([
           fetchPR(prParsed.owner, prParsed.repo, prParsed.number, token),
@@ -70,7 +70,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     // Build analysis prompt
     const analysisData = {
-      currentStatus: bounty.status,
+      currentStatus: task.status,
       issueData: JSON.stringify(
         {
           title: issue.title,
@@ -158,8 +158,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0]);
-      const update: BountyUpdate = {
-        bountyId: bounty.id,
+      const update: TaskUpdate = {
+        taskId: task.id,
         suggestedStatus: result.suggestedStatus,
         confidence: result.confidence,
         summary: result.summary,
@@ -169,13 +169,13 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     }
 
     return {
-      errors: [...state.errors, `Could not parse AI response for bounty ${bounty.id}`],
+      errors: [...state.errors, `Could not parse AI response for task ${task.id}`],
     };
   } catch (err) {
     return {
       errors: [
         ...state.errors,
-        `Error processing bounty ${bounty.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Error processing task ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
       ],
     };
   }
@@ -186,7 +186,7 @@ async function advanceOrFinish(state: State): Promise<Partial<State>> {
 }
 
 function shouldContinue(state: State): string {
-  if (state.currentIndex + 1 < state.bounties.length) {
+  if (state.currentIndex + 1 < state.tasks.length) {
     return 'fetchGithubData';
   }
   return END;

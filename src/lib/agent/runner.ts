@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph } from './graph';
 import { decrypt } from '@/lib/encryption';
-import type { Bounty } from '@/types/database';
+import type { Task } from '@/types/database';
 
 export async function runSync(userId: string) {
   const supabase = createClient(
@@ -27,15 +27,15 @@ export async function runSync(userId: string) {
   const apiKey = decrypt(settings.ai_api_key_encrypted);
   const githubToken = settings.github_token_encrypted; // stored as plaintext from OAuth for now
 
-  // Get bounties that need syncing
-  const { data: bounties } = await supabase
-    .from('bounties')
+  // Get tasks that need syncing
+  const { data: tasks } = await supabase
+    .from('tasks')
     .select('*')
     .eq('user_id', userId)
     .not('status', 'in', '("paid","wasted")');
 
-  if (!bounties || bounties.length === 0) {
-    return { bounties_updated: 0, errors: [] };
+  if (!tasks || tasks.length === 0) {
+    return { tasks_updated: 0, errors: [] };
   }
 
   // Create sync log
@@ -49,7 +49,7 @@ export async function runSync(userId: string) {
     const graph = createSyncGraph();
 
     const result = await graph.invoke({
-      bounties: bounties as Bounty[],
+      tasks: tasks as Task[],
       githubToken,
       apiKey,
       currentIndex: 0,
@@ -57,7 +57,7 @@ export async function runSync(userId: string) {
       errors: [],
     });
 
-    let bountiesUpdated = 0;
+    let tasksUpdated = 0;
 
     // Apply updates
     for (const update of result.updates) {
@@ -68,17 +68,17 @@ export async function runSync(userId: string) {
         };
 
         // Only update status if confidence is high enough and status changed
-        const currentBounty = bounties.find((b) => b.id === update.bountyId);
-        if (currentBounty && update.suggestedStatus !== currentBounty.status && update.confidence >= 0.75) {
+        const currentTask = tasks.find((t) => t.id === update.taskId);
+        if (currentTask && update.suggestedStatus !== currentTask.status && update.confidence >= 0.75) {
           updateData.status = update.suggestedStatus;
         }
 
         await supabase
-          .from('bounties')
+          .from('tasks')
           .update(updateData)
-          .eq('id', update.bountyId);
+          .eq('id', update.taskId);
 
-        bountiesUpdated++;
+        tasksUpdated++;
       }
     }
 
@@ -89,13 +89,13 @@ export async function runSync(userId: string) {
         .update({
           status: 'completed',
           completed_at: new Date().toISOString(),
-          bounties_updated: bountiesUpdated,
+          bounties_updated: tasksUpdated, // DB column name
           details: { updates: result.updates, errors: result.errors },
         })
         .eq('id', syncLog.id);
     }
 
-    return { bounties_updated: bountiesUpdated, errors: result.errors };
+    return { tasks_updated: tasksUpdated, errors: result.errors };
   } catch (err) {
     if (syncLog) {
       await supabase

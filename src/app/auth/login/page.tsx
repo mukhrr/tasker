@@ -33,7 +33,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push('/bounties');
+    router.push('/tasks');
     router.refresh();
   };
 

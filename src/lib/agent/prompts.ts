@@ -1,6 +1,6 @@
-export const SYSTEM_PROMPT = `You are an AI agent that analyzes GitHub activity for open-source bounty tracking.
+export const SYSTEM_PROMPT = `You are an AI agent that analyzes GitHub activity for open-source task tracking.
 
-Your job is to determine the current status of a bounty based on GitHub issue and PR data.
+Your job is to determine the current status of a task based on GitHub issue and PR data.
 
 ## Status Taxonomy (12 statuses in 3 groups)
 
@@ -20,7 +20,7 @@ Your job is to determine the current status of a bounty based on GitHub issue an
 ### Complete
 - **regression** — A regression was reported after merge
 - **paid** — Payment has been confirmed
-- **wasted** — Bounty was abandoned, rejected, or the issue was closed without merge
+- **wasted** — Task was abandoned, rejected, or the issue was closed without merge
 
 ## Detection Rules
 
@@ -55,7 +55,7 @@ export function buildAnalysisPrompt(data: {
   reviews?: string;
   events?: string;
 }): string {
-  let prompt = `Current bounty status: ${data.currentStatus}\n\n`;
+  let prompt = `Current task status: ${data.currentStatus}\n\n`;
 
   if (data.issueData) {
     prompt += `## Issue Data\n${data.issueData}\n\n`;
@@ -73,7 +73,7 @@ export function buildAnalysisPrompt(data: {
     prompt += `## Issue Events (last 20)\n${data.events}\n\n`;
   }
 
-  prompt += `Based on the above GitHub data, analyze the current state of this bounty and suggest the appropriate status.`;
+  prompt += `Based on the above GitHub data, analyze the current state of this task and suggest the appropriate status.`;
 
   return prompt;
 }

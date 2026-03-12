@@ -96,7 +96,7 @@ export default function SignupPage() {
           Create your account
         </h1>
         <p className="mt-1.5 text-[15px] text-muted-foreground">
-          Start tracking bounties in minutes
+          Start tracking tasks in minutes
         </p>
       </div>
 

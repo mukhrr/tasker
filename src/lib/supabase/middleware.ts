@@ -47,7 +47,7 @@ export async function updateSession(request: NextRequest) {
   // Redirect authenticated users away from auth pages to dashboard
   if (user && request.nextUrl.pathname.startsWith('/auth')) {
     const url = request.nextUrl.clone();
-    url.pathname = '/bounties';
+    url.pathname = '/tasks';
     return NextResponse.redirect(url);
   }
 
