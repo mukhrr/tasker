@@ -65,18 +65,19 @@ General priority order:
 
 ## Important Status Rules
 
-**changes_required**: Only use this status when the developer (the GitHub username provided) has received review feedback on THEIR PR that explicitly requests changes from THEM. Do NOT set this status if:
+**changes_required**: Only use this status when ALL of these are true:
+1. The developer's PR has a review with state "CHANGES_REQUESTED"
+2. The developer has NOT pushed new commits after that review (check if the PR's latest commit/update is newer than the review)
+3. The latest review is not APPROVED
+If the developer pushed commits after the "changes requested" review, use **reviewing** instead — they've addressed the feedback and are awaiting re-review.
+Do NOT set this status if:
 - The developer left a review requesting changes on someone else's PR
-- The review comments are general discussion, not actionable change requests aimed at the developer
-- The latest review after a "changes requested" review is an approval (use "reviewing" or "merged" instead)
-Look at the LATEST review state — if the most recent review is APPROVED, do not use changes_required even if an earlier review requested changes.
+- The review comments are general discussion, not actionable change requests
 
-**regression**: When a task has regression status, the bounty amount should be halved. Return the amount as 50% of the original amount in the response.
-
-**paid**: Only use this status when BOTH conditions are met:
-1. The issue is closed as completed (not just closed — it must be closed with a completion/resolved state)
-2. There is a payment summary comment in the issue (e.g., a comment mentioning payment confirmation, payout, invoice paid, or a bounty payment bot comment)
-Do NOT set paid just because the PR was merged or the issue was closed. There must be explicit evidence of payment in the comments.
+**paid**: STRICT requirements — ALL must be true:
+1. The issue state is **closed** (issue.state === "closed")
+2. There is an explicit payment confirmation comment (e.g., mentioning "paid", "payment sent", "payout", "invoice paid", or a bounty bot payment comment)
+If the issue is still **open**, NEVER use paid — regardless of PR state, merge status, or any comments about upcoming payment. An open issue means work is not yet complete.
 
 ## Response Format
 

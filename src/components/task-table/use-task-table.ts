@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
@@ -30,6 +30,15 @@ export function useTaskTable(userId: string) {
     error?: string;
   } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(true); // optimistic default
+
+  // Check if user has API key configured
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((res) => res.json())
+      .then((data) => setHasApiKey(!!data.has_api_key))
+      .catch(() => {});
+  }, []);
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() =>
     loadVisibleColumns()
   );
@@ -102,7 +111,9 @@ export function useTaskTable(userId: string) {
           t.pr_url?.toLowerCase().includes(q) ||
           t.note?.toLowerCase().includes(q) ||
           t.repo_owner?.toLowerCase().includes(q) ||
-          t.repo_name?.toLowerCase().includes(q)
+          t.repo_name?.toLowerCase().includes(q) ||
+          `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase().includes(q) ||
+          `#${t.issue_number}`.includes(q)
       );
     }
 
@@ -139,6 +150,10 @@ export function useTaskTable(userId: string) {
 
   // Handlers
   const handleSync = useCallback(async () => {
+    if (!hasApiKey) {
+      toast.error('Add your Claude API key in Settings to enable sync.');
+      return;
+    }
     setSyncing(true);
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
@@ -167,15 +182,15 @@ export function useTaskTable(userId: string) {
     } finally {
       setSyncing(false);
     }
-  }, []);
+  }, [hasApiKey]);
 
   const handleAddTask = useCallback(
     async (issueUrl: string) => {
       try {
         await tasksCrud.addTask(issueUrl);
         toast.success('Task added');
-      } catch {
-        toast.error('Failed to add task');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to add task');
       }
     },
     [tasksCrud]
@@ -206,6 +221,10 @@ export function useTaskTable(userId: string) {
 
   const handleSyncTask = useCallback(
     async (id: string) => {
+      if (!hasApiKey) {
+        toast.error('Add your Claude API key in Settings to enable sync.');
+        return;
+      }
       try {
         await tasksCrud.syncTask(id);
         toast.success('Task synced');
@@ -213,7 +232,7 @@ export function useTaskTable(userId: string) {
         toast.error(err instanceof Error ? err.message : 'Sync failed');
       }
     },
-    [tasksCrud]
+    [tasksCrud, hasApiKey]
   );
 
   return {
@@ -245,6 +264,7 @@ export function useTaskTable(userId: string) {
     // Sync
     syncing,
     lastSyncResult,
+    hasApiKey,
     handleSync,
 
     // CRUD

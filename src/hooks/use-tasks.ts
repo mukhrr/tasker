@@ -19,7 +19,17 @@ export function useTasks(userId: string) {
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    setTasks((data as Task[]) ?? []);
+    // Deduplicate by repo+issue number (keep the first — most recent by created_at)
+    const seen = new Set<string>();
+    const unique = ((data as Task[]) ?? []).filter((t) => {
+      const key = t.repo_owner && t.repo_name && t.issue_number
+        ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
+        : t.issue_url.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setTasks(unique);
     setLoading(false);
   }, [userId, supabase]);
 
@@ -73,7 +83,21 @@ export function useTasks(userId: string) {
   };
 
   const addTask = async (issueUrl: string) => {
+    // Check for duplicate issue
     const parsed = parseIssueUrl(issueUrl);
+    const duplicate = tasks.find((t) => {
+      if (parsed && t.repo_owner && t.repo_name && t.issue_number) {
+        return (
+          t.repo_owner.toLowerCase() === parsed.owner.toLowerCase() &&
+          t.repo_name.toLowerCase() === parsed.repo.toLowerCase() &&
+          t.issue_number === parsed.number
+        );
+      }
+      return t.issue_url.toLowerCase() === issueUrl.toLowerCase();
+    });
+    if (duplicate) {
+      throw new Error('This issue is already in your task list.');
+    }
 
     const newTask = {
       user_id: userId,

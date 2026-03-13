@@ -42,6 +42,7 @@ export function TaskTable({ userId }: { userId: string }) {
         onSearchChange={ctx.setSearch}
         onSync={ctx.handleSync}
         syncing={ctx.syncing}
+        hasApiKey={ctx.hasApiKey}
         visibleColumns={ctx.visibleColumns}
         onToggleColumn={ctx.toggleColumn}
         columnOrder={ctx.columnOrder}

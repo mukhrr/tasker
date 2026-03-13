@@ -45,6 +45,7 @@ export function Toolbar({
   onSearchChange,
   onSync,
   syncing,
+  hasApiKey,
   visibleColumns,
   onToggleColumn,
   columnOrder,
@@ -59,6 +60,7 @@ export function Toolbar({
   onSearchChange: (search: string) => void;
   onSync: () => void;
   syncing: boolean;
+  hasApiKey: boolean;
   visibleColumns: Set<ColumnKey>;
   onToggleColumn: (key: ColumnKey) => void;
   columnOrder: ColumnKey[];
@@ -277,13 +279,14 @@ export function Toolbar({
           variant="outline"
           size="sm"
           onClick={onSync}
-          disabled={syncing}
+          disabled={syncing || !hasApiKey}
+          title={!hasApiKey ? 'Add your Claude API key in Settings first' : undefined}
           className="ml-auto gap-2 sm:ml-0"
         >
           <RefreshCw
             className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`}
           />
-          {syncing ? 'Syncing...' : 'Sync Now'}
+          {syncing ? 'Syncing...' : !hasApiKey ? 'API Key Required' : 'Sync Now'}
         </Button>
       </div>
     </div>
