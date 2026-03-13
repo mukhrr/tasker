@@ -137,10 +137,17 @@ export async function runSync(
           last_synced_at: new Date().toISOString(),
         };
 
+        // Skip AI status override if user manually edited since last sync
+        const wasManuallyEdited =
+          currentTask.last_synced_at &&
+          new Date(currentTask.updated_at) >
+            new Date(currentTask.last_synced_at);
+
         // Status change at high confidence
         if (
           update.suggestedStatus !== currentTask.status &&
-          update.confidence >= 0.75
+          update.confidence >= 0.75 &&
+          !wasManuallyEdited
         ) {
           updateData.status = update.suggestedStatus;
           // Derive status_group from user's statuses

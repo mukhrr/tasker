@@ -102,10 +102,16 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       }
     }
 
+    // Detect if user manually edited the task since last sync
+    const wasManuallyEdited =
+      !!task.last_synced_at &&
+      new Date(task.updated_at) > new Date(task.last_synced_at);
+
     // Build analysis prompt with all context
     const analysisData = {
       currentStatus: task.status,
       isFirstSync,
+      wasManuallyEdited,
       githubUsername: username,
       issueTitle: issue.title,
       issueData: JSON.stringify(
@@ -141,7 +147,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         : undefined,
       comments: comments.length
         ? JSON.stringify(
-            comments.slice(-30).map((c) => ({
+            comments.slice(-3).map((c) => ({
               user: c.user.login,
               body: c.body.slice(0, 500),
               created_at: c.created_at,
@@ -152,7 +158,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         : undefined,
       reviews: reviews?.length
         ? JSON.stringify(
-            reviews.map((r) => ({
+            reviews.slice(-3).map((r) => ({
               user: r.user.login,
               state: r.state,
               body: r.body?.slice(0, 300),
@@ -187,7 +193,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     // Call Claude
     const model = new ChatAnthropic({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-4-6',
       apiKey: state.apiKey,
       maxTokens: 1024,
     });

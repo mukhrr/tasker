@@ -2,6 +2,7 @@
 
 import { Background, FloatingLines } from '@/components/landing/background';
 import { CtaSection } from '@/components/landing/cta-section';
+import { DashboardPreview } from '@/components/landing/dashboard-preview';
 import { JSON_LD } from '@/components/landing/data';
 import { FeaturesSection } from '@/components/landing/features-section';
 import { Footer } from '@/components/landing/footer';
@@ -26,6 +27,7 @@ export default function HomePage() {
       <main>
         <HeroSection scrollY={scrollY} />
         <FeaturesSection />
+        <DashboardPreview />
         <CtaSection />
       </main>
 

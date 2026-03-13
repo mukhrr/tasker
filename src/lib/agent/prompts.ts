@@ -73,6 +73,11 @@ Look at the LATEST review state — if the most recent review is APPROVED, do no
 
 **regression**: When a task has regression status, the bounty amount should be halved. Return the amount as 50% of the original amount in the response.
 
+**paid**: Only use this status when BOTH conditions are met:
+1. The issue is closed as completed (not just closed — it must be closed with a completion/resolved state)
+2. There is a payment summary comment in the issue (e.g., a comment mentioning payment confirmation, payout, invoice paid, or a bounty payment bot comment)
+Do NOT set paid just because the PR was merged or the issue was closed. There must be explicit evidence of payment in the comments.
+
 ## Response Format
 
 Return valid JSON with ALL of these fields:
@@ -96,6 +101,23 @@ Rules for fields:
 - **amount**: Only if you find explicit bounty/payment amounts in labels, comments, or issue body. Return null otherwise.
 - Return null for any field you don't want to change.
 
+## Confidence Guidelines
+
+Your confidence score directly controls what gets updated:
+- **≥ 0.75**: Status change will be applied (if not manually overridden by user)
+- **≥ 0.6**: Summary and other fields will be updated, but status stays unchanged
+- **< 0.6**: Nothing gets updated — task is skipped entirely
+
+Set confidence based on evidence strength:
+- **0.9–1.0**: Unambiguous signals (PR merged, payment comment found, explicitly assigned)
+- **0.75–0.9**: Strong signals with minor ambiguity (PR open with reviews, clear status progression)
+- **0.6–0.75**: Moderate signals — enough to update summary but not enough to change status
+- **< 0.6**: Weak or conflicting signals — better to skip than guess wrong
+
+## Manual Override Rule
+
+If the context indicates the user manually changed the status since the last sync, treat their status as intentional. Set your suggestedStatus to match the current status and keep confidence low (0.5–0.6) so only the summary updates. The user knows something you don't.
+
 Analyze all provided data carefully. Consider the chronological order of events.
 Be conservative with status changes — only suggest a new status if the evidence is clear.`;
 }
@@ -116,13 +138,20 @@ export function buildAnalysisPrompt(data: {
   existingPaymentDate?: string | null;
   discoveredPrUrl?: string | null;
   discoveredAssignedDate?: string | null;
+  wasManuallyEdited?: boolean;
 }): string {
   let prompt = '';
 
   prompt += `## Context\n`;
   prompt += `GitHub username: **${data.githubUsername}**\n`;
   prompt += `Current task status: **${data.currentStatus}**\n`;
-  prompt += `First sync: **${data.isFirstSync ? 'YES — populate all fields from scratch' : 'NO — only update changed fields'}**\n\n`;
+  prompt += `First sync: **${data.isFirstSync ? 'YES — populate all fields from scratch' : 'NO — only update changed fields'}**\n`;
+
+  if (data.wasManuallyEdited) {
+    prompt += `User manually changed status since last sync: **YES** — The user intentionally set this status. Keep suggestedStatus as "${data.currentStatus}" and set confidence to 0.5. Still update summary and other fields normally.\n`;
+  }
+
+  prompt += '\n';
 
   if (data.existingPrUrl) {
     prompt += `Existing PR URL: ${data.existingPrUrl}\n`;
@@ -152,7 +181,7 @@ export function buildAnalysisPrompt(data: {
     prompt += `## Pull Request Data\n${data.prData}\n\n`;
   }
   if (data.comments) {
-    prompt += `## Comments (last 30)\n${data.comments}\n\n`;
+    prompt += `## Comments (last 3)\n${data.comments}\n\n`;
   }
   if (data.reviews) {
     prompt += `## PR Reviews\n${data.reviews}\n\n`;
