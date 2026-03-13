@@ -63,6 +63,16 @@ General priority order:
 5. Proposal/early signals (got_cplus, update_proposal, promising)
 6. Default to the first status in the to-do group
 
+## Important Status Rules
+
+**changes_required**: Only use this status when the developer (the GitHub username provided) has received review feedback on THEIR PR that explicitly requests changes from THEM. Do NOT set this status if:
+- The developer left a review requesting changes on someone else's PR
+- The review comments are general discussion, not actionable change requests aimed at the developer
+- The latest review after a "changes requested" review is an approval (use "reviewing" or "merged" instead)
+Look at the LATEST review state — if the most recent review is APPROVED, do not use changes_required even if an earlier review requested changes.
+
+**regression**: When a task has regression status, the bounty amount should be halved. Return the amount as 50% of the original amount in the response.
+
 ## Response Format
 
 Return valid JSON with ALL of these fields:

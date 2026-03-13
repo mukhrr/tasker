@@ -179,6 +179,13 @@ export async function runSync(
           }
         }
 
+        // Regression: halve the amount
+        const effectiveStatus =
+          (updateData.status as string) ?? currentTask.status;
+        if (effectiveStatus === 'regression' && currentTask.amount) {
+          updateData.amount = Number(currentTask.amount) * 0.5;
+        }
+
         await supabase.from('tasks').update(updateData).eq('id', update.taskId);
 
         tasksUpdated++;

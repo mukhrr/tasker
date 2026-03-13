@@ -122,6 +122,9 @@ export async function findLinkedPR(
   githubUsername: string,
   token: string
 ): Promise<GitHubPullRequest | null> {
+  // Collect all PR numbers by this developer linked to the issue
+  const candidatePrNumbers: number[] = [];
+
   try {
     // Use timeline API to find cross-referenced PRs
     const timeline = await fetchIssueTimeline(owner, repo, issueNumber, token);
@@ -137,8 +140,7 @@ export async function findLinkedPR(
           issue?.pull_request &&
           (issue.user as Record<string, unknown>)?.login === githubUsername
         ) {
-          const prNumber = issue.number as number;
-          return fetchPR(owner, repo, prNumber, token);
+          candidatePrNumbers.push(issue.number as number);
         }
       }
     }
@@ -147,20 +149,26 @@ export async function findLinkedPR(
   }
 
   // Fallback: search for PRs by user mentioning the issue
-  try {
-    const searchResult = await githubFetch<{ items: GitHubPullRequest[] }>(
-      `/search/issues?q=repo:${owner}/${repo}+is:pr+author:${githubUsername}+${issueNumber}&per_page=5`,
-      token
-    );
-    if (searchResult.items?.length) {
-      // Fetch full PR data for the first match
-      return fetchPR(owner, repo, searchResult.items[0].number, token);
+  if (candidatePrNumbers.length === 0) {
+    try {
+      const searchResult = await githubFetch<{ items: GitHubPullRequest[] }>(
+        `/search/issues?q=repo:${owner}/${repo}+is:pr+author:${githubUsername}+${issueNumber}&per_page=5&sort=created&order=desc`,
+        token
+      );
+      if (searchResult.items?.length) {
+        // Fetch full PR data for the latest match (sorted desc by created)
+        return fetchPR(owner, repo, searchResult.items[0].number, token);
+      }
+    } catch {
+      // Search may fail; that's okay
     }
-  } catch {
-    // Search may fail; that's okay
+
+    return null;
   }
 
-  return null;
+  // Return the latest PR (highest number = most recently created)
+  const latestPrNumber = Math.max(...candidatePrNumbers);
+  return fetchPR(owner, repo, latestPrNumber, token);
 }
 
 export function normalizeUrl(url: string): string {
