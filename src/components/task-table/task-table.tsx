@@ -52,10 +52,10 @@ export function TaskTable({ userId }: { userId: string }) {
       />
 
       <div className="rounded-lg border">
-        <div className="-mx-px overflow-x-auto">
+        <div className="-mx-px max-h-[calc(100vh-280px)] overflow-auto">
           <table className="w-full min-w-[700px] text-[0.9rem]">
-            <thead>
-              <tr className="border-b bg-muted/50">
+            <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur-sm">
+              <tr className="border-b">
                 {visibleColumnKeys.map((key) => (
                   <th key={key} className="px-3 py-2.5 text-left sm:px-4">
                     <ColumnHeader

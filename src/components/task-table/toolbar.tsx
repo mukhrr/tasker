@@ -149,6 +149,7 @@ export function Toolbar({
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      {/* Left: Tabs + Search */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <Tabs value={activeTab} onValueChange={onTabChange}>
           <TabsList>
@@ -166,13 +167,13 @@ export function Toolbar({
           className="h-8 w-full text-sm sm:w-[200px]"
         />
       </div>
+
+      {/* Right: Sync status + Sort + Columns + Sync Now */}
       <div className="flex items-center gap-2">
         {displayStatus && (
-          <div className="flex items-center gap-2 text-xs whitespace-nowrap">
-            <span className="text-muted-foreground">
-              Synced {timeAgo(displayStatus.time)}
-            </span>
-          </div>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            Synced {timeAgo(displayStatus.time)}
+          </span>
         )}
         <Popover>
           <PopoverTrigger
@@ -277,7 +278,7 @@ export function Toolbar({
           size="sm"
           onClick={onSync}
           disabled={syncing}
-          className="gap-2 w-full sm:w-auto"
+          className="ml-auto gap-2 sm:ml-0"
         >
           <RefreshCw
             className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`}

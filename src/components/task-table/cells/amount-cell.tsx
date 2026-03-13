@@ -23,8 +23,7 @@ export function AmountCell({
     return (
       <Input
         autoFocus
-        type="number"
-        step="0.01"
+        inputMode="decimal"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -35,7 +34,8 @@ export function AmountCell({
             setEditing(false);
           }
         }}
-        className="h-8 text-sm"
+        className="h-8 w-24 text-sm"
+        placeholder="0.00"
       />
     );
   }

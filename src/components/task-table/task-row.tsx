@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
 import { UrlCell } from './cells/url-cell';
 import { StatusCell } from './cells/status-cell';
@@ -39,6 +40,15 @@ interface TaskRowProps {
 
 export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: TaskRowProps) {
   const isConfirmingDelete = ctx.deleteConfirmId === task.id;
+  const [titleExpanded, setTitleExpanded] = useState(false);
+
+  const titleText = task.issue_title || shortenGitHubUrl(task.issue_url);
+  const TRUNCATE_LENGTH = 80;
+  const isTitleTruncatable = titleText.length > TRUNCATE_LENGTH;
+  const displayTitle =
+    !titleExpanded && isTitleTruncatable
+      ? titleText.slice(0, TRUNCATE_LENGTH) + '…'
+      : titleText;
 
   return (
     <tr className="group/row border-b last:border-b-0 hover:bg-muted/30">
@@ -47,29 +57,39 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
         {isSyncing && !task.issue_title ? (
           <Skeleton className="h-4 w-36" />
         ) : (
-          <a
-            href={normalizeUrl(task.issue_url)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group/issue block"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="line-clamp-1 text-sm font-medium text-foreground group-hover/issue:underline">
-              <HighlightText
-                text={task.issue_title || shortenGitHubUrl(task.issue_url)}
-                query={search}
-              />
-              <ExternalLink className="ml-1 inline-block h-3 w-3 opacity-0 transition-opacity group-hover/issue:opacity-100" />
-            </span>
+          <div>
+            <a
+              href={normalizeUrl(task.issue_url)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group/issue inline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-sm font-medium text-foreground group-hover/issue:underline">
+                <HighlightText text={displayTitle} query={search} />
+                <ExternalLink className="ml-1 inline-block h-3 w-3 opacity-0 transition-opacity group-hover/issue:opacity-100" />
+              </span>
+            </a>
+            {isTitleTruncatable && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTitleExpanded(!titleExpanded);
+                }}
+                className="ml-1 text-sm text-muted-foreground hover:text-foreground"
+              >
+                {titleExpanded ? 'show less' : 'more'}
+              </button>
+            )}
             {task.issue_title && (
-              <span className="line-clamp-1 text-xs text-muted-foreground">
+              <div className="line-clamp-1 text-xs text-muted-foreground">
                 <HighlightText
                   text={shortenGitHubUrl(task.issue_url)}
                   query={search}
                 />
-              </span>
+              </div>
             )}
-          </a>
+          </div>
         )}
       </td>
 
