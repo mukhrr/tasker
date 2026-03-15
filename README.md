@@ -10,6 +10,7 @@ Task tracking tool for open-source developers. Track proposals, assignments, PRs
 - **Custom columns** — Add your own text, date, number, URL, or select fields
 - **Encrypted credentials** — API keys and tokens stored with AES-256-GCM at rest
 - **Auto-sync** — Scheduled sync via GitHub Actions cron (every 6 hours)
+- **Chrome extension** — View and update task statuses directly on GitHub issue and PR pages. On PRs, automatically detects linked issues from the description and bulk-updates their statuses
 
 ## Tech Stack
 
@@ -99,6 +100,23 @@ Tasks follow a 12-status workflow grouped into three phases:
 
 The AI agent detects transitions by analyzing GitHub events (assignments, PR reviews, merges, payment-related comments).
 
+## Browser Extension
+
+The `extension/` folder contains a Chrome extension (Manifest V3) that adds Tasker status widgets directly to GitHub.
+
+- **On issues** — adds a status widget in the sidebar to view/update the task status
+- **On PRs** — adds a status button in the header row. Parses linked issue references (`#NNNNN`) from the PR description and lets you bulk-update all tracked issues at once
+
+### Extension Setup
+
+```bash
+cd extension
+npm install
+npm run build
+```
+
+Then load `extension/dist` as an unpacked extension in Chrome (`chrome://extensions` → Developer mode → Load unpacked).
+
 ## Project Structure
 
 ```
@@ -118,6 +136,15 @@ src/
 │   ├── github.ts           # GitHub API wrapper
 │   └── status.ts           # 12-status config and helpers
 └── types/                  # TypeScript interfaces
+
+extension/
+├── src/
+│   ├── background/         # Service worker (auth, task CRUD, batch updates)
+│   ├── content/            # Content script + StatusWidget (issue/PR modes)
+│   ├── popup/              # Extension popup (HTML/CSS/TS)
+│   └── shared/             # Types, messages, constants
+├── icons/                  # Extension icons (16, 48, 128)
+└── manifest.json           # Manifest V3 config
 ```
 
 ## License
