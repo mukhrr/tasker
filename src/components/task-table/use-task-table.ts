@@ -7,7 +7,7 @@ import { useCustomColumns } from '@/hooks/use-custom-columns';
 import { useStatuses } from '@/hooks/use-statuses';
 import { getStatusGroup } from '@/lib/status';
 import type { Task, TaskStatusGroup } from '@/types/database';
-import type { ColumnKey, SortConfig } from './column-config';
+import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import {
   loadVisibleColumns,
   saveVisibleColumns,
@@ -15,6 +15,8 @@ import {
   saveColumnOrder,
   loadSortConfig,
   saveSortConfig,
+  loadFilters,
+  saveFilters,
 } from './column-config';
 
 export function useTaskTable(userId: string) {
@@ -48,6 +50,7 @@ export function useTaskTable(userId: string) {
   const [sortConfig, setSortConfig] = useState<SortConfig>(() =>
     loadSortConfig()
   );
+  const [filters, setFiltersState] = useState<TaskFilters>(() => loadFilters());
 
   // Column visibility
   const toggleColumn = useCallback((key: ColumnKey) => {
@@ -69,6 +72,14 @@ export function useTaskTable(userId: string) {
     (key: ColumnKey) => visibleColumns.has(key),
     [visibleColumns]
   );
+
+  // Filters
+  const setFilters = useCallback((next: TaskFilters) => {
+    setFiltersState(next);
+    saveFilters(next);
+  }, []);
+
+  const activeFilterCount = filters.statuses.length;
 
   // Sorting
   const handleSortChange = useCallback((config: SortConfig) => {
@@ -102,6 +113,10 @@ export function useTaskTable(userId: string) {
       );
     }
 
+    // Apply filters
+    if (filters.statuses.length > 0) {
+      filtered = filtered.filter((t) => filters.statuses.includes(t.status));
+    }
     if (search) {
       const q = search.toLowerCase();
       filtered = filtered.filter(
@@ -146,7 +161,7 @@ export function useTaskTable(userId: string) {
     });
 
     return sorted;
-  }, [tasksCrud.tasks, statusesCrud.statuses, activeTab, search, sortConfig]);
+  }, [tasksCrud.tasks, statusesCrud.statuses, activeTab, search, sortConfig, filters]);
 
   // Handlers
   const handleSync = useCallback(async () => {
@@ -250,6 +265,9 @@ export function useTaskTable(userId: string) {
     setActiveTab,
     search,
     setSearch,
+    filters,
+    setFilters,
+    activeFilterCount,
 
     // Column config
     visibleColumns,

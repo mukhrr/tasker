@@ -50,6 +50,10 @@ export function TaskTable({ userId }: { userId: string }) {
         lastSyncResult={ctx.lastSyncResult}
         sortConfig={ctx.sortConfig}
         onSortChange={ctx.handleSortChange}
+        filters={ctx.filters}
+        onFiltersChange={ctx.setFilters}
+        activeFilterCount={ctx.activeFilterCount}
+        statuses={ctx.statuses}
       />
 
       <div className="rounded-lg border">

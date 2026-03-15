@@ -88,6 +88,30 @@ export function saveColumnOrder(order: ColumnKey[]): void {
   } catch {}
 }
 
+// Filters
+export interface TaskFilters {
+  statuses: string[]; // status keys
+}
+
+const FILTERS_KEY = 'tasker-filters';
+
+const EMPTY_FILTERS: TaskFilters = { statuses: [] };
+
+export function loadFilters(): TaskFilters {
+  if (typeof window === 'undefined') return EMPTY_FILTERS;
+  try {
+    const stored = localStorage.getItem(FILTERS_KEY);
+    if (stored) return { ...EMPTY_FILTERS, ...JSON.parse(stored) };
+  } catch {}
+  return EMPTY_FILTERS;
+}
+
+export function saveFilters(filters: TaskFilters): void {
+  try {
+    localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+  } catch {}
+}
+
 const DEFAULT_SORT: SortConfig = { key: 'created_at', direction: 'desc' };
 
 export function loadSortConfig(): SortConfig {

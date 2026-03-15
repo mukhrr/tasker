@@ -16,6 +16,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+  ),
   title: 'Tasker — AI Agent That Manages Your Open Source Tasks',
   description:
     'Tasker is an AI-powered assistant that syncs with GitHub to automatically track bounties, update task statuses, and manage payments across your open source repositories.',

@@ -17,9 +17,13 @@ import {
   GripVertical,
   ArrowUpDown,
   Check,
+  Filter,
+  X,
 } from 'lucide-react';
-import type { ColumnKey, SortConfig } from './column-config';
+import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import { BUILT_IN_COLUMNS } from './column-config';
+import type { UserStatus } from '@/types/database';
+import { getStatusColor, getStatusesByGroup, STATUS_GROUP_LABELS } from '@/lib/status';
 
 function timeAgo(date: string): string {
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -53,6 +57,10 @@ export function Toolbar({
   lastSyncResult,
   sortConfig,
   onSortChange,
+  filters,
+  onFiltersChange,
+  activeFilterCount,
+  statuses,
 }: {
   activeTab: string;
   onTabChange: (tab: string) => void;
@@ -68,6 +76,10 @@ export function Toolbar({
   lastSyncResult: { failed: boolean; error?: string } | null;
   sortConfig: SortConfig;
   onSortChange: (config: SortConfig) => void;
+  filters: TaskFilters;
+  onFiltersChange: (filters: TaskFilters) => void;
+  activeFilterCount: number;
+  statuses: UserStatus[];
 }) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const dragItem = useRef<number | null>(null);
@@ -149,7 +161,15 @@ export function Toolbar({
     setDragIdx(null);
   };
 
+  const removeStatusFilter = (key: string) => {
+    onFiltersChange({
+      ...filters,
+      statuses: filters.statuses.filter((k) => k !== key),
+    });
+  };
+
   return (
+    <div className="space-y-2">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       {/* Left: Tabs + Search */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -170,13 +190,87 @@ export function Toolbar({
         />
       </div>
 
-      {/* Right: Sync status + Sort + Columns + Sync Now */}
+      {/* Right: Sync status + Filter + Sort + Columns + Sync Now */}
       <div className="flex items-center gap-2">
         {displayStatus && (
           <span className="text-xs text-muted-foreground whitespace-nowrap">
             Synced {timeAgo(displayStatus.time)}
           </span>
         )}
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button variant="outline" size="sm" className="gap-2">
+                <Filter className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Filter</span>
+                {activeFilterCount > 0 && (
+                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </Button>
+            }
+          />
+          <PopoverContent align="end" className="w-64 p-3">
+            <div className="flex items-center justify-between pb-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Filter tasks
+              </p>
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={() => onFiltersChange({ statuses: [] })}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            {/* Status filter */}
+            <div className="border-t pt-2">
+              <p className="pb-1.5 text-xs font-medium">Status</p>
+              <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                {Object.entries(getStatusesByGroup(statuses)).map(
+                  ([group, groupStatuses]) =>
+                    groupStatuses.length > 0 && (
+                      <div key={group}>
+                        <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          {STATUS_GROUP_LABELS[group as keyof typeof STATUS_GROUP_LABELS]}
+                        </p>
+                        {groupStatuses.map((s) => {
+                          const active = filters.statuses.includes(s.key);
+                          const color = getStatusColor(s.color);
+                          return (
+                            <button
+                              key={s.key}
+                              onClick={() => {
+                                const next = active
+                                  ? filters.statuses.filter((k) => k !== s.key)
+                                  : [...filters.statuses, s.key];
+                                onFiltersChange({ ...filters, statuses: next });
+                              }}
+                              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-muted"
+                            >
+                              <span
+                                className={`h-2 w-2 shrink-0 rounded-full ${color.dot}`}
+                              />
+                              <span className="flex-1 truncate text-left">
+                                {s.label}
+                              </span>
+                              {active && (
+                                <Check className="h-3.5 w-3.5 text-primary" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                )}
+              </div>
+            </div>
+
+          </PopoverContent>
+        </Popover>
         <Popover>
           <PopoverTrigger
             render={
@@ -289,6 +383,32 @@ export function Toolbar({
           {syncing ? 'Syncing...' : !hasApiKey ? 'API Key Required' : 'Sync Now'}
         </Button>
       </div>
+    </div>
+    {activeFilterCount > 0 && (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">Filtered by:</span>
+        {filters.statuses.map((key) => {
+          const s = statuses.find((st) => st.key === key);
+          if (!s) return null;
+          const color = getStatusColor(s.color);
+          return (
+            <span
+              key={key}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${color.badge}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
+              {s.label}
+              <button
+                onClick={() => removeStatusFilter(key)}
+                className="ml-0.5 hover:opacity-70"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          );
+        })}
+      </div>
+    )}
     </div>
   );
 }
