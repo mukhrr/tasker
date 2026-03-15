@@ -37,6 +37,11 @@ yarn-error.log*
 # mcp config (contains access tokens)
 .mcp.json
 
+# extension
+extension/src/env.ts
+extension/dist/
+extension/node_modules/
+
 # vercel
 .vercel
 
