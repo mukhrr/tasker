@@ -19,5 +19,9 @@ export async function GET() {
     .limit(1)
     .single();
 
-  return NextResponse.json(syncLog ?? null);
+  return NextResponse.json(syncLog ?? null, {
+    headers: {
+      'Cache-Control': 'private, max-age=30',
+    },
+  });
 }

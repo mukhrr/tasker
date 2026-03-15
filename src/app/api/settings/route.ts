@@ -24,14 +24,21 @@ export async function GET() {
     null;
 
   if (!settings) {
-    return NextResponse.json({
-      id: user.id,
-      has_api_key: false,
-      api_key_masked: null,
-      auto_sync_enabled: false,
-      sync_interval_hours: 6,
-      github_username: githubUsername,
-    });
+    return NextResponse.json(
+      {
+        id: user.id,
+        has_api_key: false,
+        api_key_masked: null,
+        auto_sync_enabled: false,
+        sync_interval_hours: 6,
+        github_username: githubUsername,
+      },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=60',
+        },
+      }
+    );
   }
 
   let apiKeyMasked: string | null = null;
@@ -45,14 +52,21 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json({
-    id: settings.id,
-    has_api_key: !!settings.ai_api_key_encrypted,
-    api_key_masked: apiKeyMasked,
-    auto_sync_enabled: settings.auto_sync_enabled,
-    sync_interval_hours: settings.sync_interval_hours,
-    github_username: githubUsername,
-  });
+  return NextResponse.json(
+    {
+      id: settings.id,
+      has_api_key: !!settings.ai_api_key_encrypted,
+      api_key_masked: apiKeyMasked,
+      auto_sync_enabled: settings.auto_sync_enabled,
+      sync_interval_hours: settings.sync_interval_hours,
+      github_username: githubUsername,
+    },
+    {
+      headers: {
+        'Cache-Control': 'private, max-age=60',
+      },
+    }
+  );
 }
 
 export async function POST(request: Request) {

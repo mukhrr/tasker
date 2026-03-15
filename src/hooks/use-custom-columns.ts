@@ -8,10 +8,23 @@ import type {
   CustomFieldType,
 } from '@/types/database';
 
+const supabase = createClient();
+
 export function useCustomColumns(userId: string) {
   const [columns, setColumns] = useState<CustomColumn[]>([]);
   const [fieldValues, setFieldValues] = useState<CustomFieldValue[]>([]);
-  const supabase = createClient();
+
+  const fetchFieldValues = useCallback(async (columnIds: string[]) => {
+    if (columnIds.length === 0) {
+      setFieldValues([]);
+      return;
+    }
+    const { data } = await supabase
+      .from('custom_field_values')
+      .select('*')
+      .in('column_id', columnIds);
+    setFieldValues((data as CustomFieldValue[]) ?? []);
+  }, []);
 
   const fetchColumns = useCallback(async () => {
     const { data } = await supabase
@@ -19,17 +32,14 @@ export function useCustomColumns(userId: string) {
       .select('*')
       .eq('user_id', userId)
       .order('position');
-    setColumns((data as CustomColumn[]) ?? []);
-  }, [userId, supabase]);
-
-  const fetchFieldValues = useCallback(async () => {
-    const { data } = await supabase.from('custom_field_values').select('*');
-    setFieldValues((data as CustomFieldValue[]) ?? []);
-  }, [supabase]);
+    const cols = (data as CustomColumn[]) ?? [];
+    setColumns(cols);
+    // Fetch field values filtered by the user's column IDs
+    await fetchFieldValues(cols.map((c) => c.id));
+  }, [userId, fetchFieldValues]);
 
   useEffect(() => {
     fetchColumns();
-    fetchFieldValues();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 

@@ -5,11 +5,12 @@ import { createClient } from '@/lib/supabase/client';
 import { parseIssueUrl } from '@/lib/github';
 import type { Task, TaskStatus } from '@/types/database';
 
+const supabase = createClient();
+
 export function useTasks(userId: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
-  const supabase = createClient();
   const channelId = useRef(`tasks-realtime-${crypto.randomUUID()}`);
 
   const fetchTasks = useCallback(async () => {
@@ -31,7 +32,7 @@ export function useTasks(userId: string) {
     });
     setTasks(unique);
     setLoading(false);
-  }, [userId, supabase]);
+  }, [userId]);
 
   useEffect(() => {
     fetchTasks();
@@ -46,8 +47,24 @@ export function useTasks(userId: string) {
           table: 'tasks',
           filter: `user_id=eq.${userId}`,
         },
-        () => {
-          fetchTasks();
+        (payload) => {
+          const { eventType } = payload;
+          if (eventType === 'INSERT') {
+            const newTask = payload.new as Task;
+            setTasks((prev) => {
+              // Skip if already present (e.g. from optimistic add)
+              if (prev.some((t) => t.id === newTask.id)) return prev;
+              return [newTask, ...prev];
+            });
+          } else if (eventType === 'UPDATE') {
+            const updated = payload.new as Task;
+            setTasks((prev) =>
+              prev.map((t) => (t.id === updated.id ? updated : t))
+            );
+          } else if (eventType === 'DELETE') {
+            const deleted = payload.old as { id: string };
+            setTasks((prev) => prev.filter((t) => t.id !== deleted.id));
+          }
         }
       )
       .subscribe();

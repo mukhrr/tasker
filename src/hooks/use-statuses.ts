@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { UserStatus, TaskStatusGroup } from '@/types/database';
 
+const supabase = createClient();
+
 export function useStatuses(userId: string) {
   const [statuses, setStatuses] = useState<UserStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
 
   const fetchStatuses = useCallback(async () => {
     const { data } = await supabase
@@ -33,7 +34,7 @@ export function useStatuses(userId: string) {
       setStatuses(rows);
     }
     setLoading(false);
-  }, [userId, supabase]);
+  }, [userId]);
 
   useEffect(() => {
     fetchStatuses();
