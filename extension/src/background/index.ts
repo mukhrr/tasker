@@ -32,6 +32,10 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleUpdateStatus(msg.taskId, msg.status, msg.statusGroup);
     case 'CREATE_TASK':
       return handleCreateTask(msg.owner, msg.repo, msg.number);
+    case 'QUERY_TASKS_BATCH':
+      return handleQueryTasksBatch(msg.owner, msg.repo, msg.issueNumbers);
+    case 'UPDATE_LINKED_STATUSES':
+      return handleUpdateLinkedStatuses(msg.owner, msg.repo, msg.issueNumbers, msg.status, msg.statusGroup);
     default:
       return { ok: false, error: 'Unknown message type' };
   }
@@ -176,6 +180,53 @@ async function handleUpdateStatus(taskId: string, status: string, statusGroup: s
     .update({ status, status_group: statusGroup })
     .eq('id', taskId)
     .eq('user_id', session.session.user.id);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+async function handleQueryTasksBatch(owner: string, repo: string, issueNumbers: number[]): Promise<MessageResponse<Task[]>> {
+  if (!issueNumbers.length) return { ok: true, data: [] };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .in('issue_number', issueNumbers);
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: (data ?? []) as Task[] };
+}
+
+async function handleUpdateLinkedStatuses(
+  owner: string,
+  repo: string,
+  issueNumbers: number[],
+  status: string,
+  statusGroup: string,
+): Promise<MessageResponse> {
+  if (!issueNumbers.length) return { ok: true };
+
+  const validGroups = ['todo', 'in_progress', 'complete'];
+  if (!validGroups.includes(statusGroup)) return { ok: false, error: 'Invalid status group' };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { error } = await supabase
+    .from('tasks')
+    .update({ status, status_group: statusGroup })
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .in('issue_number', issueNumbers);
 
   if (error) return { ok: false, error: error.message };
   return { ok: true };

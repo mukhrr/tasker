@@ -39,6 +39,22 @@ export interface CreateTaskRequest {
   number: number;
 }
 
+export interface QueryTasksBatchRequest {
+  type: 'QUERY_TASKS_BATCH';
+  owner: string;
+  repo: string;
+  issueNumbers: number[];
+}
+
+export interface UpdateLinkedStatusesRequest {
+  type: 'UPDATE_LINKED_STATUSES';
+  owner: string;
+  repo: string;
+  issueNumbers: number[];
+  status: string;
+  statusGroup: string;
+}
+
 export type MessageRequest =
   | LoginGithubRequest
   | LogoutRequest
@@ -46,7 +62,9 @@ export type MessageRequest =
   | QueryTaskRequest
   | QueryStatusesRequest
   | UpdateStatusRequest
-  | CreateTaskRequest;
+  | CreateTaskRequest
+  | QueryTasksBatchRequest
+  | UpdateLinkedStatusesRequest;
 
 // ── Response types ──
 
@@ -67,3 +85,4 @@ export type TaskResponse = MessageResponse<Task | null>;
 export type StatusesResponse = MessageResponse<UserStatus[]>;
 export type UpdateResponse = MessageResponse<void>;
 export type CreateTaskResponse = MessageResponse<Task>;
+export type TasksBatchResponse = MessageResponse<Task[]>;

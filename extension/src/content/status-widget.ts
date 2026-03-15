@@ -1,5 +1,5 @@
 import type { Task, UserStatus, TaskStatusGroup } from '../shared/types';
-import type { MessageRequest, TaskResponse, StatusesResponse, UpdateResponse, CreateTaskResponse } from '../shared/messages';
+import type { MessageRequest, TaskResponse, StatusesResponse, UpdateResponse, CreateTaskResponse, TasksBatchResponse } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
 
 function sendMessage<T>(msg: MessageRequest): Promise<T> {
@@ -16,11 +16,14 @@ function getColorHex(colorName: string): string {
   return COLOR_HEX[colorName] ?? COLOR_HEX.gray;
 }
 
+type WidgetMode = 'issue' | 'pr';
+
 export class StatusWidget {
   private container: HTMLDivElement;
   private shadow: ShadowRoot;
   private root: HTMLDivElement;
   private task: Task | null = null;
+  private linkedTasks: Task[] = [];
   private statuses: UserStatus[] = [];
   private dropdownOpen = false;
   private loading = true;
@@ -28,23 +31,33 @@ export class StatusWidget {
   private owner: string;
   private repo: string;
   private number: number;
+  private mode: WidgetMode;
+  private linkedIssueNumbers: number[];
 
-  constructor(owner: string, repo: string, number: number) {
+  constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
     this.owner = owner;
     this.repo = repo;
     this.number = number;
+    this.mode = mode;
+    this.linkedIssueNumbers = linkedIssueNumbers;
 
     this.container = document.createElement('div');
     this.container.id = 'tasker-status-widget';
+    if (mode === 'pr') {
+      this.container.style.display = 'inline-flex';
+      this.container.style.alignItems = 'center';
+      this.container.style.flexShrink = '0';
+      this.container.style.alignSelf = 'start';
+      this.container.style.position = 'relative';
+    }
     this.shadow = this.container.attachShadow({ mode: 'closed' });
     this.root = document.createElement('div');
     this.shadow.appendChild(this.root);
 
     const style = document.createElement('style');
-    style.textContent = this.getStyles();
+    style.textContent = this.mode === 'pr' ? this.getHeaderStyles() : this.getSidebarStyles();
     this.shadow.appendChild(style);
 
-    // Close dropdown on outside click
     document.addEventListener('click', (e) => {
       if (!this.container.contains(e.target as Node) && this.dropdownOpen) {
         this.dropdownOpen = false;
@@ -63,7 +76,6 @@ export class StatusWidget {
     this.render();
 
     try {
-      // Fetch session first
       const sessionRes = await sendMessage<{ ok: boolean; data?: { userId: string } | null }>({ type: 'GET_SESSION' });
       if (!sessionRes.ok || !sessionRes.data) {
         this.loading = false;
@@ -72,20 +84,10 @@ export class StatusWidget {
         return;
       }
 
-      // Fetch task and statuses in parallel
-      const [taskRes, statusesRes] = await Promise.all([
-        sendMessage<TaskResponse>({ type: 'QUERY_TASK', owner: this.owner, repo: this.repo, number: this.number }),
-        sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
-      ]);
-
-      if (!taskRes.ok) {
-        this.error = taskRes.error ?? 'Failed to load task';
+      if (this.mode === 'pr') {
+        await this.initPr();
       } else {
-        this.task = taskRes.data ?? null;
-      }
-
-      if (statusesRes.ok && statusesRes.data) {
-        this.statuses = statusesRes.data;
+        await this.initIssue();
       }
     } catch (err) {
       this.error = (err as Error).message ?? 'Connection error';
@@ -95,7 +97,200 @@ export class StatusWidget {
     this.render();
   }
 
+  private async initIssue() {
+    const [taskRes, statusesRes] = await Promise.all([
+      sendMessage<TaskResponse>({ type: 'QUERY_TASK', owner: this.owner, repo: this.repo, number: this.number }),
+      sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
+    ]);
+
+    if (!taskRes.ok) {
+      this.error = taskRes.error ?? 'Failed to load task';
+    } else {
+      this.task = taskRes.data ?? null;
+    }
+
+    if (statusesRes.ok && statusesRes.data) {
+      this.statuses = statusesRes.data;
+    }
+  }
+
+  private async initPr() {
+    if (this.linkedIssueNumbers.length === 0) {
+      this.error = 'No linked issues found';
+      return;
+    }
+
+    const [batchRes, statusesRes] = await Promise.all([
+      sendMessage<TasksBatchResponse>({ type: 'QUERY_TASKS_BATCH', owner: this.owner, repo: this.repo, issueNumbers: this.linkedIssueNumbers }),
+      sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
+    ]);
+
+    if (!batchRes.ok) {
+      this.error = batchRes.error ?? 'Failed to load tasks';
+    } else {
+      this.linkedTasks = batchRes.data ?? [];
+    }
+
+    if (statusesRes.ok && statusesRes.data) {
+      this.statuses = statusesRes.data;
+    }
+  }
+
   private render() {
+    if (this.mode === 'pr') {
+      this.renderPr();
+    } else {
+      this.renderSidebar();
+    }
+  }
+
+  // ── PR mode ──
+
+  private renderPr() {
+    const dark = isDarkMode();
+    this.root.innerHTML = '';
+    this.root.className = `tasker-header ${dark ? 'dark' : 'light'}`;
+
+    if (this.loading) {
+      this.root.innerHTML = `<button class="tasker-btn" disabled><div class="spinner"></div> Tasker</button>`;
+      return;
+    }
+
+    if (this.error) {
+      // Don't show widget if no linked issues or not signed in
+      this.root.innerHTML = '';
+      return;
+    }
+
+    if (this.linkedTasks.length === 0) {
+      // No tracked tasks among linked issues — hide
+      return;
+    }
+
+    this.renderPrStatusBadge();
+  }
+
+  private renderPrStatusBadge() {
+    // Determine a common status, or show "Mixed" if they differ
+    const statusKeys = new Set(this.linkedTasks.map(t => t.status));
+    const isMixed = statusKeys.size > 1;
+    let displayStatus: UserStatus | undefined;
+    let colorHex: string;
+    let label: string;
+
+    if (isMixed) {
+      colorHex = COLOR_HEX.purple;
+      label = 'Mixed';
+    } else {
+      const key = this.linkedTasks[0].status;
+      displayStatus = this.statuses.find(s => s.key === key);
+      colorHex = displayStatus ? getColorHex(displayStatus.color) : getColorHex('gray');
+      label = displayStatus?.label ?? key;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tasker-wrapper';
+
+    const btn = document.createElement('button');
+    btn.className = 'tasker-btn has-status';
+    btn.innerHTML = `
+      <span class="tasker-icon">T</span>
+      <span class="dot" style="background:${colorHex}"></span>
+      <span class="status-label">${this.escapeHtml(label)}</span>
+      <span class="linked-count">${this.linkedTasks.length} issue${this.linkedTasks.length > 1 ? 's' : ''}</span>
+      <span class="chevron">${this.dropdownOpen ? '&#9650;' : '&#9660;'}</span>
+    `;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.dropdownOpen = !this.dropdownOpen;
+      this.render();
+    });
+
+    wrapper.appendChild(btn);
+    this.root.appendChild(wrapper);
+
+    if (this.dropdownOpen) {
+      this.root.appendChild(this.renderPrDropdown());
+    }
+  }
+
+  private renderPrDropdown(): HTMLDivElement {
+    const dropdown = document.createElement('div');
+    dropdown.className = 'dropdown';
+
+    // Show which issues will be updated
+    const notice = document.createElement('div');
+    notice.className = 'linked-notice';
+    notice.innerHTML = `Updating <strong>${this.linkedTasks.length}</strong> tracked issue${this.linkedTasks.length > 1 ? 's' : ''}: ${this.linkedTasks.map(t => `#${t.issue_number}`).join(', ')}`;
+    dropdown.appendChild(notice);
+
+    const grouped = this.groupStatuses();
+
+    for (const group of STATUS_GROUP_ORDER) {
+      const items = grouped[group];
+      if (!items || items.length === 0) continue;
+
+      const groupLabel = document.createElement('div');
+      groupLabel.className = 'group-label';
+      groupLabel.textContent = STATUS_GROUP_LABELS[group];
+      dropdown.appendChild(groupLabel);
+
+      for (const status of items) {
+        const allMatch = this.linkedTasks.every(t => t.status === status.key);
+        const row = document.createElement('button');
+        row.className = `status-row ${allMatch ? 'active' : ''}`;
+        row.innerHTML = `
+          <span class="dot" style="background:${getColorHex(status.color)}"></span>
+          <span class="label">${this.escapeHtml(status.label)}</span>
+        `;
+        row.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await this.updateLinkedStatuses(status.key, status.group_name);
+        });
+        dropdown.appendChild(row);
+      }
+    }
+
+    return dropdown;
+  }
+
+  private async updateLinkedStatuses(statusKey: string, groupName: TaskStatusGroup) {
+    const oldStatuses = this.linkedTasks.map(t => ({ status: t.status, group: t.status_group }));
+
+    // Optimistic update
+    for (const t of this.linkedTasks) {
+      t.status = statusKey;
+      t.status_group = groupName;
+    }
+    this.dropdownOpen = false;
+    this.render();
+
+    const issueNumbers = this.linkedTasks.map(t => t.issue_number).filter((n): n is number => n !== null);
+
+    const res = await sendMessage<UpdateResponse>({
+      type: 'UPDATE_LINKED_STATUSES',
+      owner: this.owner,
+      repo: this.repo,
+      issueNumbers,
+      status: statusKey,
+      statusGroup: groupName,
+    });
+
+    if (!res.ok) {
+      // Rollback
+      this.linkedTasks.forEach((t, i) => {
+        t.status = oldStatuses[i].status;
+        t.status_group = oldStatuses[i].group;
+      });
+      this.error = res.error ?? 'Update failed';
+      this.render();
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+  }
+
+  // ── Sidebar mode (Issue) ──
+
+  private renderSidebar() {
     const dark = isDarkMode();
     this.root.innerHTML = '';
     this.root.className = `tasker-root ${dark ? 'dark' : 'light'}`;
@@ -227,7 +422,6 @@ export class StatusWidget {
     const oldStatus = this.task.status;
     const oldGroup = this.task.status_group;
 
-    // Optimistic update
     this.task.status = statusKey;
     this.task.status_group = groupName;
     this.dropdownOpen = false;
@@ -241,7 +435,6 @@ export class StatusWidget {
     });
 
     if (!res.ok) {
-      // Rollback
       this.task.status = oldStatus;
       this.task.status_group = oldGroup;
       this.error = res.error ?? 'Update failed';
@@ -249,6 +442,8 @@ export class StatusWidget {
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
   }
+
+  // ── Shared helpers ──
 
   private groupStatuses(): Record<TaskStatusGroup, UserStatus[]> {
     const groups: Record<TaskStatusGroup, UserStatus[]> = {
@@ -275,7 +470,192 @@ export class StatusWidget {
     this.container.remove();
   }
 
-  private getStyles(): string {
+  // ── Header styles (PR pages) ──
+
+  private getHeaderStyles(): string {
+    return `
+      .tasker-header {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        font-size: 12px;
+        line-height: 1.5;
+        position: relative;
+      }
+
+      .tasker-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 0;
+      }
+
+      .tasker-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.15s;
+        white-space: nowrap;
+      }
+
+      .tasker-header.light .tasker-btn {
+        background: #f6f8fa;
+        color: #24292f;
+        border-color: #d1d9e0;
+      }
+      .tasker-header.light .tasker-btn:hover {
+        background: #eaeef2;
+      }
+      .tasker-header.dark .tasker-btn {
+        background: #21262d;
+        color: #e6edf3;
+        border-color: #3d444d;
+      }
+      .tasker-header.dark .tasker-btn:hover {
+        background: #292e36;
+      }
+
+      .tasker-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .tasker-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        background: #2563eb;
+        color: #fff;
+        border-radius: 4px;
+        font-weight: 800;
+        font-size: 11px;
+        flex-shrink: 0;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .status-label {
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .linked-count {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-weight: 600;
+      }
+      .tasker-header.light .linked-count {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+      .tasker-header.dark .linked-count {
+        background: #1e3a5f;
+        color: #93c5fd;
+      }
+
+      .chevron {
+        font-size: 8px;
+        opacity: 0.5;
+        margin-left: 2px;
+      }
+
+      .linked-notice {
+        font-size: 11px;
+        padding: 6px 10px;
+        font-weight: 500;
+        border-radius: 4px;
+        margin-bottom: 4px;
+      }
+      .linked-notice strong {
+        font-weight: 700;
+      }
+      .tasker-header.light .linked-notice {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+      .tasker-header.dark .linked-notice {
+        background: #1e3a5f;
+        color: #93c5fd;
+      }
+
+      .dropdown {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        min-width: 220px;
+        border-radius: 8px;
+        padding: 4px;
+        z-index: 100;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.16);
+        margin-top: 4px;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      .tasker-header.light .dropdown {
+        background: #fff;
+        border: 1px solid #d1d9e0;
+      }
+      .tasker-header.dark .dropdown {
+        background: #2d333b;
+        border: 1px solid #3d444d;
+      }
+
+      .group-label {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 6px 8px 2px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.6;
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px;
+        border: none;
+        border-radius: 4px;
+        background: transparent;
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+        font-size: 12px;
+        color: inherit;
+      }
+      .tasker-header.light .status-row:hover { background: #f6f8fa; }
+      .tasker-header.dark .status-row:hover { background: #373e47; }
+      .status-row.active { font-weight: 600; }
+
+      .label { flex: 1; }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid #d1d9e0;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    `;
+  }
+
+  // ── Sidebar styles (Issue pages) ──
+
+  private getSidebarStyles(): string {
     return `
       .tasker-root {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
@@ -284,12 +664,8 @@ export class StatusWidget {
         margin-top: 16px;
       }
 
-      .tasker-root.dark {
-        color: #e6edf3;
-      }
-      .tasker-root.light {
-        color: #1f2328;
-      }
+      .tasker-root.dark { color: #e6edf3; }
+      .tasker-root.light { color: #1f2328; }
 
       .section {
         border-top: 1px solid var(--border);
@@ -332,9 +708,7 @@ export class StatusWidget {
         flex-shrink: 0;
       }
 
-      .label {
-        flex: 1;
-      }
+      .label { flex: 1; }
 
       .chevron {
         font-size: 8px;
