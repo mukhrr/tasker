@@ -30,6 +30,7 @@ interface TaskRowProps {
     | 'handleUpdateTask'
     | 'handleDeleteTask'
     | 'handleSyncTask'
+    | 'handleArchiveTask'
     | 'deleteConfirmId'
     | 'setDeleteConfirmId'
     | 'addStatus'

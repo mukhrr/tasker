@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { RefreshCw, Trash2, Eye } from 'lucide-react';
+import { RefreshCw, Trash2, Eye, Archive, ArchiveRestore } from 'lucide-react';
 import {
   Tooltip,
   TooltipContent,
@@ -13,18 +13,22 @@ export function TaskRowActions({
   taskId,
   isSyncing,
   isConfirmingDelete,
+  isArchived,
   onSync,
   onDelete,
   onRequestDelete,
   onCancelDelete,
+  onArchive,
 }: {
   taskId: string;
   isSyncing: boolean;
   isConfirmingDelete: boolean;
+  isArchived: boolean;
   onSync: () => void;
   onDelete: () => void;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
+  onArchive: () => void;
 }) {
   if (isConfirmingDelete) {
     return (
@@ -63,6 +67,23 @@ export function TaskRowActions({
             />
           </TooltipTrigger>
           <TooltipContent>Sync</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                onClick={onArchive}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              />
+            }
+          >
+            {isArchived ? (
+              <ArchiveRestore className="h-3.5 w-3.5" />
+            ) : (
+              <Archive className="h-3.5 w-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent>{isArchived ? 'Unarchive' : 'Archive'}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger

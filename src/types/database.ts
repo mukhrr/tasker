@@ -33,6 +33,7 @@ export interface Task {
   repo_owner: string | null;
   repo_name: string | null;
   issue_number: number | null;
+  archived: boolean;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;

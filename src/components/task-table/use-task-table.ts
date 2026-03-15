@@ -20,7 +20,8 @@ import {
 } from './column-config';
 
 export function useTaskTable(userId: string) {
-  const tasksCrud = useTasks(userId);
+  const [showArchived, setShowArchived] = useState(false);
+  const tasksCrud = useTasks(userId, showArchived);
   const customColumns = useCustomColumns(userId);
   const statusesCrud = useStatuses(userId);
 
@@ -234,6 +235,18 @@ export function useTaskTable(userId: string) {
     [tasksCrud]
   );
 
+  const handleArchiveTask = useCallback(
+    async (id: string, archived: boolean) => {
+      try {
+        await tasksCrud.archiveTask(id, archived);
+        toast.success(archived ? 'Task archived' : 'Task unarchived');
+      } catch {
+        toast.error('Failed to update');
+      }
+    },
+    [tasksCrud]
+  );
+
   const handleSyncTask = useCallback(
     async (id: string) => {
       if (!hasApiKey) {
@@ -284,6 +297,11 @@ export function useTaskTable(userId: string) {
     lastSyncResult,
     hasApiKey,
     handleSync,
+
+    // Archive
+    showArchived,
+    setShowArchived,
+    handleArchiveTask,
 
     // CRUD
     handleAddTask,
