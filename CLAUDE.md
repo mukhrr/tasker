@@ -53,3 +53,4 @@ Both hooks take `userId` and subscribe to Supabase Realtime `postgres_changes`.
 - **Encryption**: AES-256-GCM for API keys and tokens. Format: `base64(iv):base64(authTag):base64(ciphertext)`. See `lib/encryption.ts`.
 - **GitHub URL parsing**: `lib/github.ts` has `parseIssueUrl()` and `parsePrUrl()` — extract owner/repo/number from URLs.
 - **Tailwind CSS v4** with PostCSS. CSS variables for dark/light theming.
+- **Browser extension**: After any changes in the `extension/` folder, bump the `version` in `extension/manifest.json` (semver patch/minor as appropriate).

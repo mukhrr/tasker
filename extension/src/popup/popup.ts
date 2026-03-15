@@ -22,11 +22,16 @@ function sendMessage<T>(msg: LoginGithubRequest | LogoutRequest | GetSessionRequ
 async function init() {
   const res = await sendMessage<SessionResponse>({ type: 'GET_SESSION' });
   if (res.ok && res.data) {
-    $('#user-email').textContent = res.data.email;
+    setUser(res.data.email);
     showView(loggedInView);
   } else {
     showView(loginView);
   }
+}
+
+function setUser(email: string) {
+  $('#user-email').textContent = email;
+  $('#user-avatar').textContent = email.charAt(0).toUpperCase();
 }
 
 // ── GitHub Login ──
@@ -42,7 +47,7 @@ $('#github-login-btn').addEventListener('click', async () => {
   const res = await sendMessage<LoginResponse>({ type: 'LOGIN_GITHUB' });
 
   if (res.ok && res.data) {
-    $('#user-email').textContent = res.data.email;
+    setUser(res.data.email);
     showView(loggedInView);
   } else {
     errorEl.textContent = res.error ?? 'Login failed';
