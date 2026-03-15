@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { parseIssueUrl } from '@/lib/github';
 import type { Task, TaskStatus } from '@/types/database';
 
-export function useTasks(userId: string, showArchived = false) {
+export function useTasks(userId: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
@@ -13,16 +13,11 @@ export function useTasks(userId: string, showArchived = false) {
   const channelId = useRef(`tasks-realtime-${crypto.randomUUID()}`);
 
   const fetchTasks = useCallback(async () => {
-    let query = supabase
+    const { data } = await supabase
       .from('tasks')
       .select('*')
-      .eq('user_id', userId);
-
-    if (!showArchived) {
-      query = query.eq('archived', false);
-    }
-
-    const { data } = await query.order('created_at', { ascending: false });
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
 
     // Deduplicate by repo+issue number (keep the first — most recent by created_at)
     const seen = new Set<string>();
@@ -36,7 +31,7 @@ export function useTasks(userId: string, showArchived = false) {
     });
     setTasks(unique);
     setLoading(false);
-  }, [userId, supabase, showArchived]);
+  }, [userId, supabase]);
 
   useEffect(() => {
     fetchTasks();
@@ -192,14 +187,9 @@ export function useTasks(userId: string, showArchived = false) {
   };
 
   const archiveTask = async (id: string, archived: boolean) => {
-    // Optimistic: remove from list if hiding archived
-    if (!showArchived && archived) {
-      setTasks((prev) => prev.filter((t) => t.id !== id));
-    } else {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, archived } : t))
-      );
-    }
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, archived } : t))
+    );
 
     const { error } = await supabase
       .from('tasks')

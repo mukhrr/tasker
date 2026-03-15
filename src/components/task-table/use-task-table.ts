@@ -20,8 +20,7 @@ import {
 } from './column-config';
 
 export function useTaskTable(userId: string) {
-  const [showArchived, setShowArchived] = useState(false);
-  const tasksCrud = useTasks(userId, showArchived);
+  const tasksCrud = useTasks(userId);
   const customColumns = useCustomColumns(userId);
   const statusesCrud = useStatuses(userId);
 
@@ -106,12 +105,17 @@ export function useTaskTable(userId: string) {
   const filteredTasks = useMemo(() => {
     let filtered = tasksCrud.tasks;
 
-    if (activeTab !== 'all') {
-      filtered = filtered.filter(
-        (t) =>
-          getStatusGroup(statusesCrud.statuses, t.status) ===
-          (activeTab as TaskStatusGroup)
-      );
+    if (activeTab === 'archived') {
+      filtered = filtered.filter((t) => t.archived);
+    } else {
+      filtered = filtered.filter((t) => !t.archived);
+      if (activeTab !== 'all') {
+        filtered = filtered.filter(
+          (t) =>
+            getStatusGroup(statusesCrud.statuses, t.status) ===
+            (activeTab as TaskStatusGroup)
+        );
+      }
     }
 
     // Apply filters
@@ -299,8 +303,6 @@ export function useTaskTable(userId: string) {
     handleSync,
 
     // Archive
-    showArchived,
-    setShowArchived,
     handleArchiveTask,
 
     // CRUD

@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
+import { getStatusByKey, getStatusColor } from '@/lib/status';
+import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
 import { StatusCell } from './cells/status-cell';
 import { DateCell } from './cells/date-cell';
@@ -52,7 +54,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
       : titleText;
 
   return (
-    <tr className="group/row border-b last:border-b-0 hover:bg-muted/30">
+    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${task.archived ? 'opacity-50' : ''}`}>
       {/* Issue column (always first) */}
       <td className="max-w-[280px] px-3 py-2 sm:px-4">
         {isSyncing && !task.issue_title ? (
@@ -107,6 +109,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
               task={task}
               isSyncing={isSyncing}
               search={search}
+              readOnly={task.archived}
               ctx={ctx}
             />
           </td>
@@ -129,6 +132,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
           taskId={task.id}
           isSyncing={isSyncing}
           isConfirmingDelete={isConfirmingDelete}
+          isArchived={task.archived}
           onSync={() => ctx.handleSyncTask(task.id)}
           onDelete={() => {
             ctx.handleDeleteTask(task.id);
@@ -136,6 +140,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
           }}
           onRequestDelete={() => ctx.setDeleteConfirmId(task.id)}
           onCancelDelete={() => ctx.setDeleteConfirmId(null)}
+          onArchive={() => ctx.handleArchiveTask(task.id, !task.archived)}
         />
       </td>
     </tr>
@@ -160,12 +165,14 @@ function CellContent({
   task,
   isSyncing,
   search,
+  readOnly,
   ctx,
 }: {
   columnKey: ColumnKey;
   task: Task;
   isSyncing: boolean;
   search: string;
+  readOnly?: boolean;
   ctx: Pick<
     TaskTableContext,
     | 'statuses'
@@ -175,6 +182,9 @@ function CellContent({
     | 'deleteStatus'
   >;
 }) {
+  if (readOnly) {
+    return <ReadOnlyCell columnKey={columnKey} task={task} search={search} statuses={ctx.statuses} />;
+  }
   switch (columnKey) {
     case 'pr':
       return isSyncing && !task.pr_url ? (
@@ -251,6 +261,75 @@ function CellContent({
           onChange={(note) => ctx.handleUpdateTask(task.id, { note })}
           highlight={search}
         />
+      );
+
+    default:
+      return null;
+  }
+}
+
+function ReadOnlyCell({
+  columnKey,
+  task,
+  search,
+  statuses,
+}: {
+  columnKey: ColumnKey;
+  task: Task;
+  search: string;
+  statuses: UserStatus[];
+}) {
+  switch (columnKey) {
+    case 'pr':
+      return task.pr_url ? (
+        <a
+          href={normalizeUrl(task.pr_url)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-muted-foreground hover:underline"
+        >
+          {shortenGitHubUrl(task.pr_url)}
+        </a>
+      ) : (
+        <span className="text-sm text-muted-foreground">—</span>
+      );
+
+    case 'status': {
+      const s = getStatusByKey(statuses, task.status);
+      if (!s) return <span className="text-sm text-muted-foreground">—</span>;
+      const color = getStatusColor(s.color);
+      return (
+        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${color.badge}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
+          {s.label}
+        </span>
+      );
+    }
+
+    case 'amount':
+      return (
+        <span className="text-sm text-muted-foreground">
+          {task.amount != null ? `$${task.amount.toLocaleString()}` : '—'}
+        </span>
+      );
+
+    case 'assigned':
+    case 'payment': {
+      const date = columnKey === 'assigned' ? task.assigned_date : task.payment_date;
+      return (
+        <span className="text-sm text-muted-foreground">
+          {date ? new Date(date).toLocaleDateString() : '—'}
+        </span>
+      );
+    }
+
+    case 'note':
+      return task.note ? (
+        <span className="line-clamp-2 text-sm text-muted-foreground">
+          <HighlightText text={task.note} query={search} />
+        </span>
+      ) : (
+        <span className="text-sm text-muted-foreground">—</span>
       );
 
     default:

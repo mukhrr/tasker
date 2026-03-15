@@ -49,6 +49,41 @@ export function TaskRowActions({
     );
   }
 
+  if (isArchived) {
+    return (
+      <TooltipProvider delay={400}>
+        <div className="flex items-center">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  onClick={onArchive}
+                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                />
+              }
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>Unarchive</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Link
+                  href={`/tasks/${taskId}`}
+                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                />
+              }
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>View</TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider delay={400}>
       <div className="flex items-center">
@@ -77,13 +112,9 @@ export function TaskRowActions({
               />
             }
           >
-            {isArchived ? (
-              <ArchiveRestore className="h-3.5 w-3.5" />
-            ) : (
-              <Archive className="h-3.5 w-3.5" />
-            )}
+            <Archive className="h-3.5 w-3.5" />
           </TooltipTrigger>
-          <TooltipContent>{isArchived ? 'Unarchive' : 'Archive'}</TooltipContent>
+          <TooltipContent>Archive</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger

@@ -122,6 +122,7 @@ export function Toolbar({
     { value: 'todo', label: 'To-do' },
     { value: 'in_progress', label: 'In Progress' },
     { value: 'complete', label: 'Complete' },
+    { value: 'archived', label: 'Archived' },
   ];
 
   // Draggable columns list (exclude locked 'issue' from reordering)
