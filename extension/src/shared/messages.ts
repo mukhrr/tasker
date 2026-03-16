@@ -77,6 +77,7 @@ export interface MessageResponse<T = unknown> {
 export interface SessionData {
   userId: string;
   email: string;
+  username: string;
 }
 
 export type LoginResponse = MessageResponse<SessionData>;

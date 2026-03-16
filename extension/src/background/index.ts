@@ -80,7 +80,11 @@ async function handleGithubLogin(): Promise<MessageResponse<SessionData>> {
 
   return {
     ok: true,
-    data: { userId: data.user.id, email: data.user.email ?? '' },
+    data: {
+      userId: data.user.id,
+      email: data.user.email ?? '',
+      username: (data.user.user_metadata?.user_name ?? data.user.user_metadata?.preferred_username ?? '') as string,
+    },
   };
 }
 
@@ -106,6 +110,7 @@ async function handleGetSession(): Promise<MessageResponse<SessionData | null>> 
       data: {
         userId: data.session.user.id,
         email: data.session.user.email ?? '',
+        username: (data.session.user.user_metadata?.user_name ?? data.session.user.user_metadata?.preferred_username ?? '') as string,
       },
     };
   } catch {

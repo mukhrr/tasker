@@ -48,7 +48,7 @@ export function Navbar({ user }: { user: User }) {
     <nav className="border-b">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 sm:gap-6">
-          <Link href="/tasks" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2">
             <Image
               src="/logo.png"
               alt="Tasker"

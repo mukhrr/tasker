@@ -22,16 +22,16 @@ function sendMessage<T>(msg: LoginGithubRequest | LogoutRequest | GetSessionRequ
 async function init() {
   const res = await sendMessage<SessionResponse>({ type: 'GET_SESSION' });
   if (res.ok && res.data) {
-    setUser(res.data.email);
+    setUser(res.data.username || res.data.email);
     showView(loggedInView);
   } else {
     showView(loginView);
   }
 }
 
-function setUser(email: string) {
-  $('#user-email').textContent = email;
-  $('#user-avatar').textContent = email.charAt(0).toUpperCase();
+function setUser(name: string) {
+  $('#user-email').textContent = `@${name}`;
+  $('#user-avatar').textContent = name.charAt(0).toUpperCase();
 }
 
 // ── GitHub Login ──
@@ -47,7 +47,7 @@ $('#github-login-btn').addEventListener('click', async () => {
   const res = await sendMessage<LoginResponse>({ type: 'LOGIN_GITHUB' });
 
   if (res.ok && res.data) {
-    setUser(res.data.email);
+    setUser(res.data.username || res.data.email);
     showView(loggedInView);
   } else {
     errorEl.textContent = res.error ?? 'Login failed';
@@ -70,4 +70,22 @@ $('#logout-btn').addEventListener('click', async () => {
   showView(loginView);
 });
 
+// ── Star count ──
+
+async function fetchStarCount() {
+  try {
+    const res = await fetch('https://api.github.com/repos/mukhrr/tasker');
+    const data = await res.json();
+    if (typeof data.stargazers_count === 'number') {
+      const countEl = document.querySelector('#star-count');
+      if (countEl) {
+        const n = data.stargazers_count;
+        countEl.textContent = n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n);
+        countEl.classList.remove('hidden');
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+fetchStarCount();
 init();
