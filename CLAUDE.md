@@ -19,9 +19,10 @@ No test framework is configured yet.
 
 ### Route Groups
 
-- `src/app/(dashboard)/` — Protected routes (tasks, settings). Layout checks Supabase session; redirects to `/auth/login` if unauthenticated.
+- `src/app/(dashboard)/` — Protected routes (tasks, settings). Layout checks Supabase session; redirects to `/auth/login` if unauthenticated. Includes `dashboard/` (stats/analytics) and `tasks/[id]/` (single task detail).
 - `src/app/auth/` — Login, signup, OAuth callback. Layout has decorative left panel.
-- `src/app/api/` — API routes: `sync/` (POST triggers AI sync), `sync/status/` (GET), `settings/` (GET/POST), `cron/sync/` (GET, bearer-token protected).
+- `src/app/api/` — API routes: `sync/` (POST triggers AI sync), `sync/task/` (POST single-task sync), `sync/status/` (GET), `settings/` (GET/POST), `cron/sync/` (GET, bearer-token protected).
+- `src/app/privacy/` — Privacy policy (public page).
 
 ### Supabase Three-Client Pattern
 
@@ -35,14 +36,17 @@ LangGraph StateGraph that loops over tasks: `fetchGithubData → advanceOrFinish
 
 ### Task Table (`components/task-table/`)
 
-Notion-style inline-editable table. Cell components in `cells/` subfolder (status-cell, url-cell, text-cell, date-cell, amount-cell). Each cell handles its own edit mode. The table uses `useTasks` and `useCustomColumns` hooks for CRUD with optimistic updates and Supabase Realtime subscriptions.
+Notion-style inline-editable table. Cell components in `cells/` subfolder (status-cell, url-cell, text-cell, date-cell, amount-cell, note-cell). Each cell handles its own edit mode. The table uses `useTasks` and `useCustomColumns` hooks for CRUD with optimistic updates and Supabase Realtime subscriptions.
 
 ### Hooks (`hooks/`)
 
 - `use-tasks.ts` — CRUD + realtime subscription on `tasks` table. Optimistic updates with rollback.
 - `use-custom-columns.ts` — Custom column CRUD + field value upserts. Position-ordered.
+- `use-statuses.ts` — Custom status CRUD with `user_statuses` table.
+- `use-dashboard-stats.ts` — Derived stats (earnings, counts, charts) from task data.
+- `use-media-query.ts` — Responsive breakpoint hook.
 
-Both hooks take `userId` and subscribe to Supabase Realtime `postgres_changes`.
+`use-tasks` and `use-custom-columns` take `userId` and subscribe to Supabase Realtime `postgres_changes`.
 
 ### Browser Extension (`extension/`)
 

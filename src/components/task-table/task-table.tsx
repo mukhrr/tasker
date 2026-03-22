@@ -87,7 +87,7 @@ export function TaskTable({ userId }: { userId: string }) {
                 <th className="w-10 px-2 py-2.5">
                   <AddColumnButton onAdd={ctx.addColumn} />
                 </th> */}
-                <th className="w-10 px-2 py-2.5 text-left">
+                <th className="sticky right-0 z-20 w-10 bg-muted px-2 py-2.5 text-left backdrop-blur-sm">
                   <span className="text-sm font-medium text-muted-foreground">
                     Actions
                   </span>

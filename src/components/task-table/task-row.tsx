@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
-import { getStatusByKey, getStatusColor } from '@/lib/status';
+import { getStatusByKey, getStatusColor, getStaleRowBg } from '@/lib/status';
 import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
 import { StatusCell } from './cells/status-cell';
@@ -53,10 +53,12 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
       ? titleText.slice(0, TRUNCATE_LENGTH) + '…'
       : titleText;
 
+  const staleRowBg = getStaleRowBg(ctx.statuses, task.status, task.status_changed_at);
+
   return (
-    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${task.archived ? 'opacity-50' : ''}`}>
+    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}>
       {/* Issue column (always first) */}
-      <td className="max-w-[280px] px-3 py-2 sm:px-4">
+      <td className="min-w-[300px] max-w-[450px] px-3 py-2 sm:px-4">
         {isSyncing && !task.issue_title ? (
           <Skeleton className="h-4 w-36" />
         ) : (
@@ -127,7 +129,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
       ))} */}
 
       {/* Actions */}
-      <td className="px-2 py-2">
+      <td className="sticky right-0 bg-muted/50 px-2 py-2 backdrop-blur-xs">
         <TaskRowActions
           taskId={task.id}
           isSyncing={isSyncing}
@@ -154,7 +156,7 @@ function getCellClassName(key: ColumnKey): string {
     case 'payment':
       return 'whitespace-nowrap px-3 py-2 sm:px-4';
     case 'note':
-      return 'min-w-[250px] max-w-[350px] px-3 py-2 sm:px-4';
+      return 'min-w-[150px] max-w-[250px] px-3 py-2 sm:px-4';
     default:
       return 'px-3 py-2 sm:px-4';
   }

@@ -141,6 +141,7 @@ export function useTasks(userId: string) {
       ai_summary: null,
       archived: false,
       last_synced_at: null,
+      status_changed_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -181,6 +182,11 @@ export function useTasks(userId: string) {
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {
+    // Track status change timestamp
+    if ('status' in updates) {
+      updates.status_changed_at = new Date().toISOString();
+    }
+
     // Optimistic update
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))

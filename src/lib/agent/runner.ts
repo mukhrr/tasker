@@ -150,6 +150,7 @@ export async function runSync(
           !wasManuallyEdited
         ) {
           updateData.status = update.suggestedStatus;
+          updateData.status_changed_at = new Date().toISOString();
           // Derive status_group from user's statuses
           const matchedStatus = (finalStatuses as UserStatus[])?.find(
             (s) => s.key === update.suggestedStatus
