@@ -57,7 +57,7 @@ export function TaskTable({ userId }: { userId: string }) {
       />
 
       <div className="rounded-lg border">
-        <div className="-mx-px max-h-[calc(100vh-280px)] overflow-auto">
+        <div className="scrollbar-thin -mx-px max-h-[calc(100vh-280px)] overflow-auto">
           <table className="w-full min-w-[700px] text-[0.9rem]">
             <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur-sm">
               <tr className="border-b">
