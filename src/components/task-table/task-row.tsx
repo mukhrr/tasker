@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
 import { getStatusByKey, getStatusColor, getStaleRowBg } from '@/lib/status';
 import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
+import { IssueCell } from './cells/issue-cell';
 import { StatusCell } from './cells/status-cell';
 import { DateCell } from './cells/date-cell';
 import { AmountCell } from './cells/amount-cell';
@@ -12,7 +12,6 @@ import { TextCell } from './cells/text-cell';
 import { NoteCell } from './cells/note-cell';
 import { HighlightText } from './highlight-text';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ExternalLink } from 'lucide-react';
 import { TaskRowActions } from './task-row-actions';
 import type { Task } from '@/types/database';
 import type { ColumnKey } from './column-config';
@@ -43,15 +42,6 @@ interface TaskRowProps {
 
 export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: TaskRowProps) {
   const isConfirmingDelete = ctx.deleteConfirmId === task.id;
-  const [titleExpanded, setTitleExpanded] = useState(false);
-
-  const titleText = task.issue_title || shortenGitHubUrl(task.issue_url);
-  const TRUNCATE_LENGTH = 80;
-  const isTitleTruncatable = titleText.length > TRUNCATE_LENGTH;
-  const displayTitle =
-    !titleExpanded && isTitleTruncatable
-      ? titleText.slice(0, TRUNCATE_LENGTH) + '…'
-      : titleText;
 
   const staleRowBg = getStaleRowBg(ctx.statuses, task.status, task.status_changed_at);
 
@@ -61,31 +51,19 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
       <td className="min-w-[300px] max-w-[450px] px-3 py-2 sm:px-4">
         {isSyncing && !task.issue_title ? (
           <Skeleton className="h-4 w-36" />
-        ) : (
+        ) : task.archived ? (
           <div>
             <a
               href={normalizeUrl(task.issue_url)}
               target="_blank"
               rel="noopener noreferrer"
-              className="group/issue inline"
-              onClick={(e) => e.stopPropagation()}
+              className="text-sm font-medium text-foreground hover:underline"
             >
-              <span className="text-sm font-medium text-foreground group-hover/issue:underline">
-                <HighlightText text={displayTitle} query={search} />
-                <ExternalLink className="ml-1 inline-block h-3 w-3 opacity-0 transition-opacity group-hover/issue:opacity-100" />
-              </span>
+              <HighlightText
+                text={task.issue_title || shortenGitHubUrl(task.issue_url)}
+                query={search}
+              />
             </a>
-            {isTitleTruncatable && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setTitleExpanded(!titleExpanded);
-                }}
-                className="ml-1 text-sm text-muted-foreground hover:text-foreground"
-              >
-                {titleExpanded ? 'show less' : 'more'}
-              </button>
-            )}
             {task.issue_title && (
               <div className="line-clamp-1 text-xs text-muted-foreground">
                 <HighlightText
@@ -95,6 +73,13 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
               </div>
             )}
           </div>
+        ) : (
+          <IssueCell
+            issueUrl={task.issue_url}
+            issueTitle={task.issue_title}
+            onChange={(title) => ctx.handleUpdateTask(task.id, { issue_title: title })}
+            highlight={search}
+          />
         )}
       </td>
 
