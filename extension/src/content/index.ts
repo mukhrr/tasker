@@ -1,7 +1,9 @@
-import { parseGitHubUrl } from './github-url';
+import { parseGitHubUrl, parseIssuesListUrl } from './github-url';
 import { StatusWidget } from './status-widget';
+import { IssueListWatcher } from './issues-list';
 
 let currentWidget: StatusWidget | null = null;
+let currentListWatcher: IssueListWatcher | null = null;
 let lastUrl = '';
 
 function findSidebar(): Element | null {
@@ -56,6 +58,17 @@ function mountWidget() {
   if (currentWidget) {
     currentWidget.destroy();
     currentWidget = null;
+  }
+  if (currentListWatcher) {
+    currentListWatcher.destroy();
+    currentListWatcher = null;
+  }
+
+  const list = parseIssuesListUrl(url);
+  if (list) {
+    currentListWatcher = new IssueListWatcher(list.owner, list.repo);
+    void currentListWatcher.init();
+    return;
   }
 
   const parsed = parseGitHubUrl(url);

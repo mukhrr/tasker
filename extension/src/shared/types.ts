@@ -14,6 +14,29 @@ export interface UserStatus {
   created_at: string;
 }
 
+export type NotifyChannel = 'browser' | 'telegram';
+
+export interface ExtensionSettings {
+  autoRefreshEnabled: boolean;
+  autoRefreshSeconds: number;
+  notifyHelpWanted: boolean;
+  notifyChannels: NotifyChannel[];
+  telegramChatId: string;
+  telegramTokenSaved: boolean;
+  pollSeconds: number;
+}
+
+export interface HelpWantedIssue {
+  number: number;
+  title: string;
+  url: string;
+}
+
+export interface WatchlistEntry {
+  owner: string;
+  repo: string;
+}
+
 export interface Task {
   id: string;
   user_id: string;

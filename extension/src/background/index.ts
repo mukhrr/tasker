@@ -2,6 +2,14 @@ import { getSupabaseClient, resetClient } from './supabase';
 import { SUPABASE_URL } from '../env';
 import type { MessageRequest, MessageResponse, SessionData } from '../shared/messages';
 import type { Task, UserStatus } from '../shared/types';
+import { handleTestTelegram } from './telegram';
+import {
+  handleSendHelpWantedNotification,
+  handleTestBrowserNotification,
+  handleTestNotification,
+  registerBrowserNotificationClicks,
+} from './notifier';
+import { registerAlarmListener, scheduleAlarm } from './poller';
 
 chrome.runtime.onMessage.addListener((message: MessageRequest, sender, sendResponse) => {
   // Only accept messages from our own extension (popup + content scripts)
@@ -36,10 +44,27 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleQueryTasksBatch(msg.owner, msg.repo, msg.issueNumbers);
     case 'UPDATE_LINKED_STATUSES':
       return handleUpdateLinkedStatuses(msg.owner, msg.repo, msg.issueNumbers, msg.status, msg.statusGroup);
+    case 'SEND_HELP_WANTED':
+      return handleSendHelpWantedNotification(msg.owner, msg.repo, msg.number, msg.title, msg.url);
+    case 'TEST_TELEGRAM':
+      return handleTestTelegram(msg.token, msg.chatId);
+    case 'TEST_BROWSER_NOTIFICATION':
+      return handleTestBrowserNotification();
+    case 'TEST_NOTIFICATION':
+      return handleTestNotification();
+    case 'RESCHEDULE_POLLER':
+      await scheduleAlarm();
+      return { ok: true };
     default:
       return { ok: false, error: 'Unknown message type' };
   }
 }
+
+registerAlarmListener();
+registerBrowserNotificationClicks();
+chrome.runtime.onInstalled.addListener(() => { void scheduleAlarm(); });
+chrome.runtime.onStartup.addListener(() => { void scheduleAlarm(); });
+void scheduleAlarm();
 
 async function handleGithubLogin(): Promise<MessageResponse<SessionData>> {
   // Build the Supabase OAuth URL pointing to GitHub

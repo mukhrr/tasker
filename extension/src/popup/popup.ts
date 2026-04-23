@@ -1,4 +1,26 @@
-import type { LoginGithubRequest, LogoutRequest, GetSessionRequest, LoginResponse, SessionResponse } from '../shared/messages';
+import type {
+  LoginGithubRequest,
+  LogoutRequest,
+  GetSessionRequest,
+  LoginResponse,
+  SessionResponse,
+  TestNotificationRequest,
+  ReschedulePollerRequest,
+  MessageResponse,
+} from '../shared/messages';
+import type { NotifyChannel, WatchlistEntry } from '../shared/types';
+import { getSettings, setSettings } from '../shared/settings';
+import {
+  setTelegramToken,
+  hasTelegramToken,
+  clearTelegramToken,
+} from '../shared/secret-store';
+import {
+  getWatchlist,
+  addWatchlistEntry,
+  removeWatchlistEntry,
+  parseRepoInput,
+} from '../shared/watchlist';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -87,5 +109,176 @@ async function fetchStarCount() {
   } catch { /* ignore */ }
 }
 
+// ── Settings ──
+
+const settingsStatus = $('#settings-status');
+const tokenInput = $('#tg-token') as HTMLInputElement;
+const tokenSavedRow = $('#token-saved-row');
+const chatIdInput = $('#tg-chat-id') as HTMLInputElement;
+const autoRefreshToggle = $('#auto-refresh-toggle') as HTMLInputElement;
+const refreshSecondsInput = $('#refresh-seconds') as HTMLInputElement;
+const pollSecondsInput = $('#poll-seconds') as HTMLInputElement;
+const notifyToggle = $('#notify-toggle') as HTMLInputElement;
+const channelBrowser = $('#channel-browser') as HTMLInputElement;
+const channelTelegram = $('#channel-telegram') as HTMLInputElement;
+const watchlistEl = $('#watchlist');
+const watchlistInput = $('#watchlist-input') as HTMLInputElement;
+
+function showStatus(text: string, kind: 'ok' | 'error'): void {
+  settingsStatus.textContent = text;
+  settingsStatus.classList.remove('hidden', 'status-ok', 'status-error');
+  settingsStatus.classList.add(kind === 'ok' ? 'status-ok' : 'status-error');
+  window.setTimeout(() => settingsStatus.classList.add('hidden'), 4000);
+}
+
+function renderTokenState(hasToken: boolean): void {
+  if (hasToken) {
+    tokenInput.classList.add('hidden');
+    tokenInput.value = '';
+    tokenSavedRow.classList.remove('hidden');
+  } else {
+    tokenInput.classList.remove('hidden');
+    tokenSavedRow.classList.add('hidden');
+  }
+}
+
+function renderWatchlist(list: WatchlistEntry[]): void {
+  watchlistEl.innerHTML = '';
+  if (list.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'watchlist-empty';
+    empty.textContent = 'No repos watched yet';
+    watchlistEl.appendChild(empty);
+    return;
+  }
+  for (const entry of list) {
+    const row = document.createElement('div');
+    row.className = 'watchlist-item';
+
+    const label = document.createElement('span');
+    label.textContent = `${entry.owner}/${entry.repo}`;
+    row.appendChild(label);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'link-btn';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', async () => {
+      const next = await removeWatchlistEntry(entry.owner, entry.repo);
+      renderWatchlist(next);
+    });
+    row.appendChild(remove);
+
+    watchlistEl.appendChild(row);
+  }
+}
+
+async function loadSettingsIntoForm(): Promise<void> {
+  const settings = await getSettings();
+  autoRefreshToggle.checked = settings.autoRefreshEnabled;
+  refreshSecondsInput.value = String(settings.autoRefreshSeconds);
+  pollSecondsInput.value = String(settings.pollSeconds);
+  notifyToggle.checked = settings.notifyHelpWanted;
+  channelBrowser.checked = settings.notifyChannels.includes('browser');
+  channelTelegram.checked = settings.notifyChannels.includes('telegram');
+  chatIdInput.value = settings.telegramChatId;
+  renderTokenState(await hasTelegramToken());
+  renderWatchlist(await getWatchlist());
+}
+
+$('#watchlist-add-btn').addEventListener('click', async () => {
+  const parsed = parseRepoInput(watchlistInput.value);
+  if (!parsed) {
+    showStatus('Enter as owner/repo (e.g. Expensify/App)', 'error');
+    return;
+  }
+  try {
+    const next = await addWatchlistEntry(parsed.owner, parsed.repo);
+    watchlistInput.value = '';
+    renderWatchlist(next);
+    const msg: ReschedulePollerRequest = { type: 'RESCHEDULE_POLLER' };
+    void chrome.runtime.sendMessage(msg);
+  } catch (err) {
+    showStatus((err as Error).message, 'error');
+  }
+});
+
+watchlistInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    $('#watchlist-add-btn').click();
+  }
+});
+
+$('#test-notification-btn').addEventListener('click', async () => {
+  const channels: string[] = [];
+  if (channelBrowser.checked) channels.push('browser');
+  if (channelTelegram.checked) channels.push('telegram');
+  if (channels.length === 0) {
+    showStatus('Pick at least one channel (Browser / Telegram)', 'error');
+    return;
+  }
+
+  const req: TestNotificationRequest = { type: 'TEST_NOTIFICATION' };
+  const res = (await chrome.runtime.sendMessage(req)) as MessageResponse;
+  if (res.ok) {
+    showStatus(`Test sent via ${channels.join(' + ')}`, 'ok');
+  } else {
+    showStatus(res.error ?? 'Test failed', 'error');
+  }
+});
+
+$('#token-change-btn').addEventListener('click', async () => {
+  await clearTelegramToken();
+  renderTokenState(false);
+  tokenInput.focus();
+});
+
+$('#settings-save-btn').addEventListener('click', async () => {
+  const seconds = parseInt(refreshSecondsInput.value, 10);
+  if (!Number.isFinite(seconds) || seconds < 5) {
+    showStatus('Refresh interval must be at least 5 seconds', 'error');
+    return;
+  }
+  const poll = parseInt(pollSecondsInput.value, 10);
+  if (!Number.isFinite(poll) || poll < 30) {
+    showStatus('Poll interval must be at least 30 seconds', 'error');
+    return;
+  }
+
+  const channels: NotifyChannel[] = [];
+  if (channelBrowser.checked) channels.push('browser');
+  if (channelTelegram.checked) channels.push('telegram');
+  if (notifyToggle.checked && channels.length === 0) {
+    showStatus('Pick at least one notification channel', 'error');
+    return;
+  }
+
+  try {
+    await setSettings({
+      autoRefreshEnabled: autoRefreshToggle.checked,
+      autoRefreshSeconds: seconds,
+      pollSeconds: poll,
+      notifyHelpWanted: notifyToggle.checked,
+      notifyChannels: channels.length > 0 ? channels : ['browser'],
+      telegramChatId: chatIdInput.value.trim(),
+    });
+
+    const newToken = tokenInput.value.trim();
+    if (newToken) {
+      await setTelegramToken(newToken);
+      renderTokenState(true);
+    }
+
+    const msg: ReschedulePollerRequest = { type: 'RESCHEDULE_POLLER' };
+    void chrome.runtime.sendMessage(msg);
+
+    showStatus('Settings saved', 'ok');
+  } catch (err) {
+    showStatus((err as Error).message ?? 'Failed to save', 'error');
+  }
+});
+
 fetchStarCount();
 init();
+void loadSettingsIntoForm();

@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Tasker for GitHub",
-  "version": "1.0.6",
+  "version": "1.2.0",
   "description": "View and update Tasker task statuses directly on GitHub issues and PRs.",
-  "permissions": ["storage", "identity"],
+  "permissions": ["storage", "identity", "alarms", "notifications"],
   "host_permissions": [
     "https://github.com/*",
-    "https://*.supabase.co/*"
+    "https://*.supabase.co/*",
+    "https://api.telegram.org/*"
   ],
   "background": {
     "service_worker": "background.js"

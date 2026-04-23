@@ -55,6 +55,33 @@ export interface UpdateLinkedStatusesRequest {
   statusGroup: string;
 }
 
+export interface SendHelpWantedNotificationRequest {
+  type: 'SEND_HELP_WANTED';
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+}
+
+export interface TestTelegramRequest {
+  type: 'TEST_TELEGRAM';
+  token: string;
+  chatId: string;
+}
+
+export interface TestBrowserNotificationRequest {
+  type: 'TEST_BROWSER_NOTIFICATION';
+}
+
+export interface ReschedulePollerRequest {
+  type: 'RESCHEDULE_POLLER';
+}
+
+export interface TestNotificationRequest {
+  type: 'TEST_NOTIFICATION';
+}
+
 export type MessageRequest =
   | LoginGithubRequest
   | LogoutRequest
@@ -64,7 +91,12 @@ export type MessageRequest =
   | UpdateStatusRequest
   | CreateTaskRequest
   | QueryTasksBatchRequest
-  | UpdateLinkedStatusesRequest;
+  | UpdateLinkedStatusesRequest
+  | SendHelpWantedNotificationRequest
+  | TestTelegramRequest
+  | TestBrowserNotificationRequest
+  | ReschedulePollerRequest
+  | TestNotificationRequest;
 
 // ── Response types ──
 

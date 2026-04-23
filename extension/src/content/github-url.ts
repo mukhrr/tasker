@@ -5,6 +5,17 @@ export interface ParsedGitHubUrl {
   type: 'issue' | 'pr';
 }
 
+export interface ParsedIssuesListUrl {
+  owner: string;
+  repo: string;
+}
+
+export function parseIssuesListUrl(url: string): ParsedIssuesListUrl | null {
+  const match = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/?(?:\?.*)?(?:#.*)?$/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2] };
+}
+
 export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (issueMatch) {

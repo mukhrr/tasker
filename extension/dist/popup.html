@@ -132,6 +132,98 @@
             <div class="hint-caption">Button in the header — updates all linked issues</div>
           </div>
         </div>
+        <details id="settings-panel" class="settings">
+          <summary class="settings-summary">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 4.754a3.246 3.246 0 100 6.492 3.246 3.246 0 000-6.492zM5.754 8a2.246 2.246 0 114.492 0 2.246 2.246 0 01-4.492 0z"/>
+              <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 01-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 01-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 01.52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 011.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 011.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 01.52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 01-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 01-1.255-.52l-.094-.319z"/>
+            </svg>
+            <span>Settings</span>
+            <svg class="settings-chevron" width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
+            </svg>
+          </summary>
+
+          <div class="settings-body">
+            <label class="toggle-row">
+              <input type="checkbox" id="auto-refresh-toggle">
+              <span class="toggle-label">
+                <span class="toggle-title">Auto-refresh issues list</span>
+                <span class="toggle-desc">Reloads /issues pages periodically</span>
+              </span>
+            </label>
+
+            <div class="field-row">
+              <label for="refresh-seconds">Refresh every</label>
+              <div class="field-input">
+                <input type="number" id="refresh-seconds" min="5" max="3600" step="1" value="20">
+                <span class="field-suffix">seconds</span>
+              </div>
+            </div>
+
+            <div class="settings-divider"></div>
+
+            <label class="toggle-row">
+              <input type="checkbox" id="notify-toggle">
+              <span class="toggle-label">
+                <span class="toggle-title">Notify on new help-wanted issues</span>
+                <span class="toggle-desc">Polls watched repos in the background</span>
+              </span>
+            </label>
+
+            <div class="field-row">
+              <label for="poll-seconds">Poll every</label>
+              <div class="field-input">
+                <input type="number" id="poll-seconds" min="30" max="3600" step="15" value="45">
+                <span class="field-suffix">seconds</span>
+              </div>
+            </div>
+
+            <div class="channels-row">
+              <label class="channel-chip">
+                <input type="checkbox" id="channel-browser" value="browser">
+                <span>Browser</span>
+              </label>
+              <label class="channel-chip">
+                <input type="checkbox" id="channel-telegram" value="telegram">
+                <span>Telegram</span>
+              </label>
+            </div>
+
+            <div class="field-col">
+              <label>Watched repos</label>
+              <div id="watchlist" class="watchlist"></div>
+              <div class="watchlist-add">
+                <input type="text" id="watchlist-input" placeholder="owner/repo or GitHub URL" spellcheck="false">
+                <button type="button" id="watchlist-add-btn" class="btn btn-secondary compact">Add</button>
+              </div>
+            </div>
+
+            <details class="nested">
+              <summary>Telegram (optional)</summary>
+              <div class="field-col">
+                <label for="tg-token">Bot token</label>
+                <div id="token-saved-row" class="token-saved hidden">
+                  <span>••••••••• (saved)</span>
+                  <button type="button" id="token-change-btn" class="link-btn">Change</button>
+                </div>
+                <input type="password" id="tg-token" autocomplete="off" placeholder="123456:ABC-DEF..." spellcheck="false">
+              </div>
+              <div class="field-col">
+                <label for="tg-chat-id">Chat ID</label>
+                <input type="text" id="tg-chat-id" autocomplete="off" placeholder="e.g. 123456789" spellcheck="false">
+              </div>
+            </details>
+
+            <div class="settings-actions">
+              <button type="button" id="settings-save-btn" class="btn btn-primary">Save</button>
+              <button type="button" id="test-notification-btn" class="btn btn-secondary compact">Test notification</button>
+            </div>
+
+            <div id="settings-status" class="settings-status hidden"></div>
+          </div>
+        </details>
+
         <button id="logout-btn" class="btn btn-secondary">Sign Out</button>
       </div>
     </div>
