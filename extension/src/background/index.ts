@@ -45,7 +45,7 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
     case 'UPDATE_LINKED_STATUSES':
       return handleUpdateLinkedStatuses(msg.owner, msg.repo, msg.issueNumbers, msg.status, msg.statusGroup);
     case 'SEND_HELP_WANTED':
-      return handleSendHelpWantedNotification(msg.owner, msg.repo, msg.number, msg.title, msg.url);
+      return handleSendHelpWantedNotification(msg.owner, msg.repo, msg.number, msg.title, msg.url, msg.labels);
     case 'TEST_TELEGRAM':
       return handleTestTelegram(msg.token, msg.chatId);
     case 'TEST_BROWSER_NOTIFICATION':

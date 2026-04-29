@@ -1,6 +1,7 @@
 import type { MessageResponse } from '../shared/messages';
+import type { WatchedLabel } from '../shared/types';
 import { getSettings } from '../shared/settings';
-import { sendTelegramHelpWanted } from './telegram';
+import { formatLabels, leadEmoji, sendTelegramHelpWanted } from './telegram';
 
 const NOTIF_PREFIX = 'tasker-hw:';
 
@@ -19,11 +20,13 @@ async function sendBrowserNotification(
   number: number,
   title: string,
   url: string,
+  labels: WatchedLabel[],
 ): Promise<void> {
+  const labelText = formatLabels(labels) || 'issue';
   await chrome.notifications.create(`${NOTIF_PREFIX}${url}`, {
     type: 'basic',
     iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-    title: `${owner}/${repo} — help wanted`,
+    title: `${leadEmoji(labels)} ${owner}/${repo} — ${labelText}`,
     message: `#${number} ${title}`,
     priority: 1,
     requireInteraction: false,
@@ -36,6 +39,7 @@ export async function handleSendHelpWantedNotification(
   number: number,
   title: string,
   url: string,
+  labels: WatchedLabel[],
 ): Promise<MessageResponse> {
   const settings = await getSettings();
   if (!settings.notifyHelpWanted) return { ok: false, error: 'Notifications disabled' };
@@ -45,7 +49,7 @@ export async function handleSendHelpWantedNotification(
 
   if (settings.notifyChannels.includes('browser')) {
     try {
-      await sendBrowserNotification(owner, repo, number, title, url);
+      await sendBrowserNotification(owner, repo, number, title, url, labels);
       sentAny = true;
     } catch (err) {
       errors.push(`browser: ${(err as Error).message}`);
@@ -54,7 +58,7 @@ export async function handleSendHelpWantedNotification(
 
   if (settings.notifyChannels.includes('telegram')) {
     try {
-      await sendTelegramHelpWanted(owner, repo, number, title, url);
+      await sendTelegramHelpWanted(owner, repo, number, title, url, labels);
       sentAny = true;
     } catch (err) {
       errors.push(`telegram: ${(err as Error).message}`);
@@ -88,14 +92,17 @@ export async function handleTestNotification(): Promise<MessageResponse> {
   const errors: string[] = [];
   let sentAny = false;
 
+  const sampleLabels: WatchedLabel[] = ['help-wanted', 'bug'];
+
   if (channels.includes('browser')) {
     try {
       await sendBrowserNotification(
         'tasker',
         'test',
         0,
-        'Sample help-wanted issue (test)',
+        'Sample help-wanted + bug issue (test)',
         'https://github.com/',
+        sampleLabels,
       );
       sentAny = true;
     } catch (err) {
@@ -109,8 +116,9 @@ export async function handleTestNotification(): Promise<MessageResponse> {
         'tasker',
         'test',
         0,
-        'Sample help-wanted issue (test)',
+        'Sample help-wanted + bug issue (test)',
         'https://github.com/',
+        sampleLabels,
       );
       sentAny = true;
     } catch (err) {

@@ -1,11 +1,19 @@
-import type { HelpWantedIssue } from '../shared/types';
+import type { HelpWantedIssue, WatchedLabel } from '../shared/types';
 import type { SendHelpWantedNotificationRequest } from '../shared/messages';
 import { getSettings } from '../shared/settings';
 import { getSeen, setSeen } from '../shared/seen-issues';
 
 const HELP_WANTED_RE = /help[\s-]?wanted/i;
+const BUG_RE = /\bbug\b/i;
 
-function scanHelpWantedIssues(): HelpWantedIssue[] {
+function detectLabels(rowText: string): WatchedLabel[] {
+  const labels: WatchedLabel[] = [];
+  if (HELP_WANTED_RE.test(rowText)) labels.push('help-wanted');
+  if (BUG_RE.test(rowText)) labels.push('bug');
+  return labels;
+}
+
+function scanWatchedIssues(): HelpWantedIssue[] {
   const results = new Map<number, HelpWantedIssue>();
 
   const rowCandidates = new Set<Element>();
@@ -22,8 +30,9 @@ function scanHelpWantedIssues(): HelpWantedIssue[] {
   }
 
   for (const row of rowCandidates) {
-    const text = (row.textContent ?? '').toLowerCase();
-    if (!HELP_WANTED_RE.test(text)) continue;
+    const rowText = row.textContent ?? '';
+    const labels = detectLabels(rowText);
+    if (labels.length === 0) continue;
 
     const link = row.querySelector<HTMLAnchorElement>(
       'a[data-testid="issue-pr-title-link"], a[id^="issue_"][href*="/issues/"], a[href*="/issues/"]',
@@ -37,7 +46,7 @@ function scanHelpWantedIssues(): HelpWantedIssue[] {
     if (results.has(number)) continue;
 
     const title = (link.textContent ?? '').trim() || `Issue #${number}`;
-    results.set(number, { number, title, url: href });
+    results.set(number, { number, title, url: href, labels });
   }
 
   return Array.from(results.values());
@@ -68,7 +77,7 @@ export class IssueListWatcher {
   private async runScan(isFirstLoad: boolean): Promise<void> {
     if (this.destroyed) return;
     try {
-      const issues = scanHelpWantedIssues();
+      const issues = scanWatchedIssues();
       const seen = await getSeen(this.owner, this.repo);
 
       const settings = await getSettings();
@@ -93,6 +102,7 @@ export class IssueListWatcher {
           number: issue.number,
           title: issue.title,
           url: issue.url,
+          labels: issue.labels,
         };
         chrome.runtime.sendMessage(msg).catch(() => { /* ignore */ });
       }

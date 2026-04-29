@@ -1,6 +1,26 @@
 import type { MessageResponse } from '../shared/messages';
+import type { WatchedLabel } from '../shared/types';
 import { getTelegramToken } from '../shared/secret-store';
 import { getSettings } from '../shared/settings';
+
+const LABEL_DISPLAY: Record<WatchedLabel, string> = {
+  'help-wanted': 'help wanted',
+  bug: 'bug',
+};
+
+const LABEL_EMOJI: Record<WatchedLabel, string> = {
+  'help-wanted': '🆕',
+  bug: '🐞',
+};
+
+export function formatLabels(labels: WatchedLabel[]): string {
+  return labels.map((l) => LABEL_DISPLAY[l]).join(' + ');
+}
+
+export function leadEmoji(labels: WatchedLabel[]): string {
+  if (labels.includes('bug')) return LABEL_EMOJI.bug;
+  return LABEL_EMOJI['help-wanted'];
+}
 
 export async function sendTelegramMessage(
   token: string,
@@ -38,6 +58,7 @@ export async function sendTelegramHelpWanted(
   number: number,
   title: string,
   url: string,
+  labels: WatchedLabel[],
 ): Promise<void> {
   const settings = await getSettings();
   if (!settings.telegramChatId) throw new Error('No chat ID configured');
@@ -45,8 +66,9 @@ export async function sendTelegramHelpWanted(
   const token = await getTelegramToken();
   if (!token) throw new Error('No Telegram token configured');
 
+  const labelText = formatLabels(labels) || 'issue';
   const text =
-    `🆕 <b>help wanted</b> in ${escapeHtml(`${owner}/${repo}`)}\n` +
+    `${leadEmoji(labels)} <b>${escapeHtml(labelText)}</b> in ${escapeHtml(`${owner}/${repo}`)}\n` +
     `<a href="${url}">#${number} ${escapeHtml(title)}</a>`;
 
   await sendTelegramMessage(token, settings.telegramChatId, text);

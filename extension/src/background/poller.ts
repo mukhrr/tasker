@@ -1,10 +1,15 @@
-import type { HelpWantedIssue, WatchlistEntry } from '../shared/types';
+import type { HelpWantedIssue, WatchedLabel, WatchlistEntry } from '../shared/types';
 import { getSeen, setSeen } from '../shared/seen-issues';
 import { getSettings, MIN_POLL_SECONDS } from '../shared/settings';
 import { getWatchlist } from '../shared/watchlist';
 import { handleSendHelpWantedNotification } from './notifier';
 
 const ALARM_NAME = 'tasker-help-wanted-poll';
+
+const WATCHED_LABEL_QUERIES: { label: WatchedLabel; query: string }[] = [
+  { label: 'help-wanted', query: 'Help Wanted' },
+  { label: 'bug', query: 'Bug' },
+];
 
 interface GithubIssue {
   number: number;
@@ -13,10 +18,13 @@ interface GithubIssue {
   pull_request?: unknown;
 }
 
-async function fetchHelpWantedIssues(entry: WatchlistEntry): Promise<HelpWantedIssue[]> {
+async function fetchIssuesByLabel(
+  entry: WatchlistEntry,
+  labelQuery: string,
+): Promise<GithubIssue[]> {
   const url =
     `https://api.github.com/repos/${encodeURIComponent(entry.owner)}/${encodeURIComponent(entry.repo)}/issues` +
-    `?state=open&labels=${encodeURIComponent('Help Wanted')}&per_page=30&sort=created&direction=desc`;
+    `?state=open&labels=${encodeURIComponent(labelQuery)}&per_page=30&sort=created&direction=desc`;
 
   const res = await fetch(url, {
     headers: { Accept: 'application/vnd.github+json' },
@@ -26,19 +34,39 @@ async function fetchHelpWantedIssues(entry: WatchlistEntry): Promise<HelpWantedI
     throw new Error(`GitHub ${res.status}: ${body.slice(0, 200)}`);
   }
   const data = (await res.json()) as GithubIssue[];
-  return data
-    .filter((i) => !i.pull_request)
-    .map((i) => ({ number: i.number, title: i.title, url: i.html_url }));
+  return data.filter((i) => !i.pull_request);
+}
+
+async function fetchWatchedIssues(entry: WatchlistEntry): Promise<HelpWantedIssue[]> {
+  const merged = new Map<number, HelpWantedIssue>();
+  for (const { label, query } of WATCHED_LABEL_QUERIES) {
+    let batch: GithubIssue[];
+    try {
+      batch = await fetchIssuesByLabel(entry, query);
+    } catch (err) {
+      console.warn('[tasker] poll failed', entry, label, err);
+      continue;
+    }
+    for (const i of batch) {
+      const existing = merged.get(i.number);
+      if (existing) {
+        if (!existing.labels.includes(label)) existing.labels.push(label);
+      } else {
+        merged.set(i.number, {
+          number: i.number,
+          title: i.title,
+          url: i.html_url,
+          labels: [label],
+        });
+      }
+    }
+  }
+  return Array.from(merged.values());
 }
 
 async function pollOne(entry: WatchlistEntry, notify: boolean): Promise<void> {
-  let issues: HelpWantedIssue[];
-  try {
-    issues = await fetchHelpWantedIssues(entry);
-  } catch (err) {
-    console.warn('[tasker] poll failed', entry, err);
-    return;
-  }
+  const issues = await fetchWatchedIssues(entry);
+  if (issues.length === 0) return;
 
   const seen = await getSeen(entry.owner, entry.repo);
   const isSeeding = seen.size === 0;
@@ -58,6 +86,7 @@ async function pollOne(entry: WatchlistEntry, notify: boolean): Promise<void> {
       issue.number,
       issue.title,
       issue.url,
+      issue.labels,
     );
     if (!res.ok) console.warn('[tasker] notify failed', res.error);
   }

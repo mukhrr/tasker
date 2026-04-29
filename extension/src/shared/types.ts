@@ -26,10 +26,13 @@ export interface ExtensionSettings {
   pollSeconds: number;
 }
 
+export type WatchedLabel = 'help-wanted' | 'bug';
+
 export interface HelpWantedIssue {
   number: number;
   title: string;
   url: string;
+  labels: WatchedLabel[];
 }
 
 export interface WatchlistEntry {

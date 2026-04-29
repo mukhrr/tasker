@@ -1,4 +1,4 @@
-import type { Task, UserStatus } from './types';
+import type { Task, UserStatus, WatchedLabel } from './types';
 
 // ── Request types ──
 
@@ -62,6 +62,7 @@ export interface SendHelpWantedNotificationRequest {
   number: number;
   title: string;
   url: string;
+  labels: WatchedLabel[];
 }
 
 export interface TestTelegramRequest {
