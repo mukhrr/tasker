@@ -24,7 +24,9 @@ export interface ExtensionSettings {
   telegramChatId: string;
   telegramTokenSaved: boolean;
   pollSeconds: number;
-  watchedLabels: string[];
+  /** Each inner array is a set of labels that must all be present (AND).
+   *  An issue matches if any group is satisfied (OR across groups). */
+  watchedLabelGroups: string[][];
   excludedLabels: string[];
 }
 

@@ -91,8 +91,9 @@ export async function handleTestNotification(): Promise<MessageResponse> {
   const errors: string[] = [];
   let sentAny = false;
 
+  const firstGroup = settings.watchedLabelGroups[0];
   const sampleLabels =
-    settings.watchedLabels.length > 0 ? settings.watchedLabels.slice(0, 2) : ['Help Wanted'];
+    firstGroup && firstGroup.length > 0 ? [firstGroup.join(' + ')] : ['Help Wanted'];
 
   if (channels.includes('browser')) {
     try {

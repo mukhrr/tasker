@@ -123,12 +123,11 @@ const channelBrowser = $('#channel-browser') as HTMLInputElement;
 const channelTelegram = $('#channel-telegram') as HTMLInputElement;
 const watchlistEl = $('#watchlist');
 const watchlistInput = $('#watchlist-input') as HTMLInputElement;
-const watchedLabelsEl = $('#watched-labels');
-const watchedLabelsInput = $('#watched-labels-input') as HTMLInputElement;
+const watchedGroupsEl = $('#watched-label-groups');
 const excludedLabelsEl = $('#excluded-labels');
 const excludedLabelsInput = $('#excluded-labels-input') as HTMLInputElement;
 
-let watchedLabels: string[] = [];
+let watchedLabelGroups: string[][] = [];
 let excludedLabels: string[] = [];
 
 function renderLabelChips(
@@ -161,17 +160,93 @@ function addLabel(list: string[], raw: string): string[] {
   return [...list, trimmed];
 }
 
-function rerenderWatchedLabels(): void {
-  renderLabelChips(watchedLabelsEl, watchedLabels, 'watched', (label) => {
-    watchedLabels = watchedLabels.filter((l) => l !== label);
-    rerenderWatchedLabels();
-  });
-}
-
 function rerenderExcludedLabels(): void {
   renderLabelChips(excludedLabelsEl, excludedLabels, 'excluded', (label) => {
     excludedLabels = excludedLabels.filter((l) => l !== label);
     rerenderExcludedLabels();
+  });
+}
+
+function rerenderWatchedGroups(): void {
+  watchedGroupsEl.innerHTML = '';
+
+  watchedLabelGroups.forEach((group, groupIdx) => {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'label-group';
+
+    const chipsRow = document.createElement('div');
+    chipsRow.className = 'label-group-chips';
+    group.forEach((label, labelIdx) => {
+      if (labelIdx > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'label-group-and';
+        sep.textContent = '+';
+        chipsRow.appendChild(sep);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'label-chip';
+      chip.textContent = label;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'label-chip-remove';
+      removeBtn.setAttribute('aria-label', `Remove ${label}`);
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', () => {
+        const next = group.filter((l) => l !== label);
+        if (next.length === 0) {
+          watchedLabelGroups = watchedLabelGroups.filter((_, i) => i !== groupIdx);
+        } else {
+          watchedLabelGroups = watchedLabelGroups.map((g, i) => (i === groupIdx ? next : g));
+        }
+        rerenderWatchedGroups();
+      });
+      chip.appendChild(removeBtn);
+      chipsRow.appendChild(chip);
+    });
+    groupEl.appendChild(chipsRow);
+
+    const addRow = document.createElement('div');
+    addRow.className = 'label-group-add';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Add label to this group';
+    input.spellcheck = false;
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'label-group-add-btn';
+    addBtn.textContent = 'Add';
+    const submitAdd = () => {
+      const next = addLabel(group, input.value);
+      if (next === group) {
+        showStatus('Label already in this group or invalid', 'error');
+        return;
+      }
+      watchedLabelGroups = watchedLabelGroups.map((g, i) => (i === groupIdx ? next : g));
+      input.value = '';
+      rerenderWatchedGroups();
+    };
+    addBtn.addEventListener('click', submitAdd);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitAdd();
+      }
+    });
+    addRow.appendChild(input);
+    addRow.appendChild(addBtn);
+    groupEl.appendChild(addRow);
+
+    const removeGroupBtn = document.createElement('button');
+    removeGroupBtn.type = 'button';
+    removeGroupBtn.className = 'label-group-remove';
+    removeGroupBtn.textContent = 'Remove group';
+    removeGroupBtn.addEventListener('click', () => {
+      watchedLabelGroups = watchedLabelGroups.filter((_, i) => i !== groupIdx);
+      rerenderWatchedGroups();
+    });
+    groupEl.appendChild(removeGroupBtn);
+
+    watchedGroupsEl.appendChild(groupEl);
   });
 }
 
@@ -233,30 +308,20 @@ async function loadSettingsIntoForm(): Promise<void> {
   channelBrowser.checked = settings.notifyChannels.includes('browser');
   channelTelegram.checked = settings.notifyChannels.includes('telegram');
   chatIdInput.value = settings.telegramChatId;
-  watchedLabels = [...settings.watchedLabels];
+  watchedLabelGroups = settings.watchedLabelGroups.map((g) => [...g]);
   excludedLabels = [...settings.excludedLabels];
-  rerenderWatchedLabels();
+  rerenderWatchedGroups();
   rerenderExcludedLabels();
   renderTokenState(await hasTelegramToken());
   renderWatchlist(await getWatchlist());
 }
 
-$('#watched-labels-add-btn').addEventListener('click', () => {
-  const next = addLabel(watchedLabels, watchedLabelsInput.value);
-  if (next === watchedLabels) {
-    showStatus('Label already added or invalid', 'error');
-    return;
-  }
-  watchedLabels = next;
-  watchedLabelsInput.value = '';
-  rerenderWatchedLabels();
-});
-
-watchedLabelsInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    $('#watched-labels-add-btn').click();
-  }
+$('#add-group-btn').addEventListener('click', () => {
+  watchedLabelGroups = [...watchedLabelGroups, []];
+  rerenderWatchedGroups();
+  // Focus the new group's input
+  const inputs = watchedGroupsEl.querySelectorAll<HTMLInputElement>('.label-group-add input');
+  inputs[inputs.length - 1]?.focus();
 });
 
 $('#excluded-labels-add-btn').addEventListener('click', () => {
@@ -353,7 +418,7 @@ $('#settings-save-btn').addEventListener('click', async () => {
       notifyHelpWanted: notifyToggle.checked,
       notifyChannels: channels.length > 0 ? channels : ['browser'],
       telegramChatId: chatIdInput.value.trim(),
-      watchedLabels,
+      watchedLabelGroups: watchedLabelGroups.filter((g) => g.length > 0),
       excludedLabels,
     });
 

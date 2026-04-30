@@ -200,12 +200,10 @@
             </div>
 
             <div class="field-col">
-              <label>Watched labels</label>
-              <div id="watched-labels" class="label-chips"></div>
-              <div class="watchlist-add">
-                <input type="text" id="watched-labels-input" placeholder="e.g. Help Wanted" spellcheck="false">
-                <button type="button" id="watched-labels-add-btn" class="btn btn-secondary compact">Add</button>
-              </div>
+              <label>Watched label groups</label>
+              <div id="watched-label-groups" class="label-groups"></div>
+              <button type="button" id="add-group-btn" class="btn btn-secondary compact">+ Add group</button>
+              <span class="field-hint">Each row matches when an issue has <b>all</b> its labels (AND). Multiple rows are OR'd. Example: a row with "Help Wanted" + "External" only fires for issues with both labels.</span>
             </div>
 
             <div class="field-col">

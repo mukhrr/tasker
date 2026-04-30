@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS: Omit<ExtensionSettings, 'telegramTokenSaved'> = {
   notifyChannels: ['browser'],
   telegramChatId: '',
   pollSeconds: 45,
-  watchedLabels: ['Help Wanted', 'Daily', 'Bug'],
+  watchedLabelGroups: [['Help Wanted'], ['Daily'], ['Bug']],
   excludedLabels: ['DeployBlocker', 'DeployBlockerCash'],
 };
 
@@ -34,9 +34,34 @@ function sanitizeLabels(raw: unknown, fallback: string[]): string[] {
   return Array.from(new Map(cleaned.map((l) => [l.toLowerCase(), l])).values());
 }
 
+function sanitizeLabelGroups(raw: unknown): string[][] | null {
+  if (!Array.isArray(raw)) return null;
+  const groups: string[][] = [];
+  for (const g of raw) {
+    if (!Array.isArray(g)) continue;
+    const labels = sanitizeLabels(g, []);
+    if (labels.length > 0) groups.push(labels);
+  }
+  return groups;
+}
+
 export async function getSettings(): Promise<Omit<ExtensionSettings, 'telegramTokenSaved'>> {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
-  const raw = stored[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined;
+  const raw = stored[SETTINGS_KEY] as
+    | (Partial<ExtensionSettings> & { watchedLabels?: unknown })
+    | undefined;
+
+  let watchedLabelGroups: string[][];
+  const groupsCandidate = sanitizeLabelGroups(raw?.watchedLabelGroups);
+  if (groupsCandidate !== null) {
+    watchedLabelGroups = groupsCandidate;
+  } else if (raw?.watchedLabels !== undefined) {
+    // Migrate from the previous flat list — each label becomes its own group (preserves OR behavior).
+    watchedLabelGroups = sanitizeLabels(raw.watchedLabels, []).map((l) => [l]);
+  } else {
+    watchedLabelGroups = DEFAULT_SETTINGS.watchedLabelGroups.map((g) => [...g]);
+  }
+
   return {
     autoRefreshEnabled: raw?.autoRefreshEnabled ?? DEFAULT_SETTINGS.autoRefreshEnabled,
     autoRefreshSeconds: Math.max(5, raw?.autoRefreshSeconds ?? DEFAULT_SETTINGS.autoRefreshSeconds),
@@ -44,10 +69,7 @@ export async function getSettings(): Promise<Omit<ExtensionSettings, 'telegramTo
     notifyChannels: sanitizeChannels(raw?.notifyChannels),
     telegramChatId: raw?.telegramChatId ?? DEFAULT_SETTINGS.telegramChatId,
     pollSeconds: Math.max(MIN_POLL_SECONDS, raw?.pollSeconds ?? DEFAULT_SETTINGS.pollSeconds),
-    watchedLabels:
-      raw?.watchedLabels === undefined
-        ? [...DEFAULT_SETTINGS.watchedLabels]
-        : sanitizeLabels(raw.watchedLabels, []),
+    watchedLabelGroups,
     excludedLabels:
       raw?.excludedLabels === undefined
         ? [...DEFAULT_SETTINGS.excludedLabels]

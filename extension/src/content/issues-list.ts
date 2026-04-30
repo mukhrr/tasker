@@ -13,10 +13,12 @@ function buildLabelRegex(label: string): RegExp {
   return new RegExp(`(?:^|[^a-z0-9])${flexible}(?:$|[^a-z0-9])`, 'i');
 }
 
-function detectMatchingLabels(rowText: string, watched: string[]): string[] {
+function detectMatchingGroups(rowText: string, groups: string[][]): string[] {
   const matched: string[] = [];
-  for (const label of watched) {
-    if (buildLabelRegex(label).test(rowText)) matched.push(label);
+  for (const group of groups) {
+    if (group.length === 0) continue;
+    const allPresent = group.every((label) => buildLabelRegex(label).test(rowText));
+    if (allPresent) matched.push(group.join(' + '));
   }
   return matched;
 }
@@ -28,9 +30,9 @@ function hasExcludedLabel(rowText: string, excluded: string[]): boolean {
   return false;
 }
 
-function scanWatchedIssues(watched: string[], excluded: string[]): HelpWantedIssue[] {
+function scanWatchedIssues(groups: string[][], excluded: string[]): HelpWantedIssue[] {
   const results = new Map<number, HelpWantedIssue>();
-  if (watched.length === 0) return [];
+  if (groups.length === 0) return [];
 
   const rowCandidates = new Set<Element>();
   document
@@ -48,7 +50,7 @@ function scanWatchedIssues(watched: string[], excluded: string[]): HelpWantedIss
   for (const row of rowCandidates) {
     const rowText = row.textContent ?? '';
     if (hasExcludedLabel(rowText, excluded)) continue;
-    const labels = detectMatchingLabels(rowText, watched);
+    const labels = detectMatchingGroups(rowText, groups);
     if (labels.length === 0) continue;
 
     const link = row.querySelector<HTMLAnchorElement>(
@@ -95,7 +97,7 @@ export class IssueListWatcher {
     if (this.destroyed) return;
     try {
       const settings = await getSettings();
-      const issues = scanWatchedIssues(settings.watchedLabels, settings.excludedLabels);
+      const issues = scanWatchedIssues(settings.watchedLabelGroups, settings.excludedLabels);
       const seen = await getSeen(this.owner, this.repo);
 
       const notify = settings.notifyHelpWanted;

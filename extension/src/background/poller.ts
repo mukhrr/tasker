@@ -21,10 +21,12 @@ function issueLabelNames(issue: GithubIssue): string[] {
     .filter((n) => n.length > 0);
 }
 
-async function fetchIssuesByLabel(
+async function fetchIssuesByLabelGroup(
   entry: WatchlistEntry,
-  labelQuery: string,
+  labels: string[],
 ): Promise<GithubIssue[]> {
+  // GitHub's REST API treats comma-separated labels= as AND.
+  const labelQuery = labels.join(',');
   const url =
     `https://api.github.com/repos/${encodeURIComponent(entry.owner)}/${encodeURIComponent(entry.repo)}/issues` +
     `?state=open&labels=${encodeURIComponent(labelQuery)}&per_page=30&sort=created&direction=desc`;
@@ -42,33 +44,35 @@ async function fetchIssuesByLabel(
 
 async function fetchWatchedIssues(
   entry: WatchlistEntry,
-  watchedLabels: string[],
+  watchedLabelGroups: string[][],
   excludedLabels: string[],
 ): Promise<HelpWantedIssue[]> {
   const excludedLower = new Set(excludedLabels.map((l) => l.toLowerCase()));
   const merged = new Map<number, HelpWantedIssue>();
 
-  for (const watched of watchedLabels) {
+  for (const group of watchedLabelGroups) {
+    if (group.length === 0) continue;
     let batch: GithubIssue[];
     try {
-      batch = await fetchIssuesByLabel(entry, watched);
+      batch = await fetchIssuesByLabelGroup(entry, group);
     } catch (err) {
-      console.warn('[tasker] poll failed', entry, watched, err);
+      console.warn('[tasker] poll failed', entry, group, err);
       continue;
     }
+    const groupSummary = group.join(' + ');
     for (const i of batch) {
       const names = issueLabelNames(i);
       if (names.some((n) => excludedLower.has(n.toLowerCase()))) continue;
 
       const existing = merged.get(i.number);
       if (existing) {
-        if (!existing.labels.includes(watched)) existing.labels.push(watched);
+        if (!existing.labels.includes(groupSummary)) existing.labels.push(groupSummary);
       } else {
         merged.set(i.number, {
           number: i.number,
           title: i.title,
           url: i.html_url,
-          labels: [watched],
+          labels: [groupSummary],
         });
       }
     }
@@ -79,11 +83,11 @@ async function fetchWatchedIssues(
 async function pollOne(
   entry: WatchlistEntry,
   notify: boolean,
-  watchedLabels: string[],
+  watchedLabelGroups: string[][],
   excludedLabels: string[],
 ): Promise<void> {
-  if (watchedLabels.length === 0) return;
-  const issues = await fetchWatchedIssues(entry, watchedLabels, excludedLabels);
+  if (watchedLabelGroups.length === 0) return;
+  const issues = await fetchWatchedIssues(entry, watchedLabelGroups, excludedLabels);
   if (issues.length === 0) return;
 
   const seen = await getSeen(entry.owner, entry.repo);
@@ -116,7 +120,12 @@ export async function runPollerTick(): Promise<void> {
   if (watchlist.length === 0) return;
   await Promise.all(
     watchlist.map((entry) =>
-      pollOne(entry, settings.notifyHelpWanted, settings.watchedLabels, settings.excludedLabels),
+      pollOne(
+        entry,
+        settings.notifyHelpWanted,
+        settings.watchedLabelGroups,
+        settings.excludedLabels,
+      ),
     ),
   );
 }
