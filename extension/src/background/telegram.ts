@@ -43,6 +43,36 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+export function parseChatIds(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(/[\s,;]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  );
+}
+
+async function sendToAll(
+  token: string,
+  chatIds: string[],
+  text: string,
+): Promise<void> {
+  const errors: string[] = [];
+  let sentAny = false;
+  for (const chatId of chatIds) {
+    try {
+      await sendTelegramMessage(token, chatId, text);
+      sentAny = true;
+    } catch (err) {
+      errors.push(`${chatId}: ${(err as Error).message}`);
+    }
+  }
+  if (!sentAny) throw new Error(errors.join('; ') || 'No chat IDs configured');
+  if (errors.length > 0) console.warn('[tasker] partial telegram failures', errors);
+}
+
 export async function sendTelegramHelpWanted(
   owner: string,
   repo: string,
@@ -52,7 +82,8 @@ export async function sendTelegramHelpWanted(
   labels: string[],
 ): Promise<void> {
   const settings = await getSettings();
-  if (!settings.telegramChatId) throw new Error('No chat ID configured');
+  const chatIds = parseChatIds(settings.telegramChatId);
+  if (chatIds.length === 0) throw new Error('No chat ID configured');
 
   const token = await getTelegramToken();
   if (!token) throw new Error('No Telegram token configured');
@@ -62,7 +93,7 @@ export async function sendTelegramHelpWanted(
     `${leadEmoji(labels)} <b>${escapeHtml(labelText)}</b> in ${escapeHtml(`${owner}/${repo}`)}\n` +
     `<a href="${url}">#${number} ${escapeHtml(title)}</a>`;
 
-  await sendTelegramMessage(token, settings.telegramChatId, text);
+  await sendToAll(token, chatIds, text);
 }
 
 export async function handleTestTelegram(
@@ -70,11 +101,12 @@ export async function handleTestTelegram(
   chatId: string,
 ): Promise<MessageResponse> {
   if (!token || typeof token !== 'string') return { ok: false, error: 'Missing token' };
-  if (!chatId || typeof chatId !== 'string') return { ok: false, error: 'Missing chat ID' };
+  const chatIds = parseChatIds(chatId);
+  if (chatIds.length === 0) return { ok: false, error: 'Missing chat ID' };
   try {
-    await sendTelegramMessage(
+    await sendToAll(
       token,
-      chatId,
+      chatIds,
       '✅ <b>Tasker</b> — test message. Your bot and chat ID are configured correctly.',
     );
     return { ok: true };
