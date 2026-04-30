@@ -1,4 +1,4 @@
-import type { HelpWantedIssue, WatchedLabel, WatchlistEntry } from '../shared/types';
+import type { HelpWantedIssue, WatchlistEntry } from '../shared/types';
 import { getSeen, setSeen } from '../shared/seen-issues';
 import { getSettings, MIN_POLL_SECONDS } from '../shared/settings';
 import { getWatchlist } from '../shared/watchlist';
@@ -6,16 +6,19 @@ import { handleSendHelpWantedNotification } from './notifier';
 
 const ALARM_NAME = 'tasker-help-wanted-poll';
 
-const WATCHED_LABEL_QUERIES: { label: WatchedLabel; query: string }[] = [
-  { label: 'help-wanted', query: 'Help Wanted' },
-  { label: 'bug', query: 'Bug' },
-];
-
 interface GithubIssue {
   number: number;
   title: string;
   html_url: string;
   pull_request?: unknown;
+  labels?: Array<{ name?: string } | string>;
+}
+
+function issueLabelNames(issue: GithubIssue): string[] {
+  if (!Array.isArray(issue.labels)) return [];
+  return issue.labels
+    .map((l) => (typeof l === 'string' ? l : l?.name ?? ''))
+    .filter((n) => n.length > 0);
 }
 
 async function fetchIssuesByLabel(
@@ -37,26 +40,35 @@ async function fetchIssuesByLabel(
   return data.filter((i) => !i.pull_request);
 }
 
-async function fetchWatchedIssues(entry: WatchlistEntry): Promise<HelpWantedIssue[]> {
+async function fetchWatchedIssues(
+  entry: WatchlistEntry,
+  watchedLabels: string[],
+  excludedLabels: string[],
+): Promise<HelpWantedIssue[]> {
+  const excludedLower = new Set(excludedLabels.map((l) => l.toLowerCase()));
   const merged = new Map<number, HelpWantedIssue>();
-  for (const { label, query } of WATCHED_LABEL_QUERIES) {
+
+  for (const watched of watchedLabels) {
     let batch: GithubIssue[];
     try {
-      batch = await fetchIssuesByLabel(entry, query);
+      batch = await fetchIssuesByLabel(entry, watched);
     } catch (err) {
-      console.warn('[tasker] poll failed', entry, label, err);
+      console.warn('[tasker] poll failed', entry, watched, err);
       continue;
     }
     for (const i of batch) {
+      const names = issueLabelNames(i);
+      if (names.some((n) => excludedLower.has(n.toLowerCase()))) continue;
+
       const existing = merged.get(i.number);
       if (existing) {
-        if (!existing.labels.includes(label)) existing.labels.push(label);
+        if (!existing.labels.includes(watched)) existing.labels.push(watched);
       } else {
         merged.set(i.number, {
           number: i.number,
           title: i.title,
           url: i.html_url,
-          labels: [label],
+          labels: [watched],
         });
       }
     }
@@ -64,8 +76,14 @@ async function fetchWatchedIssues(entry: WatchlistEntry): Promise<HelpWantedIssu
   return Array.from(merged.values());
 }
 
-async function pollOne(entry: WatchlistEntry, notify: boolean): Promise<void> {
-  const issues = await fetchWatchedIssues(entry);
+async function pollOne(
+  entry: WatchlistEntry,
+  notify: boolean,
+  watchedLabels: string[],
+  excludedLabels: string[],
+): Promise<void> {
+  if (watchedLabels.length === 0) return;
+  const issues = await fetchWatchedIssues(entry, watchedLabels, excludedLabels);
   if (issues.length === 0) return;
 
   const seen = await getSeen(entry.owner, entry.repo);
@@ -96,7 +114,11 @@ export async function runPollerTick(): Promise<void> {
   const settings = await getSettings();
   const watchlist = await getWatchlist();
   if (watchlist.length === 0) return;
-  await Promise.all(watchlist.map((entry) => pollOne(entry, settings.notifyHelpWanted)));
+  await Promise.all(
+    watchlist.map((entry) =>
+      pollOne(entry, settings.notifyHelpWanted, settings.watchedLabels, settings.excludedLabels),
+    ),
+  );
 }
 
 export async function scheduleAlarm(): Promise<void> {

@@ -11,6 +11,8 @@ export const DEFAULT_SETTINGS: Omit<ExtensionSettings, 'telegramTokenSaved'> = {
   notifyChannels: ['browser'],
   telegramChatId: '',
   pollSeconds: 45,
+  watchedLabels: ['Help Wanted', 'Daily', 'Bug'],
+  excludedLabels: ['DeployBlocker', 'DeployBlockerCash'],
 };
 
 const VALID_CHANNELS: NotifyChannel[] = ['browser', 'telegram'];
@@ -23,6 +25,15 @@ function sanitizeChannels(raw: unknown): NotifyChannel[] {
   return filtered.length > 0 ? Array.from(new Set(filtered)) : [...DEFAULT_SETTINGS.notifyChannels];
 }
 
+function sanitizeLabels(raw: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  const cleaned = raw
+    .filter((s): s is string => typeof s === 'string')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s.length <= 64);
+  return Array.from(new Map(cleaned.map((l) => [l.toLowerCase(), l])).values());
+}
+
 export async function getSettings(): Promise<Omit<ExtensionSettings, 'telegramTokenSaved'>> {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
   const raw = stored[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined;
@@ -33,6 +44,14 @@ export async function getSettings(): Promise<Omit<ExtensionSettings, 'telegramTo
     notifyChannels: sanitizeChannels(raw?.notifyChannels),
     telegramChatId: raw?.telegramChatId ?? DEFAULT_SETTINGS.telegramChatId,
     pollSeconds: Math.max(MIN_POLL_SECONDS, raw?.pollSeconds ?? DEFAULT_SETTINGS.pollSeconds),
+    watchedLabels:
+      raw?.watchedLabels === undefined
+        ? [...DEFAULT_SETTINGS.watchedLabels]
+        : sanitizeLabels(raw.watchedLabels, []),
+    excludedLabels:
+      raw?.excludedLabels === undefined
+        ? [...DEFAULT_SETTINGS.excludedLabels]
+        : sanitizeLabels(raw.excludedLabels, []),
   };
 }
 

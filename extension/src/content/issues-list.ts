@@ -1,20 +1,36 @@
-import type { HelpWantedIssue, WatchedLabel } from '../shared/types';
+import type { HelpWantedIssue } from '../shared/types';
 import type { SendHelpWantedNotificationRequest } from '../shared/messages';
 import { getSettings } from '../shared/settings';
 import { getSeen, setSeen } from '../shared/seen-issues';
 
-const HELP_WANTED_RE = /help[\s-]?wanted/i;
-const BUG_RE = /\bbug\b/i;
-
-function detectLabels(rowText: string): WatchedLabel[] {
-  const labels: WatchedLabel[] = [];
-  if (HELP_WANTED_RE.test(rowText)) labels.push('help-wanted');
-  if (BUG_RE.test(rowText)) labels.push('bug');
-  return labels;
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function scanWatchedIssues(): HelpWantedIssue[] {
+function buildLabelRegex(label: string): RegExp {
+  // Allow optional whitespace/hyphen between words (e.g. "Help Wanted" matches "help-wanted")
+  const flexible = escapeRegex(label).replace(/\s+/g, '[\\s-]?');
+  return new RegExp(`(?:^|[^a-z0-9])${flexible}(?:$|[^a-z0-9])`, 'i');
+}
+
+function detectMatchingLabels(rowText: string, watched: string[]): string[] {
+  const matched: string[] = [];
+  for (const label of watched) {
+    if (buildLabelRegex(label).test(rowText)) matched.push(label);
+  }
+  return matched;
+}
+
+function hasExcludedLabel(rowText: string, excluded: string[]): boolean {
+  for (const label of excluded) {
+    if (buildLabelRegex(label).test(rowText)) return true;
+  }
+  return false;
+}
+
+function scanWatchedIssues(watched: string[], excluded: string[]): HelpWantedIssue[] {
   const results = new Map<number, HelpWantedIssue>();
+  if (watched.length === 0) return [];
 
   const rowCandidates = new Set<Element>();
   document
@@ -31,7 +47,8 @@ function scanWatchedIssues(): HelpWantedIssue[] {
 
   for (const row of rowCandidates) {
     const rowText = row.textContent ?? '';
-    const labels = detectLabels(rowText);
+    if (hasExcludedLabel(rowText, excluded)) continue;
+    const labels = detectMatchingLabels(rowText, watched);
     if (labels.length === 0) continue;
 
     const link = row.querySelector<HTMLAnchorElement>(
@@ -77,10 +94,10 @@ export class IssueListWatcher {
   private async runScan(isFirstLoad: boolean): Promise<void> {
     if (this.destroyed) return;
     try {
-      const issues = scanWatchedIssues();
+      const settings = await getSettings();
+      const issues = scanWatchedIssues(settings.watchedLabels, settings.excludedLabels);
       const seen = await getSeen(this.owner, this.repo);
 
-      const settings = await getSettings();
       const notify = settings.notifyHelpWanted;
 
       const newIssues = issues.filter((i) => !seen.has(i.number));

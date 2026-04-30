@@ -123,6 +123,57 @@ const channelBrowser = $('#channel-browser') as HTMLInputElement;
 const channelTelegram = $('#channel-telegram') as HTMLInputElement;
 const watchlistEl = $('#watchlist');
 const watchlistInput = $('#watchlist-input') as HTMLInputElement;
+const watchedLabelsEl = $('#watched-labels');
+const watchedLabelsInput = $('#watched-labels-input') as HTMLInputElement;
+const excludedLabelsEl = $('#excluded-labels');
+const excludedLabelsInput = $('#excluded-labels-input') as HTMLInputElement;
+
+let watchedLabels: string[] = [];
+let excludedLabels: string[] = [];
+
+function renderLabelChips(
+  el: HTMLElement,
+  labels: string[],
+  variant: 'watched' | 'excluded',
+  onRemove: (label: string) => void,
+): void {
+  el.innerHTML = '';
+  for (const label of labels) {
+    const chip = document.createElement('span');
+    chip.className = `label-chip${variant === 'excluded' ? ' exclude' : ''}`;
+    chip.textContent = label;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'label-chip-remove';
+    removeBtn.setAttribute('aria-label', `Remove ${label}`);
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => onRemove(label));
+    chip.appendChild(removeBtn);
+    el.appendChild(chip);
+  }
+}
+
+function addLabel(list: string[], raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 64) return list;
+  const lower = trimmed.toLowerCase();
+  if (list.some((l) => l.toLowerCase() === lower)) return list;
+  return [...list, trimmed];
+}
+
+function rerenderWatchedLabels(): void {
+  renderLabelChips(watchedLabelsEl, watchedLabels, 'watched', (label) => {
+    watchedLabels = watchedLabels.filter((l) => l !== label);
+    rerenderWatchedLabels();
+  });
+}
+
+function rerenderExcludedLabels(): void {
+  renderLabelChips(excludedLabelsEl, excludedLabels, 'excluded', (label) => {
+    excludedLabels = excludedLabels.filter((l) => l !== label);
+    rerenderExcludedLabels();
+  });
+}
 
 function showStatus(text: string, kind: 'ok' | 'error'): void {
   settingsStatus.textContent = text;
@@ -182,9 +233,49 @@ async function loadSettingsIntoForm(): Promise<void> {
   channelBrowser.checked = settings.notifyChannels.includes('browser');
   channelTelegram.checked = settings.notifyChannels.includes('telegram');
   chatIdInput.value = settings.telegramChatId;
+  watchedLabels = [...settings.watchedLabels];
+  excludedLabels = [...settings.excludedLabels];
+  rerenderWatchedLabels();
+  rerenderExcludedLabels();
   renderTokenState(await hasTelegramToken());
   renderWatchlist(await getWatchlist());
 }
+
+$('#watched-labels-add-btn').addEventListener('click', () => {
+  const next = addLabel(watchedLabels, watchedLabelsInput.value);
+  if (next === watchedLabels) {
+    showStatus('Label already added or invalid', 'error');
+    return;
+  }
+  watchedLabels = next;
+  watchedLabelsInput.value = '';
+  rerenderWatchedLabels();
+});
+
+watchedLabelsInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    $('#watched-labels-add-btn').click();
+  }
+});
+
+$('#excluded-labels-add-btn').addEventListener('click', () => {
+  const next = addLabel(excludedLabels, excludedLabelsInput.value);
+  if (next === excludedLabels) {
+    showStatus('Label already added or invalid', 'error');
+    return;
+  }
+  excludedLabels = next;
+  excludedLabelsInput.value = '';
+  rerenderExcludedLabels();
+});
+
+excludedLabelsInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    $('#excluded-labels-add-btn').click();
+  }
+});
 
 $('#watchlist-add-btn').addEventListener('click', async () => {
   const parsed = parseRepoInput(watchlistInput.value);
@@ -262,6 +353,8 @@ $('#settings-save-btn').addEventListener('click', async () => {
       notifyHelpWanted: notifyToggle.checked,
       notifyChannels: channels.length > 0 ? channels : ['browser'],
       telegramChatId: chatIdInput.value.trim(),
+      watchedLabels,
+      excludedLabels,
     });
 
     const newToken = tokenInput.value.trim();

@@ -24,15 +24,15 @@ export interface ExtensionSettings {
   telegramChatId: string;
   telegramTokenSaved: boolean;
   pollSeconds: number;
+  watchedLabels: string[];
+  excludedLabels: string[];
 }
-
-export type WatchedLabel = 'help-wanted' | 'bug';
 
 export interface HelpWantedIssue {
   number: number;
   title: string;
   url: string;
-  labels: WatchedLabel[];
+  labels: string[];
 }
 
 export interface WatchlistEntry {

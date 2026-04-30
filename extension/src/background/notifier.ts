@@ -1,5 +1,4 @@
 import type { MessageResponse } from '../shared/messages';
-import type { WatchedLabel } from '../shared/types';
 import { getSettings } from '../shared/settings';
 import { formatLabels, leadEmoji, sendTelegramHelpWanted } from './telegram';
 
@@ -20,7 +19,7 @@ async function sendBrowserNotification(
   number: number,
   title: string,
   url: string,
-  labels: WatchedLabel[],
+  labels: string[],
 ): Promise<void> {
   const labelText = formatLabels(labels) || 'issue';
   await chrome.notifications.create(`${NOTIF_PREFIX}${url}`, {
@@ -39,7 +38,7 @@ export async function handleSendHelpWantedNotification(
   number: number,
   title: string,
   url: string,
-  labels: WatchedLabel[],
+  labels: string[],
 ): Promise<MessageResponse> {
   const settings = await getSettings();
   if (!settings.notifyHelpWanted) return { ok: false, error: 'Notifications disabled' };
@@ -92,7 +91,8 @@ export async function handleTestNotification(): Promise<MessageResponse> {
   const errors: string[] = [];
   let sentAny = false;
 
-  const sampleLabels: WatchedLabel[] = ['help-wanted', 'bug'];
+  const sampleLabels =
+    settings.watchedLabels.length > 0 ? settings.watchedLabels.slice(0, 2) : ['Help Wanted'];
 
   if (channels.includes('browser')) {
     try {
@@ -100,7 +100,7 @@ export async function handleTestNotification(): Promise<MessageResponse> {
         'tasker',
         'test',
         0,
-        'Sample help-wanted + bug issue (test)',
+        `Sample issue (test) — ${sampleLabels.join(' + ')}`,
         'https://github.com/',
         sampleLabels,
       );
@@ -116,7 +116,7 @@ export async function handleTestNotification(): Promise<MessageResponse> {
         'tasker',
         'test',
         0,
-        'Sample help-wanted + bug issue (test)',
+        `Sample issue (test) — ${sampleLabels.join(' + ')}`,
         'https://github.com/',
         sampleLabels,
       );

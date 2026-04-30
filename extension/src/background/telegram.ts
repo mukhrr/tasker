@@ -1,25 +1,16 @@
 import type { MessageResponse } from '../shared/messages';
-import type { WatchedLabel } from '../shared/types';
 import { getTelegramToken } from '../shared/secret-store';
 import { getSettings } from '../shared/settings';
 
-const LABEL_DISPLAY: Record<WatchedLabel, string> = {
-  'help-wanted': 'help wanted',
-  bug: 'bug',
-};
-
-const LABEL_EMOJI: Record<WatchedLabel, string> = {
-  'help-wanted': '🆕',
-  bug: '🐞',
-};
-
-export function formatLabels(labels: WatchedLabel[]): string {
-  return labels.map((l) => LABEL_DISPLAY[l]).join(' + ');
+export function formatLabels(labels: string[]): string {
+  return labels.join(' + ');
 }
 
-export function leadEmoji(labels: WatchedLabel[]): string {
-  if (labels.includes('bug')) return LABEL_EMOJI.bug;
-  return LABEL_EMOJI['help-wanted'];
+export function leadEmoji(labels: string[]): string {
+  const lower = labels.map((l) => l.toLowerCase());
+  if (lower.some((l) => l.includes('bug'))) return '🐞';
+  if (lower.some((l) => l.includes('daily'))) return '📅';
+  return '🆕';
 }
 
 export async function sendTelegramMessage(
@@ -58,7 +49,7 @@ export async function sendTelegramHelpWanted(
   number: number,
   title: string,
   url: string,
-  labels: WatchedLabel[],
+  labels: string[],
 ): Promise<void> {
   const settings = await getSettings();
   if (!settings.telegramChatId) throw new Error('No chat ID configured');
