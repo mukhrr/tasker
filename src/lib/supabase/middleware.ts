@@ -35,9 +35,14 @@ export async function updateSession(request: NextRequest) {
     data: { session },
   } = await supabase.auth.getSession();
 
-  // Redirect unauthenticated users to login (except for auth pages)
+  // API routes do their own auth (bearer for cron, cookie-via-createClient
+  // for user routes). Don't redirect — they need to return their own status.
+  const isApi = request.nextUrl.pathname.startsWith('/api/');
+
+  // Redirect unauthenticated users to login (except for auth pages and APIs)
   if (
     !session &&
+    !isApi &&
     !request.nextUrl.pathname.startsWith('/auth') &&
     request.nextUrl.pathname !== '/'
   ) {
