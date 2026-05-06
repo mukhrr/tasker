@@ -16,6 +16,22 @@ import {
 } from './notifier';
 import { registerAlarmListener, scheduleAlarm } from './poller';
 
+// Supabase JS only exposes session.provider_token immediately after the
+// OAuth callback. After the first auto-refresh (~1h) it's gone, so we
+// cache it ourselves to survive across refreshes. Cleared on logout.
+const GITHUB_PROVIDER_TOKEN_KEY = 'githubProviderToken';
+
+async function getGithubProviderToken(): Promise<string | null> {
+  // Prefer the freshly-issued session token (right after OAuth) — it'll
+  // match the cached one anyway. Fall back to the cache after refreshes.
+  const supabase = getSupabaseClient();
+  const { data } = await supabase.auth.getSession();
+  const sessionToken = data.session?.provider_token;
+  if (sessionToken) return sessionToken;
+  const cached = await chrome.storage.local.get(GITHUB_PROVIDER_TOKEN_KEY);
+  return (cached[GITHUB_PROVIDER_TOKEN_KEY] as string | undefined) ?? null;
+}
+
 chrome.runtime.onMessage.addListener((message: MessageRequest, sender, sendResponse) => {
   // Only accept messages from our own extension (popup + content scripts)
   if (sender.id !== chrome.runtime.id) {
@@ -130,6 +146,14 @@ async function handleGithubLogin(): Promise<MessageResponse<SessionData>> {
   if (!data.user) return { ok: false, error: 'No user returned' };
 
   if (providerToken) {
+    // Cache the GitHub token locally — supabase-js drops session.provider_token
+    // after the first auto-refresh (~1h), so we can't rely on it for long.
+    // chrome.storage.local is sandboxed per-extension; the token is the user's
+    // own OAuth token and can be revoked from GitHub settings any time.
+    await chrome.storage.local.set({ [GITHUB_PROVIDER_TOKEN_KEY]: providerToken });
+
+    // Also persist (encrypted) to user_settings so the cloud poll worker can
+    // post on this user's behalf when their tabs are closed.
     try {
       const res = await fetch(`${APP_URL}/api/settings/github-token`, {
         method: 'POST',
@@ -162,6 +186,7 @@ async function handleLogout(): Promise<MessageResponse> {
   const { error } = await supabase.auth.signOut();
   if (error) return { ok: false, error: error.message };
   resetClient();
+  await chrome.storage.local.remove(GITHUB_PROVIDER_TOKEN_KEY);
   return { ok: true };
 }
 
@@ -353,11 +378,9 @@ async function handleQueryIssueLabels(owner: string, repo: string, number: numbe
   const validationErr = validateRepoTuple(owner, repo, number);
   if (validationErr) return { ok: false, error: validationErr };
 
-  // Pull the GitHub provider token from the active Supabase session if present
+  // Pull the GitHub provider token (from the cache, surviving session refresh)
   // so we get the 5,000/hr authenticated quota instead of 60/hr per-IP unauth.
-  const supabase = getSupabaseClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const providerToken = sessionData.session?.provider_token ?? null;
+  const providerToken = await getGithubProviderToken();
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
@@ -537,9 +560,7 @@ async function handleQueryIssueLabelsEtag(
   const validationErr = validateRepoTuple(owner, repo, number);
   if (validationErr) return { ok: false, error: validationErr };
 
-  const supabase = getSupabaseClient();
-  const { data: sessionData } = await supabase.auth.getSession();
-  const providerToken = sessionData.session?.provider_token ?? null;
+  const providerToken = await getGithubProviderToken();
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
@@ -588,7 +609,7 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
   const { data: session } = await supabase.auth.getSession();
   if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
   const userId = session.session.user.id;
-  const providerToken = session.session.provider_token;
+  const providerToken = await getGithubProviderToken();
   if (!providerToken) {
     return { ok: false, error: 'No GitHub provider token; sign out and back in with public_repo scope.' };
   }
