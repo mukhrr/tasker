@@ -45,7 +45,7 @@ export async function runSync(
     }
 
     apiKey = decrypt(settings.ai_api_key_encrypted);
-    githubToken = settings.github_token_encrypted;
+    githubToken = decrypt(settings.github_token_encrypted);
 
     // Get github_username from settings or profile
     githubUsername = settings.github_username || '';

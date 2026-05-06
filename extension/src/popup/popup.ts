@@ -437,6 +437,31 @@ $('#settings-save-btn').addEventListener('click', async () => {
   }
 });
 
+// ── Auto-post kill switch ──
+
+const autopostToggle = $('#autopost-toggle') as HTMLInputElement | null;
+
+async function loadAutoPostState(): Promise<void> {
+  if (!autopostToggle) return;
+  const res = await chrome.runtime.sendMessage({ type: 'GET_AUTOPOST' }) as
+    MessageResponse<{ enabled: boolean }>;
+  autopostToggle.checked = res.ok && res.data ? res.data.enabled : true;
+}
+
+if (autopostToggle) {
+  autopostToggle.addEventListener('change', async () => {
+    const enabled = autopostToggle.checked;
+    const res = await chrome.runtime.sendMessage({ type: 'SET_AUTOPOST', enabled }) as
+      MessageResponse<{ enabled: boolean }>;
+    if (!res.ok) {
+      // Revert UI on failure
+      autopostToggle.checked = !enabled;
+      showStatus(res.error ?? 'Failed to update', 'error');
+    }
+  });
+}
+
 fetchStarCount();
 init();
 void loadSettingsIntoForm();
+void loadAutoPostState();

@@ -66,72 +66,14 @@
             <span id="user-email" class="user-email"></span>
           </div>
         </div>
-        <div class="hint-card">
-          <!-- Issue hint -->
-          <div class="hint-section">
-            <div class="hint-section-label">On Issues</div>
-            <div class="hint-illustration">
-              <div class="hint-browser">
-                <div class="hint-browser-bar">
-                  <span class="hint-browser-dot"></span>
-                  <span class="hint-browser-dot"></span>
-                  <span class="hint-browser-dot"></span>
-                </div>
-                <div class="hint-browser-body">
-                  <div class="hint-main">
-                    <div class="hint-main-line"></div>
-                    <div class="hint-main-line med"></div>
-                    <div class="hint-main-line short"></div>
-                  </div>
-                  <div class="hint-sidebar">
-                    <div class="hint-sidebar-line"></div>
-                    <div class="hint-sidebar-line short"></div>
-                    <div class="hint-widget">
-                      <span class="hint-widget-label">Tasker</span>
-                      <span class="hint-widget-badge">
-                        <span class="hint-widget-dot"></span>
-                        Status
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="hint-caption">Widget in the sidebar</div>
-          </div>
-          <!-- PR hint -->
-          <div class="hint-section">
-            <div class="hint-section-label">On Pull Requests</div>
-            <div class="hint-illustration">
-              <div class="hint-browser">
-                <div class="hint-browser-bar">
-                  <span class="hint-browser-dot"></span>
-                  <span class="hint-browser-dot"></span>
-                  <span class="hint-browser-dot"></span>
-                </div>
-                <div class="hint-browser-body-pr">
-                  <div class="hint-pr-title-row">
-                    <div class="hint-pr-title-line"></div>
-                  </div>
-                  <div class="hint-pr-meta-row">
-                    <div class="hint-pr-open-badge">Open</div>
-                    <div class="hint-pr-meta-line"></div>
-                    <div class="hint-widget-inline">
-                      <span class="hint-widget-icon">T</span>
-                      <span class="hint-widget-dot"></span>
-                      <span class="hint-widget-inline-label">Status</span>
-                    </div>
-                  </div>
-                  <div class="hint-pr-content">
-                    <div class="hint-main-line"></div>
-                    <div class="hint-main-line short"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="hint-caption">Button in the header — updates all linked issues</div>
-          </div>
-        </div>
+
+        <label class="autopost-card" for="autopost-toggle">
+          <input type="checkbox" id="autopost-toggle">
+          <span class="autopost-text">
+            <span class="autopost-title">Auto-post on Help Wanted</span>
+            <span class="autopost-desc">Master switch — applies to every armed proposal.</span>
+          </span>
+        </label>
         <details id="settings-panel" class="settings">
           <summary class="settings-summary">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

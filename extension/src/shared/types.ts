@@ -63,3 +63,20 @@ export interface Task {
   created_at: string;
   updated_at: string;
 }
+
+export type ProposalState = 'draft' | 'armed' | 'posting' | 'posted' | 'failed';
+
+export interface Proposal {
+  id: string;
+  user_id: string;
+  repo_owner: string;
+  repo_name: string;
+  issue_number: number;
+  body: string;
+  state: ProposalState;
+  github_comment_id: number | null;
+  last_error: string | null;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

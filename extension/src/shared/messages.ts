@@ -1,4 +1,4 @@
-import type { Task, UserStatus } from './types';
+import type { Task, UserStatus, Proposal } from './types';
 
 // ── Request types ──
 
@@ -83,6 +83,70 @@ export interface TestNotificationRequest {
   type: 'TEST_NOTIFICATION';
 }
 
+export interface QueryIssueLabelsRequest {
+  type: 'QUERY_ISSUE_LABELS';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+export interface QueryProposalRequest {
+  type: 'QUERY_PROPOSAL';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+export interface SaveProposalRequest {
+  type: 'SAVE_PROPOSAL';
+  owner: string;
+  repo: string;
+  number: number;
+  body: string;
+}
+
+export interface ArmProposalRequest {
+  type: 'ARM_PROPOSAL';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+export interface DisarmProposalRequest {
+  type: 'DISARM_PROPOSAL';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+// Tab-side fast-path: content script asks the background to claim the
+// armed proposal and post the comment immediately, without waiting on
+// the cloud worker's poll cycle.
+export interface PostProposalNowRequest {
+  type: 'POST_PROPOSAL_NOW';
+  proposalId: string;
+}
+
+// ETag-cached labels query — content script polls this every ~1.5s while
+// the issue tab is visible. 304 responses cost no GitHub rate-limit quota,
+// so the loop is essentially free.
+export interface QueryIssueLabelsEtagRequest {
+  type: 'QUERY_ISSUE_LABELS_ETAG';
+  owner: string;
+  repo: string;
+  number: number;
+  etag: string | null;
+}
+
+export interface GetAutoPostRequest {
+  type: 'GET_AUTOPOST';
+}
+
+export interface SetAutoPostRequest {
+  type: 'SET_AUTOPOST';
+  enabled: boolean;
+}
+
 export type MessageRequest =
   | LoginGithubRequest
   | LogoutRequest
@@ -97,7 +161,16 @@ export type MessageRequest =
   | TestTelegramRequest
   | TestBrowserNotificationRequest
   | ReschedulePollerRequest
-  | TestNotificationRequest;
+  | TestNotificationRequest
+  | QueryIssueLabelsRequest
+  | QueryProposalRequest
+  | SaveProposalRequest
+  | ArmProposalRequest
+  | DisarmProposalRequest
+  | PostProposalNowRequest
+  | QueryIssueLabelsEtagRequest
+  | GetAutoPostRequest
+  | SetAutoPostRequest;
 
 // ── Response types ──
 
@@ -120,3 +193,13 @@ export type StatusesResponse = MessageResponse<UserStatus[]>;
 export type UpdateResponse = MessageResponse<void>;
 export type CreateTaskResponse = MessageResponse<Task>;
 export type TasksBatchResponse = MessageResponse<Task[]>;
+export type IssueLabelsResponse = MessageResponse<string[]>;
+export type ProposalResponse = MessageResponse<Proposal | null>;
+
+export interface IssueLabelsEtagData {
+  etag: string | null;
+  labels: string[] | null;
+  notModified: boolean;
+}
+export type IssueLabelsEtagResponse = MessageResponse<IssueLabelsEtagData>;
+export type AutoPostResponse = MessageResponse<{ enabled: boolean }>;

@@ -1,6 +1,33 @@
-import type { Task, UserStatus, TaskStatusGroup } from '../shared/types';
-import type { MessageRequest, TaskResponse, StatusesResponse, UpdateResponse, CreateTaskResponse, TasksBatchResponse } from '../shared/messages';
+import type { Task, UserStatus, TaskStatusGroup, Proposal } from '../shared/types';
+import type {
+  MessageRequest,
+  MessageResponse,
+  TaskResponse,
+  StatusesResponse,
+  UpdateResponse,
+  CreateTaskResponse,
+  TasksBatchResponse,
+  IssueLabelsResponse,
+  ProposalResponse,
+  IssueLabelsEtagResponse,
+  AutoPostResponse,
+} from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
+
+const PROPOSAL_REQUIRED_LABELS = ['bug', 'daily'];
+const PROPOSAL_READY_LABEL = 'help wanted';
+const PROPOSAL_POLL_INTERVAL_MS = 2000;
+// Tab-side fast-path: ETag-cached label fetch interval. 304 responses cost
+// no GitHub rate-limit quota, so this can run aggressively without burning
+// the 5,000/hr authenticated budget.
+const FAST_LABEL_POLL_MS = 1500;
+// Selectors for the labels container — covers both the classic Rails issue
+// page and the React rewrite. Observer attaches to whichever is found.
+const LABELS_CONTAINER_SELECTORS = [
+  '.js-issue-labels',
+  '[data-testid="issue-labels"]',
+  '[aria-label="Labels"]',
+];
 
 function sendMessage<T>(msg: MessageRequest): Promise<T> {
   return chrome.runtime.sendMessage(msg);
@@ -33,6 +60,19 @@ export class StatusWidget {
   private number: number;
   private mode: WidgetMode;
   private linkedIssueNumbers: number[];
+  private labels: string[] = [];
+  private proposal: Proposal | null = null;
+  private proposalDraftBody = '';
+  private proposalBusy = false;
+  private proposalPollHandle: ReturnType<typeof setInterval> | null = null;
+  private destroyed = false;
+  // Fast-path state: tab-side detection of the Help Wanted label.
+  private autoPostEnabled = true;
+  private fastPathHandle: ReturnType<typeof setInterval> | null = null;
+  private fastPathObservers: MutationObserver[] = [];
+  private fastPathEtag: string | null = null;
+  private fastPathTriggered = false;
+  private fastPathVisibilityListener: (() => void) | null = null;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
     this.owner = owner;
@@ -98,9 +138,12 @@ export class StatusWidget {
   }
 
   private async initIssue() {
-    const [taskRes, statusesRes] = await Promise.all([
+    const [taskRes, statusesRes, labelsRes, proposalRes, autoPostRes] = await Promise.all([
       sendMessage<TaskResponse>({ type: 'QUERY_TASK', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
+      sendMessage<IssueLabelsResponse>({ type: 'QUERY_ISSUE_LABELS', owner: this.owner, repo: this.repo, number: this.number }),
+      sendMessage<ProposalResponse>({ type: 'QUERY_PROPOSAL', owner: this.owner, repo: this.repo, number: this.number }),
+      sendMessage<AutoPostResponse>({ type: 'GET_AUTOPOST' }),
     ]);
 
     if (!taskRes.ok) {
@@ -111,6 +154,24 @@ export class StatusWidget {
 
     if (statusesRes.ok && statusesRes.data) {
       this.statuses = statusesRes.data;
+    }
+
+    if (labelsRes.ok && labelsRes.data) {
+      this.labels = labelsRes.data;
+    }
+
+    if (proposalRes.ok) {
+      this.proposal = proposalRes.data ?? null;
+      this.proposalDraftBody = this.proposal?.body ?? '';
+    }
+
+    if (autoPostRes.ok && autoPostRes.data) {
+      this.autoPostEnabled = autoPostRes.data.enabled;
+    }
+
+    if (this.proposal?.state === 'armed' || this.proposal?.state === 'posting') {
+      this.startProposalPoll();
+      this.startFastPath();
     }
   }
 
@@ -349,6 +410,8 @@ export class StatusWidget {
 
     section.appendChild(btn);
     this.root.appendChild(section);
+
+    this.renderProposalPanel();
   }
 
   private renderStatusBadge() {
@@ -381,6 +444,8 @@ export class StatusWidget {
     }
 
     this.root.appendChild(section);
+
+    this.renderProposalPanel();
   }
 
   private renderDropdown(): HTMLDivElement {
@@ -443,6 +508,378 @@ export class StatusWidget {
     }
   }
 
+  // ── Proposal panel ──
+
+  private hasReadyLabel(): boolean {
+    return this.labels.some((l) => l.toLowerCase() === PROPOSAL_READY_LABEL);
+  }
+
+  private hasRequiredDraftLabels(): boolean {
+    const lower = this.labels.map((l) => l.toLowerCase());
+    return PROPOSAL_REQUIRED_LABELS.every((req) => lower.includes(req));
+  }
+
+  private isProposalPanelEligible(): boolean {
+    // Always show on issue pages when signed in. Sub-states render hints
+    // about label readiness (bug+daily vs already-Help-Wanted vs neither).
+    return this.mode === 'issue';
+  }
+
+  private renderProposalPanel(): void {
+    if (!this.isProposalPanelEligible()) return;
+
+    const section = document.createElement('div');
+    section.className = 'section proposal';
+    section.innerHTML = `<div class="header">Proposal</div>`;
+
+    const body = document.createElement('div');
+    body.className = 'proposal-body';
+
+    const state = this.proposal?.state ?? 'draft';
+    const isArmed = state === 'armed' || state === 'posting';
+    const isFinal = state === 'posted';
+    const isFailed = state === 'failed';
+
+    if (isFinal) {
+      const when = this.proposal?.posted_at
+        ? new Date(this.proposal.posted_at).toLocaleString()
+        : '';
+      body.innerHTML = `
+        <div class="proposal-status posted">
+          <span class="check">✓</span>
+          <div>
+            <div class="proposal-status-line">Posted ${this.escapeHtml(when)}</div>
+            ${this.proposal?.github_comment_id ? `<a class="comment-link" href="https://github.com/${this.escapeHtml(this.owner)}/${this.escapeHtml(this.repo)}/issues/${this.number}#issuecomment-${this.proposal.github_comment_id}" target="_blank" rel="noopener">View comment →</a>` : ''}
+          </div>
+        </div>
+      `;
+      section.appendChild(body);
+      this.root.appendChild(section);
+      return;
+    }
+
+    const armedAndDisabled = (state === 'armed' || state === 'posting') && !this.autoPostEnabled;
+    if (armedAndDisabled) {
+      const notice = document.createElement('div');
+      notice.className = 'proposal-notice danger';
+      notice.textContent = 'Auto-post is OFF in the Tasker popup — armed drafts are paused. Re-enable to post.';
+      body.appendChild(notice);
+    }
+
+    const readyAlready = this.hasReadyLabel();
+    const hasBugDaily = this.hasRequiredDraftLabels();
+    if (readyAlready) {
+      const notice = document.createElement('div');
+      notice.className = 'proposal-notice';
+      notice.textContent = state === 'armed'
+        ? '"Help Wanted" already added — posting on next poll cycle.'
+        : '"Help Wanted" is already on this issue. Arm to post immediately.';
+      body.appendChild(notice);
+    } else if (!hasBugDaily) {
+      const notice = document.createElement('div');
+      notice.className = 'proposal-notice subtle';
+      notice.textContent = this.labels.length
+        ? 'Labels: ' + this.labels.join(', ') + '. Will arm-and-wait for "Help Wanted".'
+        : 'Labels not loaded. Will arm-and-wait for "Help Wanted" once added.';
+      body.appendChild(notice);
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'proposal-textarea';
+    textarea.rows = 6;
+    textarea.placeholder = '## Proposal\n\nDescribe your fix...';
+    textarea.value = this.proposalDraftBody;
+    textarea.disabled = isArmed || this.proposalBusy;
+    textarea.addEventListener('input', () => {
+      this.proposalDraftBody = textarea.value;
+    });
+    body.appendChild(textarea);
+
+    const actions = document.createElement('div');
+    actions.className = 'proposal-actions';
+
+    const dirty =
+      this.proposalDraftBody !== (this.proposal?.body ?? '') &&
+      this.proposalDraftBody.trim().length > 0;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'proposal-btn secondary';
+    saveBtn.textContent = this.proposalBusy ? 'Saving…' : (this.proposal ? 'Save changes' : 'Save draft');
+    saveBtn.disabled = this.proposalBusy || isArmed || !dirty;
+    saveBtn.addEventListener('click', () => void this.saveProposal());
+    actions.appendChild(saveBtn);
+
+    if (isArmed) {
+      const disarmBtn = document.createElement('button');
+      disarmBtn.className = 'proposal-btn';
+      disarmBtn.textContent = state === 'posting' ? 'Posting…' : 'Disarm';
+      disarmBtn.disabled = this.proposalBusy || state === 'posting';
+      disarmBtn.addEventListener('click', () => void this.setProposalState('draft'));
+      actions.appendChild(disarmBtn);
+    } else {
+      const armBtn = document.createElement('button');
+      armBtn.className = 'proposal-btn primary';
+      armBtn.textContent = this.proposalBusy ? 'Arming…' : 'Arm auto-post';
+      armBtn.disabled =
+        this.proposalBusy ||
+        !this.proposalDraftBody.trim() ||
+        dirty; // must save first
+      armBtn.title = dirty ? 'Save changes before arming' : '';
+      armBtn.addEventListener('click', () => void this.setProposalState('armed'));
+      actions.appendChild(armBtn);
+    }
+
+    body.appendChild(actions);
+
+    const statusLine = document.createElement('div');
+    statusLine.className = 'proposal-status-line';
+    if (isArmed) {
+      statusLine.textContent = state === 'posting'
+        ? 'Posting now…'
+        : 'Armed — waiting for "Help Wanted" label';
+    } else if (this.proposal) {
+      const at = this.proposal.updated_at
+        ? new Date(this.proposal.updated_at).toLocaleString()
+        : '';
+      statusLine.textContent = `Draft saved · ${at}`;
+    } else {
+      statusLine.textContent = 'Auto-posts on "Help Wanted" via the poll worker.';
+    }
+    body.appendChild(statusLine);
+
+    if (isFailed && this.proposal?.last_error) {
+      const errEl = document.createElement('div');
+      errEl.className = 'proposal-error';
+      errEl.textContent = `Last error: ${this.proposal.last_error}`;
+      body.appendChild(errEl);
+    }
+
+    section.appendChild(body);
+    this.root.appendChild(section);
+  }
+
+  private async saveProposal(): Promise<void> {
+    if (this.proposalBusy) return;
+    this.proposalBusy = true;
+    this.render();
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: 'SAVE_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      body: this.proposalDraftBody,
+    });
+    this.proposalBusy = false;
+    if (res.ok && res.data) {
+      this.proposal = res.data;
+      this.proposalDraftBody = res.data.body;
+    } else {
+      this.error = res.error ?? 'Save failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  private async setProposalState(target: 'armed' | 'draft'): Promise<void> {
+    if (this.proposalBusy) return;
+    this.proposalBusy = true;
+    this.render();
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: target === 'armed' ? 'ARM_PROPOSAL' : 'DISARM_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.proposalBusy = false;
+    if (res.ok && res.data) {
+      this.proposal = res.data;
+      if (res.data.state === 'armed' || res.data.state === 'posting') {
+        this.startProposalPoll();
+        this.startFastPath();
+      } else {
+        this.stopProposalPoll();
+        this.stopFastPath();
+      }
+    } else {
+      this.error = res.error ?? 'Update failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  private startProposalPoll(): void {
+    this.stopProposalPoll();
+    this.proposalPollHandle = setInterval(() => {
+      void this.refreshProposal();
+    }, PROPOSAL_POLL_INTERVAL_MS);
+  }
+
+  private stopProposalPoll(): void {
+    if (this.proposalPollHandle !== null) {
+      clearInterval(this.proposalPollHandle);
+      this.proposalPollHandle = null;
+    }
+  }
+
+  private async refreshProposal(): Promise<void> {
+    if (this.destroyed) return;
+    const res = await sendMessage<ProposalResponse>({
+      type: 'QUERY_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    if (this.destroyed) return;
+    if (!res.ok || !res.data) return;
+    const next = res.data;
+    if (!this.proposal || next.state !== this.proposal.state || next.posted_at !== this.proposal.posted_at) {
+      this.proposal = next;
+      if (next.state === 'posted' || next.state === 'failed' || next.state === 'draft') {
+        this.stopProposalPoll();
+        this.stopFastPath();
+      }
+      this.render();
+    }
+  }
+
+  // ── Tab-side fast-path: detect "Help Wanted" the moment it appears ──
+
+  private startFastPath(): void {
+    if (!this.autoPostEnabled) return;
+    if (!this.proposal || this.proposal.state !== 'armed') return;
+    if (this.fastPathTriggered) return;
+
+    // If the label is already on the issue (we just loaded it), fire immediately.
+    if (this.hasReadyLabel()) {
+      void this.tryFastPost('initial-labels');
+      return;
+    }
+
+    this.attachFastPathObservers();
+    this.startFastPathPoll();
+
+    // Pause the ETag poll while the tab is hidden to be a polite citizen;
+    // resume on focus. The MutationObserver still runs (free) in case GitHub
+    // pushes a label update via their own live channel.
+    if (!this.fastPathVisibilityListener) {
+      this.fastPathVisibilityListener = () => {
+        if (document.visibilityState === 'visible' && this.proposal?.state === 'armed') {
+          this.startFastPathPoll();
+        } else {
+          this.stopFastPathPoll();
+        }
+      };
+      document.addEventListener('visibilitychange', this.fastPathVisibilityListener);
+    }
+  }
+
+  private stopFastPath(): void {
+    this.stopFastPathPoll();
+    for (const obs of this.fastPathObservers) obs.disconnect();
+    this.fastPathObservers = [];
+    if (this.fastPathVisibilityListener) {
+      document.removeEventListener('visibilitychange', this.fastPathVisibilityListener);
+      this.fastPathVisibilityListener = null;
+    }
+    this.fastPathEtag = null;
+  }
+
+  private attachFastPathObservers(): void {
+    // Walk through every known labels-container selector. Some pages have
+    // both classic and React variants in flight during navigation.
+    const seen = new Set<Element>();
+    for (const sel of LABELS_CONTAINER_SELECTORS) {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (seen.has(el)) return;
+        seen.add(el);
+        const obs = new MutationObserver(() => this.checkLabelsContainer(el as HTMLElement));
+        obs.observe(el, { childList: true, subtree: true, characterData: true });
+        this.fastPathObservers.push(obs);
+        // Run an initial pass — the container may already contain the label
+        // when GitHub renders it via Turbo navigation.
+        this.checkLabelsContainer(el as HTMLElement);
+      });
+    }
+  }
+
+  private checkLabelsContainer(el: HTMLElement): void {
+    if (this.fastPathTriggered) return;
+    const text = (el.innerText || el.textContent || '').toLowerCase();
+    if (text.includes(PROPOSAL_READY_LABEL)) {
+      void this.tryFastPost('mutation-observer');
+    }
+  }
+
+  private startFastPathPoll(): void {
+    if (this.fastPathHandle !== null) return;
+    if (document.visibilityState !== 'visible') return;
+    this.fastPathHandle = setInterval(() => {
+      void this.fastPollTick();
+    }, FAST_LABEL_POLL_MS);
+    // Fire one immediate tick so we don't wait for the first interval.
+    void this.fastPollTick();
+  }
+
+  private stopFastPathPoll(): void {
+    if (this.fastPathHandle !== null) {
+      clearInterval(this.fastPathHandle);
+      this.fastPathHandle = null;
+    }
+  }
+
+  private async fastPollTick(): Promise<void> {
+    if (this.destroyed || this.fastPathTriggered) return;
+    if (!this.proposal || this.proposal.state !== 'armed') {
+      this.stopFastPath();
+      return;
+    }
+    const res = await sendMessage<IssueLabelsEtagResponse>({
+      type: 'QUERY_ISSUE_LABELS_ETAG',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      etag: this.fastPathEtag,
+    });
+    if (!res.ok || !res.data) return;
+    if (res.data.etag) this.fastPathEtag = res.data.etag;
+    if (res.data.notModified || !res.data.labels) return;
+    this.labels = res.data.labels;
+    if (this.hasReadyLabel()) {
+      void this.tryFastPost('etag-poll');
+    }
+  }
+
+  private async tryFastPost(source: string): Promise<void> {
+    console.debug('[tasker] fast-post triggered via', source);
+    if (this.fastPathTriggered) return;
+    if (!this.autoPostEnabled) return;
+    if (!this.proposal || this.proposal.state !== 'armed') return;
+    this.fastPathTriggered = true;
+    this.stopFastPath();
+    const proposalId = this.proposal.id;
+
+    // Optimistic UI: flip to "posting" so the user sees instant feedback.
+    this.proposal = { ...this.proposal, state: 'posting' };
+    this.render();
+
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: 'POST_PROPOSAL_NOW',
+      proposalId,
+    });
+
+    if (this.destroyed) return;
+    if (res.ok && res.data) {
+      this.proposal = res.data;
+      this.stopProposalPoll();
+    } else {
+      // Reset trigger so a retry is possible if the row went back to armed.
+      this.fastPathTriggered = false;
+      // Pull canonical state — the row may already be `failed` or back to `armed`.
+      void this.refreshProposal();
+    }
+    this.render();
+  }
+
   // ── Shared helpers ──
 
   private groupStatuses(): Record<TaskStatusGroup, UserStatus[]> {
@@ -467,6 +904,9 @@ export class StatusWidget {
   }
 
   destroy() {
+    this.destroyed = true;
+    this.stopProposalPoll();
+    this.stopFastPath();
     this.container.remove();
   }
 
@@ -813,6 +1253,148 @@ export class StatusWidget {
         animation: spin 0.6s linear infinite;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
+
+      .section.proposal { margin-top: 8px; }
+
+      .proposal-textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border-radius: 6px;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.4;
+        resize: vertical;
+        min-height: 80px;
+        margin-bottom: 8px;
+      }
+      .tasker-root.light .proposal-textarea {
+        background: #ffffff;
+        color: #1f2328;
+        border: 1px solid #d1d9e0;
+      }
+      .tasker-root.dark .proposal-textarea {
+        background: #0d1117;
+        color: #e6edf3;
+        border: 1px solid #3d444d;
+      }
+      .proposal-textarea:disabled { opacity: 0.7; cursor: not-allowed; }
+
+      .proposal-actions {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .proposal-btn {
+        flex: 1;
+        padding: 5px 10px;
+        font-size: 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        font-weight: 500;
+      }
+      .proposal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .tasker-root.light .proposal-btn {
+        background: #f6f8fa;
+        color: #1f2328;
+        border-color: #d1d9e0;
+      }
+      .tasker-root.light .proposal-btn:hover:not(:disabled) {
+        background: #eaeef2;
+      }
+      .tasker-root.dark .proposal-btn {
+        background: #21262d;
+        color: #e6edf3;
+        border-color: #3d444d;
+      }
+      .tasker-root.dark .proposal-btn:hover:not(:disabled) {
+        background: #292e36;
+      }
+      .proposal-btn.primary {
+        background: #2563eb;
+        color: #ffffff;
+        border-color: #2563eb;
+      }
+      .proposal-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+      .proposal-status-line {
+        font-size: 11px;
+        opacity: 0.7;
+      }
+
+      .proposal-notice {
+        font-size: 11px;
+        padding: 5px 8px;
+        border-radius: 4px;
+        margin-bottom: 6px;
+      }
+      .tasker-root.light .proposal-notice {
+        background: #fff8c5;
+        color: #633c01;
+        border: 1px solid #d4a72c;
+      }
+      .tasker-root.dark .proposal-notice {
+        background: #3a2e00;
+        color: #f2cc60;
+        border: 1px solid #6e4f00;
+      }
+      .proposal-notice.subtle {
+        opacity: 0.85;
+      }
+      .tasker-root.light .proposal-notice.danger {
+        background: #ffebe9;
+        color: #82071e;
+        border: 1px solid #ff8182;
+      }
+      .tasker-root.dark .proposal-notice.danger {
+        background: #5a1a1a;
+        color: #ffa198;
+        border: 1px solid #f85149;
+      }
+      .tasker-root.light .proposal-notice.subtle {
+        background: #f6f8fa;
+        color: #57606a;
+        border: 1px solid #d1d9e0;
+      }
+      .tasker-root.dark .proposal-notice.subtle {
+        background: #21262d;
+        color: #8b949e;
+        border: 1px solid #3d444d;
+      }
+
+      .proposal-status.posted {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .proposal-status.posted .check {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #1a7f37;
+        color: #fff;
+        font-size: 12px;
+        flex-shrink: 0;
+      }
+      .proposal-status.posted .comment-link {
+        display: block;
+        font-size: 11px;
+        margin-top: 2px;
+        color: inherit;
+        opacity: 0.8;
+      }
+
+      .proposal-error {
+        font-size: 11px;
+        margin-top: 4px;
+        color: #cf222e;
+      }
+      .tasker-root.dark .proposal-error { color: #f85149; }
     `;
   }
 }

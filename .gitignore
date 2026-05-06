@@ -45,6 +45,10 @@ extension/node_modules/
 # vercel
 .vercel
 
+# supabase CLI internals (linked-project state, version probes)
+supabase/.temp/
+supabase/.branches/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
