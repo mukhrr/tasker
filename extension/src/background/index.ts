@@ -94,6 +94,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleGetAutoPost();
     case 'SET_AUTOPOST':
       return handleSetAutoPost(msg.enabled);
+    case 'VERIFY_POSTED_COMMENT':
+      return handleVerifyPostedComment(msg.proposalId);
     default:
       return { ok: false, error: 'Unknown message type' };
   }
@@ -696,5 +698,73 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
       .update({ state: 'failed', last_error: errMsg })
       .eq('id', proposal.id);
     return { ok: false, error: errMsg };
+  }
+}
+
+// Verify that a 'posted' proposal's comment still exists on GitHub. If
+// the user deleted it, revert the row to 'draft' so the textarea+body
+// reappear and they can edit/repost without creating a duplicate.
+async function handleVerifyPostedComment(proposalId: string): Promise<MessageResponse<Proposal>> {
+  if (!proposalId || typeof proposalId !== 'string') {
+    return { ok: false, error: 'Invalid proposal id' };
+  }
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+  const userId = session.session.user.id;
+
+  const { data: proposal, error: readErr } = await supabase
+    .from('proposals')
+    .select('*')
+    .eq('id', proposalId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!proposal) return { ok: false, error: 'Proposal not found' };
+
+  // Only meaningful for posted rows with a recorded comment id.
+  if (proposal.state !== 'posted' || !proposal.github_comment_id) {
+    return { ok: true, data: proposal as Proposal };
+  }
+
+  const providerToken = await getGithubProviderToken();
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (providerToken) headers.Authorization = `Bearer ${providerToken}`;
+
+  try {
+    const url = `https://api.github.com/repos/${encodeURIComponent(proposal.repo_owner)}/${encodeURIComponent(proposal.repo_name)}/issues/comments/${proposal.github_comment_id}`;
+    const res = await fetch(url, { headers });
+
+    if (res.status === 200) {
+      // Still alive — no change.
+      return { ok: true, data: proposal as Proposal };
+    }
+    if (res.status === 404) {
+      console.log('[tasker bg] verify:comment-deleted, reverting to draft', proposalId);
+      const { data: reverted, error: updErr } = await supabase
+        .from('proposals')
+        .update({
+          state: 'draft',
+          github_comment_id: null,
+          posted_at: null,
+          last_error: 'Previously posted comment was deleted on GitHub.',
+        })
+        .eq('id', proposalId)
+        .select()
+        .single();
+      if (updErr) return { ok: false, error: updErr.message };
+      return { ok: true, data: reverted as Proposal };
+    }
+    // 401/403/5xx — don't make destructive changes on transient errors.
+    return { ok: true, data: proposal as Proposal };
+  } catch (e) {
+    // Network error — leave the row alone.
+    console.warn('[tasker bg] verify:fetch failed', e);
+    return { ok: true, data: proposal as Proposal };
   }
 }

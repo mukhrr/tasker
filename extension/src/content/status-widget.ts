@@ -65,6 +65,7 @@ export class StatusWidget {
   private proposalDraftBody = '';
   private proposalBusy = false;
   private proposalPollHandle: ReturnType<typeof setInterval> | null = null;
+  private proposalNotice: string | null = null;
   private destroyed = false;
   // Fast-path state: tab-side detection of the Help Wanted label.
   private autoPostEnabled = true;
@@ -172,6 +173,38 @@ export class StatusWidget {
     if (this.proposal?.state === 'armed' || this.proposal?.state === 'posting') {
       this.startProposalPoll();
       this.startFastPath();
+    }
+
+    // If the row says 'posted' but the user deleted the comment on GitHub,
+    // revert to draft so the textarea (with the saved body) reappears and
+    // they can repost without manual surgery on the DB row.
+    if (this.proposal?.state === 'posted' && this.proposal.github_comment_id) {
+      void this.verifyPostedComment();
+    }
+  }
+
+  private async verifyPostedComment(): Promise<void> {
+    if (!this.proposal || this.proposal.state !== 'posted') return;
+    const proposalId = this.proposal.id;
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: 'VERIFY_POSTED_COMMENT',
+      proposalId,
+    });
+    if (this.destroyed) return;
+    if (!res.ok || !res.data) return;
+    if (res.data.state !== this.proposal?.state) {
+      const reverted = res.data.state === 'draft';
+      this.proposal = res.data;
+      this.proposalDraftBody = res.data.body ?? '';
+      if (reverted) {
+        this.proposalNotice = 'Previous comment was deleted on GitHub — reverted to draft.';
+        setTimeout(() => {
+          if (this.destroyed) return;
+          this.proposalNotice = null;
+          this.render();
+        }, 8000);
+      }
+      this.render();
     }
   }
 
@@ -556,6 +589,13 @@ export class StatusWidget {
       section.appendChild(body);
       this.root.appendChild(section);
       return;
+    }
+
+    if (this.proposalNotice) {
+      const noticeEl = document.createElement('div');
+      noticeEl.className = 'proposal-notice';
+      noticeEl.textContent = this.proposalNotice;
+      body.appendChild(noticeEl);
     }
 
     const armedAndDisabled = (state === 'armed' || state === 'posting') && !this.autoPostEnabled;

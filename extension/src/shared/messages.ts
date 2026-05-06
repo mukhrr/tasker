@@ -152,6 +152,14 @@ export interface SetAutoPostRequest {
   enabled: boolean;
 }
 
+// Verify that a 'posted' proposal's comment still exists on GitHub.
+// If GitHub returns 404 (comment deleted), the row is reverted to 'draft'
+// so the user can re-edit and repost. Body is preserved.
+export interface VerifyPostedCommentRequest {
+  type: 'VERIFY_POSTED_COMMENT';
+  proposalId: string;
+}
+
 export type MessageRequest =
   | LoginGithubRequest
   | LogoutRequest
@@ -175,7 +183,8 @@ export type MessageRequest =
   | PostProposalNowRequest
   | QueryIssueLabelsEtagRequest
   | GetAutoPostRequest
-  | SetAutoPostRequest;
+  | SetAutoPostRequest
+  | VerifyPostedCommentRequest;
 
 // ── Response types ──
 
