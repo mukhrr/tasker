@@ -1,8 +1,12 @@
 name: Auto Sync Tasks
 
+# Hourly cron is paused — re-enable by uncommenting `schedule` below.
+# Reason: every tick fires the LangGraph agent against Claude for every
+# user with auto_sync_enabled=true, costing Anthropic API tokens. Trigger
+# manually from the Actions tab when you want a refresh.
 on:
-  schedule:
-    - cron: '0 * * * *'
+  # schedule:
+  #   - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,6 +15,6 @@ jobs:
     steps:
       - name: Trigger sync endpoint
         run: |
-          curl -sf -X GET \
+          curl -sfL -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_URL }}/api/cron/sync"
+            "${{ secrets.TASKER_BASE_URL }}/api/cron/sync"
