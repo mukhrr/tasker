@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tasker for GitHub",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "View and update Tasker task statuses directly on GitHub issues and PRs.",
   "permissions": ["storage", "identity", "alarms", "notifications"],
   "host_permissions": [

@@ -590,25 +590,23 @@ export class StatusWidget {
     textarea.placeholder = '## Proposal\n\nDescribe your fix...';
     textarea.value = this.proposalDraftBody;
     textarea.disabled = isArmed || this.proposalBusy;
-    textarea.addEventListener('input', () => {
-      this.proposalDraftBody = textarea.value;
-    });
     body.appendChild(textarea);
 
     const actions = document.createElement('div');
     actions.className = 'proposal-actions';
 
-    const dirty =
+    const computeDirty = (): boolean =>
       this.proposalDraftBody !== (this.proposal?.body ?? '') &&
       this.proposalDraftBody.trim().length > 0;
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'proposal-btn secondary';
     saveBtn.textContent = this.proposalBusy ? 'Saving…' : (this.proposal ? 'Save changes' : 'Save draft');
-    saveBtn.disabled = this.proposalBusy || isArmed || !dirty;
+    saveBtn.disabled = this.proposalBusy || isArmed || !computeDirty();
     saveBtn.addEventListener('click', () => void this.saveProposal());
     actions.appendChild(saveBtn);
 
+    let armBtnRef: HTMLButtonElement | null = null;
     if (isArmed) {
       const disarmBtn = document.createElement('button');
       disarmBtn.className = 'proposal-btn';
@@ -620,6 +618,7 @@ export class StatusWidget {
       const armBtn = document.createElement('button');
       armBtn.className = 'proposal-btn primary';
       armBtn.textContent = this.proposalBusy ? 'Arming…' : 'Arm auto-post';
+      const dirty = computeDirty();
       armBtn.disabled =
         this.proposalBusy ||
         !this.proposalDraftBody.trim() ||
@@ -627,9 +626,23 @@ export class StatusWidget {
       armBtn.title = dirty ? 'Save changes before arming' : '';
       armBtn.addEventListener('click', () => void this.setProposalState('armed'));
       actions.appendChild(armBtn);
+      armBtnRef = armBtn;
     }
 
     body.appendChild(actions);
+
+    // Update button enable-state live as the user types — without re-rendering
+    // the whole panel (which would yank focus out of the textarea on every key).
+    textarea.addEventListener('input', () => {
+      this.proposalDraftBody = textarea.value;
+      const dirty = computeDirty();
+      const trimmed = this.proposalDraftBody.trim().length > 0;
+      saveBtn.disabled = this.proposalBusy || isArmed || !dirty;
+      if (armBtnRef) {
+        armBtnRef.disabled = this.proposalBusy || !trimmed || dirty;
+        armBtnRef.title = dirty ? 'Save changes before arming' : '';
+      }
+    });
 
     const statusLine = document.createElement('div');
     statusLine.className = 'proposal-status-line';
