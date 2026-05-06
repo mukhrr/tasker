@@ -631,6 +631,27 @@ export class StatusWidget {
 
     body.appendChild(actions);
 
+    // Manual "Post now" — bypasses Help-Wanted detection and the kill switch.
+    // Visible when the row isn't yet posted/posting, so the user can fire
+    // immediately if the label is already there or they just want to test.
+    let postNowBtnRef: HTMLButtonElement | null = null;
+    if (state !== 'posting') {
+      const postRow = document.createElement('div');
+      postRow.className = 'proposal-actions';
+      const postNowBtn = document.createElement('button');
+      postNowBtn.className = 'proposal-btn danger';
+      postNowBtn.textContent = this.proposalBusy ? 'Posting…' : 'Post now';
+      const trimmedNow = this.proposalDraftBody.trim().length > 0;
+      postNowBtn.disabled = this.proposalBusy || !trimmedNow;
+      postNowBtn.title = trimmedNow
+        ? 'Post the current text as a comment immediately, without waiting for Help Wanted.'
+        : 'Type your proposal first.';
+      postNowBtn.addEventListener('click', () => void this.postProposalNow());
+      postRow.appendChild(postNowBtn);
+      body.appendChild(postRow);
+      postNowBtnRef = postNowBtn;
+    }
+
     // Update button enable-state live as the user types — without re-rendering
     // the whole panel (which would yank focus out of the textarea on every key).
     textarea.addEventListener('input', () => {
@@ -641,6 +662,12 @@ export class StatusWidget {
       if (armBtnRef) {
         armBtnRef.disabled = this.proposalBusy || !trimmed || dirty;
         armBtnRef.title = dirty ? 'Save changes before arming' : '';
+      }
+      if (postNowBtnRef) {
+        postNowBtnRef.disabled = this.proposalBusy || !trimmed;
+        postNowBtnRef.title = trimmed
+          ? 'Post the current text as a comment immediately, without waiting for Help Wanted.'
+          : 'Type your proposal first.';
       }
     });
 
@@ -716,6 +743,56 @@ export class StatusWidget {
     } else {
       this.error = res.error ?? 'Update failed';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  // Manual "Post now": save the current textarea, then force-post regardless
+  // of label state and the auto-post kill switch. Used when the issue already
+  // has Help Wanted, or for one-off posting without arming.
+  private async postProposalNow(): Promise<void> {
+    if (this.proposalBusy) return;
+    const body = this.proposalDraftBody.trim();
+    if (!body) return;
+    if (!confirm('Post this proposal as a comment now?')) return;
+
+    this.proposalBusy = true;
+    this.render();
+
+    // Always save first so the row exists and reflects exactly what we post.
+    const saveRes = await sendMessage<MessageResponse<Proposal>>({
+      type: 'SAVE_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      body: this.proposalDraftBody,
+    });
+    if (!saveRes.ok || !saveRes.data) {
+      this.proposalBusy = false;
+      this.error = saveRes.error ?? 'Save failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+      this.render();
+      return;
+    }
+    this.proposal = saveRes.data;
+
+    // Force-post — bypasses the kill switch and accepts draft|armed|failed.
+    const postRes = await sendMessage<MessageResponse<Proposal>>({
+      type: 'POST_PROPOSAL_NOW',
+      proposalId: saveRes.data.id,
+      force: true,
+    });
+
+    this.proposalBusy = false;
+    if (postRes.ok && postRes.data) {
+      this.proposal = postRes.data;
+      this.stopProposalPoll();
+      this.stopFastPath();
+    } else {
+      this.error = postRes.error ?? 'Post failed';
+      setTimeout(() => { this.error = null; this.render(); }, 5000);
+      // Refresh the row in case the server flipped it to 'failed'.
+      void this.refreshProposal();
     }
     this.render();
   }
@@ -1330,6 +1407,13 @@ export class StatusWidget {
         border-color: #2563eb;
       }
       .proposal-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+      .proposal-btn.danger {
+        background: #dc2626;
+        color: #ffffff;
+        border-color: #dc2626;
+      }
+      .proposal-btn.danger:hover:not(:disabled) { background: #b91c1c; }
 
       .proposal-status-line {
         font-size: 11px;

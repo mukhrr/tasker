@@ -125,6 +125,11 @@ export interface DisarmProposalRequest {
 export interface PostProposalNowRequest {
   type: 'POST_PROPOSAL_NOW';
   proposalId: string;
+  // When true: bypass the auto-post kill switch and allow the row to
+  // transition to 'posting' from any non-terminal state (draft, armed,
+  // failed). This is for the manual "Post now" button — explicit user
+  // intent overrides the master toggle.
+  force?: boolean;
 }
 
 // ETag-cached labels query — content script polls this every ~1.5s while

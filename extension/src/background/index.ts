@@ -71,7 +71,7 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
     case 'DISARM_PROPOSAL':
       return handleSetProposalState(msg.owner, msg.repo, msg.number, 'draft');
     case 'POST_PROPOSAL_NOW':
-      return handlePostProposalNow(msg.proposalId);
+      return handlePostProposalNow(msg.proposalId, msg.force === true);
     case 'QUERY_ISSUE_LABELS_ETAG':
       return handleQueryIssueLabelsEtag(msg.owner, msg.repo, msg.number, msg.etag);
     case 'GET_AUTOPOST':
@@ -574,11 +574,13 @@ async function handleQueryIssueLabelsEtag(
   }
 }
 
-async function handlePostProposalNow(proposalId: string): Promise<MessageResponse<Proposal>> {
+async function handlePostProposalNow(proposalId: string, force = false): Promise<MessageResponse<Proposal>> {
   if (!proposalId || typeof proposalId !== 'string') {
     return { ok: false, error: 'Invalid proposal id' };
   }
-  if (!(await isAutoPostAllowedLocally())) {
+  // Auto-post kill switch only gates the *automatic* fast path. A manual
+  // "Post now" click is explicit user intent — let it through.
+  if (!force && !(await isAutoPostAllowedLocally())) {
     return { ok: false, error: 'Auto-post is disabled' };
   }
 
@@ -591,15 +593,17 @@ async function handlePostProposalNow(proposalId: string): Promise<MessageRespons
     return { ok: false, error: 'No GitHub provider token; sign out and back in with public_repo scope.' };
   }
 
-  // Atomic claim — flips state armed → posting and returns the row only if
-  // it was still armed. Two parallel callers (e.g. mutation observer and
-  // ETag poll on the same tab) collapse here; the loser gets `claimed = null`.
+  // Atomic claim. Auto path: armed → posting only. Forced path: any
+  // non-terminal state → posting (draft, armed, or failed). Two parallel
+  // callers (mutation observer + ETag poll, or two tabs) collapse here;
+  // the loser gets claimed=null.
+  const allowedFromStates = force ? ['draft', 'armed', 'failed'] : ['armed'];
   const { data: claimed, error: claimErr } = await supabase
     .from('proposals')
     .update({ state: 'posting' })
     .eq('id', proposalId)
     .eq('user_id', userId)
-    .eq('state', 'armed')
+    .in('state', allowedFromStates)
     .select()
     .maybeSingle();
 
