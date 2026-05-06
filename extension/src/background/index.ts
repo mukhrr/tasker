@@ -596,6 +596,7 @@ async function handleQueryIssueLabelsEtag(
 }
 
 async function handlePostProposalNow(proposalId: string, force = false): Promise<MessageResponse<Proposal>> {
+  console.log('[tasker bg] post-now:start', { proposalId, force });
   if (!proposalId || typeof proposalId !== 'string') {
     return { ok: false, error: 'Invalid proposal id' };
   }
@@ -610,6 +611,7 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
   if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
   const userId = session.session.user.id;
   const providerToken = await getGithubProviderToken();
+  console.log('[tasker bg] post-now:token-resolved', { hasToken: !!providerToken, len: providerToken?.length });
   if (!providerToken) {
     return { ok: false, error: 'No GitHub provider token; sign out and back in with public_repo scope.' };
   }
@@ -628,6 +630,7 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
     .select()
     .maybeSingle();
 
+  console.log('[tasker bg] post-now:claim', { claimed: !!claimed, claimErr: claimErr?.message });
   if (claimErr) return { ok: false, error: claimErr.message };
   if (!claimed) {
     // Already claimed elsewhere (cloud worker, sibling tab, …) — surface the
@@ -644,23 +647,24 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
   const proposal = claimed as Proposal;
 
   try {
-    const res = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(proposal.repo_owner)}/${encodeURIComponent(proposal.repo_name)}/issues/${proposal.issue_number}/comments`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${providerToken}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ body: proposal.body }),
+    const url = `https://api.github.com/repos/${encodeURIComponent(proposal.repo_owner)}/${encodeURIComponent(proposal.repo_name)}/issues/${proposal.issue_number}/comments`;
+    console.log('[tasker bg] post-now:posting', { url });
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${providerToken}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
       },
-    );
+      body: JSON.stringify({ body: proposal.body }),
+    });
+    console.log('[tasker bg] post-now:response', { status: res.status });
 
     if (res.status !== 201) {
       const text = await res.text().catch(() => '');
       const errMsg = `${res.status} ${text.slice(0, 200)}`;
+      console.warn('[tasker bg] post-now:non-201', errMsg);
       await supabase
         .from('proposals')
         .update({ state: 'failed', last_error: errMsg })
@@ -682,9 +686,11 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
       .single();
 
     if (updErr) return { ok: false, error: updErr.message };
+    console.log('[tasker bg] post-now:done', { state: (posted as Proposal | null)?.state });
     return { ok: true, data: posted as Proposal };
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : 'Network error';
+    console.error('[tasker bg] post-now:threw', errMsg);
     await supabase
       .from('proposals')
       .update({ state: 'failed', last_error: errMsg })

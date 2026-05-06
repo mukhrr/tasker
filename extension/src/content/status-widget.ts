@@ -759,42 +759,61 @@ export class StatusWidget {
     this.proposalBusy = true;
     this.render();
 
-    // Always save first so the row exists and reflects exactly what we post.
-    const saveRes = await sendMessage<MessageResponse<Proposal>>({
-      type: 'SAVE_PROPOSAL',
-      owner: this.owner,
-      repo: this.repo,
-      number: this.number,
-      body: this.proposalDraftBody,
-    });
-    if (!saveRes.ok || !saveRes.data) {
-      this.proposalBusy = false;
-      this.error = saveRes.error ?? 'Save failed';
-      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    try {
+      // Always save first so the row exists and reflects exactly what we post.
+      const saveRes = await sendMessage<MessageResponse<Proposal>>({
+        type: 'SAVE_PROPOSAL',
+        owner: this.owner,
+        repo: this.repo,
+        number: this.number,
+        body: this.proposalDraftBody,
+      });
+      if (!saveRes.ok || !saveRes.data) {
+        this.error = saveRes.error ?? 'Save failed';
+        setTimeout(() => { this.error = null; this.render(); }, 3000);
+        return;
+      }
+      this.proposal = saveRes.data;
+
+      // Optimistically flip to 'posting' AND start polling the row from
+      // Supabase. The DB state is the source of truth — even if the
+      // sendMessage promise hangs (MV3 can kill the service worker mid-fetch
+      // and silently drop the response), the poll loop will catch the row
+      // landing in 'posted' or 'failed' and update the UI.
+      this.proposal = { ...this.proposal, state: 'posting' };
+      this.startProposalPoll();
       this.render();
-      return;
-    }
-    this.proposal = saveRes.data;
 
-    // Force-post — bypasses the kill switch and accepts draft|armed|failed.
-    const postRes = await sendMessage<MessageResponse<Proposal>>({
-      type: 'POST_PROPOSAL_NOW',
-      proposalId: saveRes.data.id,
-      force: true,
-    });
+      // Force-post — bypasses the kill switch and accepts draft|armed|failed.
+      const postRes = await sendMessage<MessageResponse<Proposal>>({
+        type: 'POST_PROPOSAL_NOW',
+        proposalId: saveRes.data.id,
+        force: true,
+      });
 
-    this.proposalBusy = false;
-    if (postRes.ok && postRes.data) {
-      this.proposal = postRes.data;
-      this.stopProposalPoll();
-      this.stopFastPath();
-    } else {
-      this.error = postRes.error ?? 'Post failed';
+      if (postRes.ok && postRes.data) {
+        this.proposal = postRes.data;
+        if (postRes.data.state === 'posted' || postRes.data.state === 'failed') {
+          this.stopProposalPoll();
+          this.stopFastPath();
+        }
+      } else {
+        this.error = postRes.error ?? 'Post failed';
+        setTimeout(() => { this.error = null; this.render(); }, 5000);
+        // Pull canonical state — handler may have flipped to 'failed'.
+        void this.refreshProposal();
+      }
+    } catch (e) {
+      // Common cause: MV3 service worker died mid-fetch and the message
+      // channel closed. The proposal poll started above will catch the
+      // eventual DB state and update the UI.
+      console.error('[tasker] postProposalNow threw', e);
+      this.error = e instanceof Error ? e.message : 'Post failed (channel closed)';
       setTimeout(() => { this.error = null; this.render(); }, 5000);
-      // Refresh the row in case the server flipped it to 'failed'.
-      void this.refreshProposal();
+    } finally {
+      this.proposalBusy = false;
+      this.render();
     }
-    this.render();
   }
 
   private startProposalPoll(): void {
