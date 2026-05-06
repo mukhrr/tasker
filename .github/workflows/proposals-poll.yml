@@ -1,0 +1,45 @@
+name: Proposals — poll for Help Wanted
+
+# Free, no-server fallback for the proposal auto-post feature. The tab-side
+# fast path in the Chrome extension already handles issues you're actively
+# watching (~1s latency); this workflow only matters for armed proposals on
+# issues you have closed the tab for.
+#
+# GitHub Actions cron is best-effort — runs typically land within a minute
+# but can drift to 5–15 minutes during peak load. That's acceptable as a
+# fallback path; if you need <60s for closed tabs, run worker/index.ts on a
+# real always-on host instead.
+
+on:
+  schedule:
+    - cron: '* * * * *' # every minute
+  workflow_dispatch: {}  # allow manual trigger from the Actions tab
+
+# Don't queue runs — if a previous tick is still going (rare; the route
+# returns in <1s typically), skip the next one. Prevents pile-ups.
+concurrency:
+  group: proposals-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit the poll route
+        env:
+          BASE_URL: ${{ secrets.TASKER_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::Missing TASKER_BASE_URL or CRON_SECRET repo secret"
+            exit 1
+          fi
+          response=$(curl -sS -w '\n%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE_URL/api/proposals/poll")
+          body=$(echo "$response" | head -n -1)
+          status=$(echo "$response" | tail -n 1)
+          echo "HTTP $status"
+          echo "$body"
+          if [ "$status" != "200" ]; then exit 1; fi

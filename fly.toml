@@ -2,7 +2,7 @@
 # Long-running Node process — no HTTP, no concurrency, just a tight poll loop.
 
 app = "tasker-proposals-worker"
-primary_region = "iad"
+primary_region = "bom"
 
 [build]
   dockerfile = "Dockerfile.worker"
