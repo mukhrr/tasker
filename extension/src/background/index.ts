@@ -266,6 +266,14 @@ async function handleQueryStatuses(): Promise<MessageResponse<UserStatus[]>> {
   return { ok: true, data: statuses };
 }
 
+// The built-in status key that means "a contributor has been assigned".
+const ASSIGNED_STATUS_KEY = 'assigned';
+
+/** Today's date as YYYY-MM-DD (the `assigned_date` column is a `date`). */
+function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 async function handleUpdateStatus(taskId: string, status: string, statusGroup: string): Promise<MessageResponse> {
   if (!taskId || typeof taskId !== 'string') return { ok: false, error: 'Invalid task ID' };
   if (!status || typeof status !== 'string') return { ok: false, error: 'Invalid status' };
@@ -275,14 +283,27 @@ async function handleUpdateStatus(taskId: string, status: string, statusGroup: s
   const supabase = getSupabaseClient();
   const { data: session } = await supabase.auth.getSession();
   if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+  const userId = session.session.user.id;
 
   const { error } = await supabase
     .from('tasks')
-    .update({ status, status_group: statusGroup })
+    .update({ status, status_group: statusGroup, status_changed_at: new Date().toISOString() })
     .eq('id', taskId)
-    .eq('user_id', session.session.user.id);
+    .eq('user_id', userId);
 
   if (error) return { ok: false, error: error.message };
+
+  // Stamp the assignment date the first time this task moves to "assigned".
+  // `.is('assigned_date', null)` keeps an existing date untouched.
+  if (status === ASSIGNED_STATUS_KEY) {
+    await supabase
+      .from('tasks')
+      .update({ assigned_date: todayDate() })
+      .eq('id', taskId)
+      .eq('user_id', userId)
+      .is('assigned_date', null);
+  }
+
   return { ok: true };
 }
 
@@ -320,17 +341,123 @@ async function handleUpdateLinkedStatuses(
   const supabase = getSupabaseClient();
   const { data: session } = await supabase.auth.getSession();
   if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+  const userId = session.session.user.id;
 
   const { error } = await supabase
     .from('tasks')
-    .update({ status, status_group: statusGroup })
-    .eq('user_id', session.session.user.id)
+    .update({ status, status_group: statusGroup, status_changed_at: new Date().toISOString() })
+    .eq('user_id', userId)
     .ilike('repo_owner', owner)
     .ilike('repo_name', repo)
     .in('issue_number', issueNumbers);
 
   if (error) return { ok: false, error: error.message };
+
+  // Stamp the assignment date on any of these tasks moving to "assigned"
+  // for the first time. `.is('assigned_date', null)` skips ones already set.
+  if (status === ASSIGNED_STATUS_KEY) {
+    await supabase
+      .from('tasks')
+      .update({ assigned_date: todayDate() })
+      .eq('user_id', userId)
+      .ilike('repo_owner', owner)
+      .ilike('repo_name', repo)
+      .in('issue_number', issueNumbers)
+      .is('assigned_date', null);
+  }
+
   return { ok: true };
+}
+
+interface IssueEnrichment {
+  /** GitHub issue title, verbatim (keeps the leading "[$250]" prefix). */
+  issueTitle: string | null;
+  /** Bounty amount in USD parsed from the title, or null. */
+  amount: number | null;
+  /** ISO timestamp of the first time this user was assigned on the issue. */
+  assignedDate: string | null;
+}
+
+const EMPTY_ENRICHMENT: IssueEnrichment = { issueTitle: null, amount: null, assignedDate: null };
+
+// Expensify convention: titles start with "[$250]". Tolerate "[$1,000.00]"
+// and a loose "$250" elsewhere in the title as a fallback.
+function parseAmountFromTitle(title: string): number | null {
+  const match = title.match(/\[\s*\$\s*([\d,]+(?:\.\d+)?)\s*\]/) ?? title.match(/\$\s*([\d,]+(?:\.\d+)?)/);
+  if (!match) return null;
+  const n = parseFloat(match[1].replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Walk the issue's event stream (chronological) and return the timestamp of
+// the first "assigned" event whose assignee is this user — i.e. when they
+// were put on the issue. Pages through up to 5×100 events for busy issues.
+async function findFirstAssignmentDate(
+  ownerEnc: string,
+  repoEnc: string,
+  number: number,
+  username: string,
+  headers: Record<string, string>
+): Promise<string | null> {
+  const target = username.toLowerCase();
+  for (let page = 1; page <= 5; page++) {
+    const res = await fetch(
+      `https://api.github.com/repos/${ownerEnc}/${repoEnc}/issues/${number}/events?per_page=100&page=${page}`,
+      { headers }
+    );
+    if (!res.ok) return null;
+    const events = (await res.json()) as Array<{
+      event?: string;
+      assignee?: { login?: string };
+      created_at?: string;
+    }>;
+    const hit = events.find(
+      (e) => e.event === 'assigned' && e.assignee?.login?.toLowerCase() === target
+    );
+    if (hit?.created_at) return hit.created_at;
+    if (events.length < 100) return null;
+  }
+  return null;
+}
+
+// Best-effort: pull title / amount / assignment date from the GitHub API.
+// Any failure (no token, rate limit, network) yields empty fields — task
+// creation must never be blocked by enrichment.
+async function fetchIssueEnrichment(
+  owner: string,
+  repo: string,
+  number: number,
+  username: string
+): Promise<IssueEnrichment> {
+  try {
+    const providerToken = await getGithubProviderToken();
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (providerToken) headers.Authorization = `Bearer ${providerToken}`;
+
+    const ownerEnc = encodeURIComponent(owner);
+    const repoEnc = encodeURIComponent(repo);
+
+    const issueRes = await fetch(
+      `https://api.github.com/repos/${ownerEnc}/${repoEnc}/issues/${number}`,
+      { headers }
+    );
+    if (!issueRes.ok) return EMPTY_ENRICHMENT;
+    const issue = (await issueRes.json()) as { title?: string };
+    const issueTitle = typeof issue.title === 'string' ? issue.title : null;
+
+    return {
+      issueTitle,
+      amount: issueTitle ? parseAmountFromTitle(issueTitle) : null,
+      assignedDate: username
+        ? await findFirstAssignmentDate(ownerEnc, repoEnc, number, username, headers)
+        : null,
+    };
+  } catch {
+    return EMPTY_ENRICHMENT;
+  }
 }
 
 async function handleCreateTask(owner: string, repo: string, number: number): Promise<MessageResponse<Task>> {
@@ -347,16 +474,26 @@ async function handleCreateTask(owner: string, repo: string, number: number): Pr
   const { data: session } = await supabase.auth.getSession();
   if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
 
+  const user = session.session.user;
+  const username = (user.user_metadata?.user_name ??
+    user.user_metadata?.preferred_username ??
+    '') as string;
+
+  const enrichment = await fetchIssueEnrichment(owner, repo, number, username);
+
   const { data, error } = await supabase
     .from('tasks')
     .insert({
-      user_id: session.session.user.id,
+      user_id: user.id,
       issue_url: safeIssueUrl,
       status: 'in_proposal',
       status_group: 'todo',
       repo_owner: owner,
       repo_name: repo,
       issue_number: number,
+      ...(enrichment.issueTitle ? { issue_title: enrichment.issueTitle } : {}),
+      ...(enrichment.amount != null ? { amount: enrichment.amount } : {}),
+      ...(enrichment.assignedDate ? { assigned_date: enrichment.assignedDate } : {}),
     })
     .select()
     .single();
