@@ -16,6 +16,15 @@ import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/co
 
 const PROPOSAL_REQUIRED_LABELS = ['bug', 'daily'];
 const PROPOSAL_READY_LABEL = 'help wanted';
+// Melvin's automation applies `External` first, then `Help Wanted` follows
+// within ~2–3 s (empirically measured across 20 recent Help Wanted issues:
+// min 2 s, max 3 s, avg ~2.5 s, GitHub API timestamps are second-precision).
+// Once we see `External` on an armed proposal we race a short window:
+//   * at EXTERNAL_HW_CHECK_MS — if HW already landed, post immediately
+//   * at EXTERNAL_HW_FORCE_MS — post unconditionally (HW is essentially guaranteed)
+const EXTERNAL_LABEL = 'external';
+const EXTERNAL_HW_CHECK_MS = 2001;
+const EXTERNAL_HW_FORCE_MS = 3001;
 const PROPOSAL_POLL_INTERVAL_MS = 2000;
 // Tab-side fast-path: ETag-cached label fetch interval. 304 responses cost
 // no GitHub rate-limit quota, so this can run aggressively without burning
@@ -74,6 +83,12 @@ export class StatusWidget {
   private fastPathEtag: string | null = null;
   private fastPathTriggered = false;
   private fastPathVisibilityListener: (() => void) | null = null;
+  // External-label race: once seen on an armed proposal, schedule a HW check
+  // at ~2 s and an unconditional force-post at ~3 s. Both are cleared if the
+  // fast-path stops (proposal posted/failed/disarmed).
+  private externalCheckHandle: ReturnType<typeof setTimeout> | null = null;
+  private externalForceHandle: ReturnType<typeof setTimeout> | null = null;
+  private externalRaceStarted = false;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
     this.owner = owner;
@@ -547,6 +562,10 @@ export class StatusWidget {
     return this.labels.some((l) => l.toLowerCase() === PROPOSAL_READY_LABEL);
   }
 
+  private hasExternalLabel(): boolean {
+    return this.labels.some((l) => l.toLowerCase() === EXTERNAL_LABEL);
+  }
+
   private hasRequiredDraftLabels(): boolean {
     const lower = this.labels.map((l) => l.toLowerCase());
     return PROPOSAL_REQUIRED_LABELS.every((req) => lower.includes(req));
@@ -904,6 +923,13 @@ export class StatusWidget {
       return;
     }
 
+    // External may already be applied from a prior page load — arm the race
+    // so we don't miss the 2–3 s window waiting for a DOM mutation that
+    // already happened before the widget mounted.
+    if (this.hasExternalLabel()) {
+      this.startExternalRace('initial-labels');
+    }
+
     this.attachFastPathObservers();
     this.startFastPathPoll();
 
@@ -924,6 +950,7 @@ export class StatusWidget {
 
   private stopFastPath(): void {
     this.stopFastPathPoll();
+    this.stopExternalRace();
     for (const obs of this.fastPathObservers) obs.disconnect();
     this.fastPathObservers = [];
     if (this.fastPathVisibilityListener) {
@@ -956,6 +983,12 @@ export class StatusWidget {
     const text = (el.innerText || el.textContent || '').toLowerCase();
     if (text.includes(PROPOSAL_READY_LABEL)) {
       void this.tryFastPost('mutation-observer');
+      return;
+    }
+    // External lands first in Melvin's pipeline; arm the race so we can post
+    // within 2–3 s even if the HW label DOM update is missed by the observer.
+    if (text.includes(EXTERNAL_LABEL)) {
+      this.startExternalRace('mutation-observer');
     }
   }
 
@@ -995,7 +1028,56 @@ export class StatusWidget {
     this.labels = res.data.labels;
     if (this.hasReadyLabel()) {
       void this.tryFastPost('etag-poll');
+      return;
     }
+    if (this.hasExternalLabel()) {
+      this.startExternalRace('etag-poll');
+    }
+  }
+
+  // ── External → Help Wanted race ──
+  //
+  // Melvin applies `External` 5–10 s after his proposal-template comment, then
+  // applies `Help Wanted` 2–3 s after `External`. We use the External sighting
+  // as a high-confidence signal that HW is imminent: check once at 2001 ms (to
+  // catch the common-case 2 s gap), then force-post at 3001 ms (since 3 s was
+  // the observed max). The HW-direct fast-path still wins if it fires first;
+  // `fastPathTriggered` guards against double-posts.
+  private startExternalRace(source: string): void {
+    if (this.externalRaceStarted) return;
+    if (this.fastPathTriggered) return;
+    if (!this.autoPostEnabled) return;
+    if (!this.proposal || this.proposal.state !== 'armed') return;
+    this.externalRaceStarted = true;
+    console.debug('[tasker] external-race armed via', source);
+
+    this.externalCheckHandle = setTimeout(() => {
+      this.externalCheckHandle = null;
+      if (this.fastPathTriggered || this.destroyed) return;
+      if (this.hasReadyLabel()) {
+        void this.tryFastPost('external-race-check-2001ms');
+      }
+    }, EXTERNAL_HW_CHECK_MS);
+
+    this.externalForceHandle = setTimeout(() => {
+      this.externalForceHandle = null;
+      if (this.fastPathTriggered || this.destroyed) return;
+      // Force-post: HW is essentially guaranteed within 3 s of External in
+      // Melvin's pipeline. Skip the label re-check and post.
+      void this.tryFastPost('external-race-force-3001ms');
+    }, EXTERNAL_HW_FORCE_MS);
+  }
+
+  private stopExternalRace(): void {
+    if (this.externalCheckHandle !== null) {
+      clearTimeout(this.externalCheckHandle);
+      this.externalCheckHandle = null;
+    }
+    if (this.externalForceHandle !== null) {
+      clearTimeout(this.externalForceHandle);
+      this.externalForceHandle = null;
+    }
+    this.externalRaceStarted = false;
   }
 
   private async tryFastPost(source: string): Promise<void> {
