@@ -1,13 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { RefreshCw, Trash2, Eye, Archive, ArchiveRestore } from 'lucide-react';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  TooltipProvider,
-} from '@/components/ui/tooltip';
+  RefreshCw,
+  Trash2,
+  Eye,
+  Archive,
+  ArchiveRestore,
+  MoreHorizontal,
+} from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 
 export function TaskRowActions({
   taskId,
@@ -49,100 +57,51 @@ export function TaskRowActions({
     );
   }
 
-  if (isArchived) {
-    return (
-      <TooltipProvider delay={400}>
-        <div className="flex items-center">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  onClick={onArchive}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                />
-              }
-            >
-              <ArchiveRestore className="h-3.5 w-3.5" />
-            </TooltipTrigger>
-            <TooltipContent>Unarchive</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Link
-                  href={`/tasks/${taskId}`}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                />
-              }
-            >
-              <Eye className="h-3.5 w-3.5" />
-            </TooltipTrigger>
-            <TooltipContent>View</TooltipContent>
-          </Tooltip>
-        </div>
-      </TooltipProvider>
-    );
-  }
-
   return (
-    <TooltipProvider delay={400}>
-      <div className="flex items-center">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                onClick={onSync}
-                disabled={isSyncing}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-              />
-            }
-          >
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" />
+        }
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" side="bottom" sideOffset={4}>
+        {!isArchived && (
+          <DropdownMenuItem disabled={isSyncing} onClick={onSync}>
             <RefreshCw
               className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`}
             />
-          </TooltipTrigger>
-          <TooltipContent>Sync</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                onClick={onArchive}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              />
-            }
-          >
-            <Archive className="h-3.5 w-3.5" />
-          </TooltipTrigger>
-          <TooltipContent>Archive</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                onClick={onRequestDelete}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-100 hover:text-destructive dark:hover:bg-red-950"
-              />
-            }
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </TooltipTrigger>
-          <TooltipContent>Delete</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Link
-                href={`/tasks/${taskId}`}
-                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              />
-            }
-          >
-            <Eye className="h-3.5 w-3.5" />
-          </TooltipTrigger>
-          <TooltipContent>View</TooltipContent>
-        </Tooltip>
-      </div>
-    </TooltipProvider>
+            Sync
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem render={<Link href={`/tasks/${taskId}`} />}>
+          <Eye className="h-3.5 w-3.5" />
+          View
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onArchive}>
+          {isArchived ? (
+            <>
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              Unarchive
+            </>
+          ) : (
+            <>
+              <Archive className="h-3.5 w-3.5" />
+              Archive
+            </>
+          )}
+        </DropdownMenuItem>
+        {!isArchived && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={onRequestDelete}>
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

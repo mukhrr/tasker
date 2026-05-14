@@ -76,7 +76,7 @@ export function IssueCell({
           href={normalizeUrl(issueUrl)}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-0.5 flex-shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/issue-cell:opacity-100"
+          className="mt-0.5 flex-shrink-0 text-muted-foreground opacity-100 transition-opacity hover:text-foreground sm:opacity-0 sm:group-hover/issue-cell:opacity-100"
           onClick={(e) => e.stopPropagation()}
         >
           <ExternalLink className="h-3 w-3" />
