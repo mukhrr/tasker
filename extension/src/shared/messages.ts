@@ -83,6 +83,11 @@ export interface TestNotificationRequest {
   type: 'TEST_NOTIFICATION';
 }
 
+export interface TestBugDailyAlertRequest {
+  type: 'TEST_BUG_DAILY_ALERT';
+  sound: boolean;
+}
+
 export interface QueryIssueLabelsRequest {
   type: 'QUERY_ISSUE_LABELS';
   owner: string;
@@ -175,6 +180,7 @@ export type MessageRequest =
   | TestBrowserNotificationRequest
   | ReschedulePollerRequest
   | TestNotificationRequest
+  | TestBugDailyAlertRequest
   | QueryIssueLabelsRequest
   | QueryProposalRequest
   | SaveProposalRequest

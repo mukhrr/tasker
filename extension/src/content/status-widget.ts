@@ -19,17 +19,22 @@ const PROPOSAL_READY_LABEL = 'help wanted';
 // Melvin's automation applies `External` first, then `Help Wanted` follows
 // within ~2–3 s (empirically measured across 20 recent Help Wanted issues:
 // min 2 s, max 3 s, avg ~2.5 s, GitHub API timestamps are second-precision).
-// Once we see `External` on an armed proposal we race a short window:
-//   * at EXTERNAL_HW_CHECK_MS — if HW already landed, post immediately
-//   * at EXTERNAL_HW_FORCE_MS — post unconditionally (HW is essentially guaranteed)
+// Once we see `External` on an armed proposal we stop the lazy 500 ms poll and
+// tight-poll THIS issue every EXTERNAL_HW_TIGHT_POLL_MS, firing the *instant*
+// Help Wanted lands — so we post at ~(HW + one tight interval + RTT) instead of
+// the old fixed 3001 ms force (up to ~1 s late on a 2 s gap). The polls are
+// ETag-conditional, so the in-window burst is almost entirely free 304s.
+// EXTERNAL_HW_FORCE_MS is a backstop: if detection stalls we post anyway, since
+// HW is essentially guaranteed within ~3 s of External in Melvin's pipeline.
 const EXTERNAL_LABEL = 'external';
-const EXTERNAL_HW_CHECK_MS = 2001;
-const EXTERNAL_HW_FORCE_MS = 3001;
+const EXTERNAL_HW_TIGHT_POLL_MS = 120;
+const EXTERNAL_HW_FORCE_MS = 3400;
 const PROPOSAL_POLL_INTERVAL_MS = 2000;
 // Tab-side fast-path: ETag-cached label fetch interval. 304 responses cost
 // no GitHub rate-limit quota, so this can run aggressively without burning
-// the 5,000/hr authenticated budget.
-const FAST_LABEL_POLL_MS = 1500;
+// the 5,000/hr authenticated budget. Tightened from 1500 → 500 ms to shrink
+// the worst-case label-detection delay below the External→HW race window.
+const FAST_LABEL_POLL_MS = 500;
 // Selectors for the labels container — covers both the classic Rails issue
 // page and the React rewrite. Observer attaches to whichever is found.
 const LABELS_CONTAINER_SELECTORS = [
@@ -83,11 +88,11 @@ export class StatusWidget {
   private fastPathEtag: string | null = null;
   private fastPathTriggered = false;
   private fastPathVisibilityListener: (() => void) | null = null;
-  // External-label race: once seen on an armed proposal, schedule a HW check
-  // at ~2 s and an unconditional force-post at ~3 s. Both are cleared if the
-  // fast-path stops (proposal posted/failed/disarmed).
-  private externalCheckHandle: ReturnType<typeof setTimeout> | null = null;
-  private externalForceHandle: ReturnType<typeof setTimeout> | null = null;
+  // External-label race: once seen on an armed proposal, tight-poll this issue
+  // for Help Wanted and post the instant it lands (force-post backstop at
+  // EXTERNAL_HW_FORCE_MS). Cleared if the fast-path stops (posted/failed/disarmed).
+  private externalTightHandle: ReturnType<typeof setTimeout> | null = null;
+  private externalRaceDeadline = 0;
   private externalRaceStarted = false;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
@@ -994,6 +999,10 @@ export class StatusWidget {
 
   private startFastPathPoll(): void {
     if (this.fastPathHandle !== null) return;
+    // While the External→HW tight poll owns this issue's ETag, don't run the
+    // lazy poll alongside it — two pollers sharing fastPathEtag can race and
+    // make one see a stale 304 while the other consumed the changed labels.
+    if (this.externalRaceStarted) return;
     if (document.visibilityState !== 'visible') return;
     this.fastPathHandle = setInterval(() => {
       void this.fastPollTick();
@@ -1038,10 +1047,13 @@ export class StatusWidget {
   // ── External → Help Wanted race ──
   //
   // Melvin applies `External` 5–10 s after his proposal-template comment, then
-  // applies `Help Wanted` 2–3 s after `External`. We use the External sighting
-  // as a high-confidence signal that HW is imminent: check once at 2001 ms (to
-  // catch the common-case 2 s gap), then force-post at 3001 ms (since 3 s was
-  // the observed max). The HW-direct fast-path still wins if it fires first;
+  // applies `Help Wanted` 2–3 s after `External`. The External sighting is a
+  // high-confidence signal that HW is imminent, so we switch from the lazy
+  // 500 ms poll to a tight poll of THIS issue (every EXTERNAL_HW_TIGHT_POLL_MS)
+  // and fire the *instant* HW lands — landing us at ~(HW + one tight interval)
+  // instead of the old fixed 3001 ms force (up to ~1 s late on a 2 s gap).
+  // A force-post backstop at EXTERNAL_HW_FORCE_MS guarantees a post if detection
+  // stalls. The HW-direct fast-path still wins if it fires first;
   // `fastPathTriggered` guards against double-posts.
   private startExternalRace(source: string): void {
     if (this.externalRaceStarted) return;
@@ -1049,35 +1061,64 @@ export class StatusWidget {
     if (!this.autoPostEnabled) return;
     if (!this.proposal || this.proposal.state !== 'armed') return;
     this.externalRaceStarted = true;
-    console.debug('[tasker] external-race armed via', source);
+    this.externalRaceDeadline = performance.now() + EXTERNAL_HW_FORCE_MS;
+    // The tight poll is now the sole label fetcher for this issue — stop the
+    // lazy 500 ms poll so the two don't race on the shared ETag.
+    this.stopFastPathPoll();
+    console.debug('[tasker] external-race armed via', source, '— tight-polling for HW');
+    void this.externalRaceTick();
+  }
 
-    this.externalCheckHandle = setTimeout(() => {
-      this.externalCheckHandle = null;
-      if (this.fastPathTriggered || this.destroyed) return;
-      if (this.hasReadyLabel()) {
-        void this.tryFastPost('external-race-check-2001ms');
+  // One tight-poll iteration. Self-reschedules via setTimeout (not setInterval)
+  // so a slow round-trip can never stack overlapping label fetches.
+  private async externalRaceTick(): Promise<void> {
+    if (this.fastPathTriggered || this.destroyed || !this.externalRaceStarted) return;
+    if (!this.proposal || this.proposal.state !== 'armed') {
+      this.stopExternalRace();
+      return;
+    }
+    // Backstop: HW is essentially guaranteed within ~3 s of External; if we
+    // somehow haven't detected it by the deadline, post anyway.
+    if (performance.now() >= this.externalRaceDeadline) {
+      void this.tryFastPost('external-race-force');
+      return;
+    }
+    const res = await sendMessage<IssueLabelsEtagResponse>({
+      type: 'QUERY_ISSUE_LABELS_ETAG',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      etag: this.fastPathEtag,
+    });
+    if (this.fastPathTriggered || this.destroyed || !this.externalRaceStarted) return;
+    if (res.ok && res.data) {
+      if (res.data.etag) this.fastPathEtag = res.data.etag;
+      if (!res.data.notModified && res.data.labels) {
+        this.labels = res.data.labels;
+        if (this.hasReadyLabel()) {
+          void this.tryFastPost('external-race-tight-poll');
+          return;
+        }
       }
-    }, EXTERNAL_HW_CHECK_MS);
-
-    this.externalForceHandle = setTimeout(() => {
-      this.externalForceHandle = null;
-      if (this.fastPathTriggered || this.destroyed) return;
-      // Force-post: HW is essentially guaranteed within 3 s of External in
-      // Melvin's pipeline. Skip the label re-check and post.
-      void this.tryFastPost('external-race-force-3001ms');
-    }, EXTERNAL_HW_FORCE_MS);
+    }
+    // Re-check the deadline after the await before scheduling another round.
+    if (performance.now() >= this.externalRaceDeadline) {
+      void this.tryFastPost('external-race-force');
+      return;
+    }
+    this.externalTightHandle = setTimeout(() => {
+      this.externalTightHandle = null;
+      void this.externalRaceTick();
+    }, EXTERNAL_HW_TIGHT_POLL_MS);
   }
 
   private stopExternalRace(): void {
-    if (this.externalCheckHandle !== null) {
-      clearTimeout(this.externalCheckHandle);
-      this.externalCheckHandle = null;
-    }
-    if (this.externalForceHandle !== null) {
-      clearTimeout(this.externalForceHandle);
-      this.externalForceHandle = null;
+    if (this.externalTightHandle !== null) {
+      clearTimeout(this.externalTightHandle);
+      this.externalTightHandle = null;
     }
     this.externalRaceStarted = false;
+    this.externalRaceDeadline = 0;
   }
 
   private async tryFastPost(source: string): Promise<void> {

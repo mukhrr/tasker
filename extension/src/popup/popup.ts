@@ -117,6 +117,9 @@ const tokenSavedRow = $('#token-saved-row');
 const chatIdInput = $('#tg-chat-id') as HTMLInputElement;
 const autoRefreshToggle = $('#auto-refresh-toggle') as HTMLInputElement;
 const refreshSecondsInput = $('#refresh-seconds') as HTMLInputElement;
+const bugDailyPopupToggle = $('#bugdaily-popup-toggle') as HTMLInputElement;
+const bugDailyPopupSoundToggle = $('#bugdaily-popup-sound-toggle') as HTMLInputElement;
+const bugDailyPopupTestBtn = $('#bugdaily-popup-test-btn') as HTMLButtonElement;
 const pollSecondsInput = $('#poll-seconds') as HTMLInputElement;
 const notifyToggle = $('#notify-toggle') as HTMLInputElement;
 const channelBrowser = $('#channel-browser') as HTMLInputElement;
@@ -303,6 +306,8 @@ async function loadSettingsIntoForm(): Promise<void> {
   const settings = await getSettings();
   autoRefreshToggle.checked = settings.autoRefreshEnabled;
   refreshSecondsInput.value = String(settings.autoRefreshSeconds);
+  bugDailyPopupToggle.checked = settings.bugDailyPopupEnabled;
+  bugDailyPopupSoundToggle.checked = settings.bugDailyPopupSound;
   pollSecondsInput.value = String(settings.pollSeconds);
   notifyToggle.checked = settings.notifyHelpWanted;
   channelBrowser.checked = settings.notifyChannels.includes('browser');
@@ -322,6 +327,25 @@ $('#add-group-btn').addEventListener('click', () => {
   // Focus the new group's input
   const inputs = watchedGroupsEl.querySelectorAll<HTMLInputElement>('.label-group-add input');
   inputs[inputs.length - 1]?.focus();
+});
+
+// Preview the lightning popup. If the active tab is a GitHub page, render it
+// there (reflecting the live sound toggle, no save needed); otherwise open the
+// Expensify issues page with the preview hash.
+bugDailyPopupTestBtn.addEventListener('click', async () => {
+  const sound = bugDailyPopupSoundToggle.checked;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id && tab.url && /^https:\/\/github\.com\//.test(tab.url)) {
+      await chrome.tabs.sendMessage(tab.id, { type: 'TEST_BUG_DAILY_ALERT', sound });
+      showStatus('Popup sent to the GitHub tab ⚡', 'ok');
+      return;
+    }
+  } catch {
+    /* no content script on this tab — fall through and open one */
+  }
+  await chrome.tabs.create({ url: 'https://github.com/Expensify/App/issues#tasker-test-alert' });
+  showStatus('Opened Expensify issues to preview ⚡', 'ok');
 });
 
 $('#excluded-labels-add-btn').addEventListener('click', () => {
@@ -414,6 +438,8 @@ $('#settings-save-btn').addEventListener('click', async () => {
     await setSettings({
       autoRefreshEnabled: autoRefreshToggle.checked,
       autoRefreshSeconds: seconds,
+      bugDailyPopupEnabled: bugDailyPopupToggle.checked,
+      bugDailyPopupSound: bugDailyPopupSoundToggle.checked,
       pollSeconds: poll,
       notifyHelpWanted: notifyToggle.checked,
       notifyChannels: channels.length > 0 ? channels : ['browser'],

@@ -1,0 +1,17 @@
+{
+  "name": "tasker-proposal-sniper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Always-on server-side sniper that races the Expensify Help Wanted label and posts a pre-staged proposal within ~100-300ms.",
+  "bin": {
+    "sniper": "./sniper.mjs"
+  },
+  "scripts": {
+    "start": "node sniper.mjs",
+    "dry": "DRY_RUN=true node sniper.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

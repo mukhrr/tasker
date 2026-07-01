@@ -28,6 +28,10 @@ export interface ExtensionSettings {
    *  An issue matches if any group is satisfied (OR across groups). */
   watchedLabelGroups: string[][];
   excludedLabels: string[];
+  /** Show the in-page lightning popup when a new Bug + Daily bounty appears. */
+  bugDailyPopupEnabled: boolean;
+  /** Play the attention chime when the lightning popup fires. */
+  bugDailyPopupSound: boolean;
 }
 
 export interface HelpWantedIssue {

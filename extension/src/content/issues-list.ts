@@ -1,7 +1,16 @@
-import type { HelpWantedIssue } from '../shared/types';
+import type { HelpWantedIssue, ExtensionSettings } from '../shared/types';
 import type { SendHelpWantedNotificationRequest } from '../shared/messages';
 import { getSettings } from '../shared/settings';
 import { getSeen, setSeen } from '../shared/seen-issues';
+import { showNewBugDailyAlert } from './issue-alert';
+
+// The in-page lightning popup fires on any brand-new issue matching the user's
+// configured watched label groups (the same groups that drive notifications) —
+// a fresh bounty can already carry Bug + Daily + External + Help Wanted at once,
+// so we trust the user's curated groups instead of a hardcoded pair. Deduped via
+// its own seen namespace so it pops each issue once and never disturbs the
+// watched-label OS-notification dedup.
+const POPUP_SEEN_NS = 'seenBugDailyPopup';
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -79,12 +88,28 @@ export class IssueListWatcher {
   constructor(private owner: string, private repo: string) {}
 
   async init(): Promise<void> {
+    const settings = await getSettings();
+
+    // Visual preview: open …/issues#tasker-test-alert to see the popup on demand.
+    if (window.location.hash === '#tasker-test-alert') {
+      showNewBugDailyAlert(
+        [
+          {
+            number: 99999,
+            title: 'Test bounty — Bug + Daily lightning popup',
+            url: window.location.href,
+            labels: ['Bug + Daily'],
+          },
+        ],
+        { sound: settings.bugDailyPopupSound },
+      );
+    }
+
     // First scan runs shortly after mount to let Turbo finish rendering.
     this.scanTimer = window.setTimeout(() => {
       void this.runScan(true);
     }, 1500);
 
-    const settings = await getSettings();
     if (settings.autoRefreshEnabled) {
       const ms = Math.max(5, settings.autoRefreshSeconds) * 1000;
       this.refreshTimer = window.setTimeout(() => {
@@ -97,6 +122,12 @@ export class IssueListWatcher {
     if (this.destroyed) return;
     try {
       const settings = await getSettings();
+
+      // In-page lightning popup for brand-new issues matching the watched label
+      // groups. Runs before the notification flow (and its early return) so the
+      // popup fires on its own toggle, independent of whether notifications are on.
+      await this.checkBugDailyPopup(settings, isFirstLoad);
+
       const issues = scanWatchedIssues(settings.watchedLabelGroups, settings.excludedLabels);
       const seen = await getSeen(this.owner, this.repo);
 
@@ -128,6 +159,32 @@ export class IssueListWatcher {
     } catch {
       /* ignore scan errors */
     }
+  }
+
+  private async checkBugDailyPopup(
+    settings: Pick<
+      ExtensionSettings,
+      'watchedLabelGroups' | 'excludedLabels' | 'bugDailyPopupEnabled' | 'bugDailyPopupSound'
+    >,
+    isFirstLoad: boolean,
+  ): Promise<void> {
+    if (this.destroyed || !settings.bugDailyPopupEnabled) return;
+    const matches = scanWatchedIssues(settings.watchedLabelGroups, settings.excludedLabels);
+    if (matches.length === 0) return;
+
+    const seen = await getSeen(this.owner, this.repo, POPUP_SEEN_NS);
+    const fresh = matches.filter((i) => !seen.has(i.number));
+    if (fresh.length === 0) return;
+
+    // First time we ever scan this repo for popups: seed silently so we don't
+    // flash every pre-existing matching issue at once.
+    const isSeedingRun = seen.size === 0 && isFirstLoad;
+
+    for (const issue of fresh) seen.add(issue.number);
+    await setSeen(this.owner, this.repo, seen, POPUP_SEEN_NS);
+
+    if (isSeedingRun || this.destroyed) return;
+    showNewBugDailyAlert(fresh, { sound: settings.bugDailyPopupSound });
   }
 
   destroy(): void {

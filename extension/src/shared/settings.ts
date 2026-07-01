@@ -13,6 +13,8 @@ export const DEFAULT_SETTINGS: Omit<ExtensionSettings, 'telegramTokenSaved'> = {
   pollSeconds: 45,
   watchedLabelGroups: [['Help Wanted'], ['Daily'], ['Bug']],
   excludedLabels: ['DeployBlocker', 'DeployBlockerCash'],
+  bugDailyPopupEnabled: true,
+  bugDailyPopupSound: true,
 };
 
 const VALID_CHANNELS: NotifyChannel[] = ['browser', 'telegram'];
@@ -74,6 +76,8 @@ export async function getSettings(): Promise<Omit<ExtensionSettings, 'telegramTo
       raw?.excludedLabels === undefined
         ? [...DEFAULT_SETTINGS.excludedLabels]
         : sanitizeLabels(raw.excludedLabels, []),
+    bugDailyPopupEnabled: raw?.bugDailyPopupEnabled ?? DEFAULT_SETTINGS.bugDailyPopupEnabled,
+    bugDailyPopupSound: raw?.bugDailyPopupSound ?? DEFAULT_SETTINGS.bugDailyPopupSound,
   };
 }
 

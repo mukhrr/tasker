@@ -1,6 +1,8 @@
+import type { MessageRequest } from '../shared/messages';
 import { parseGitHubUrl, parseIssuesListUrl } from './github-url';
 import { StatusWidget } from './status-widget';
 import { IssueListWatcher } from './issues-list';
+import { showNewBugDailyAlert } from './issue-alert';
 
 let currentWidget: StatusWidget | null = null;
 let currentListWatcher: IssueListWatcher | null = null;
@@ -120,3 +122,20 @@ setInterval(() => {
     mountWidget();
   }
 }, 1000);
+
+// Preview the lightning popup on demand from the extension popup's Test button.
+chrome.runtime.onMessage.addListener((msg: MessageRequest) => {
+  if (msg.type === 'TEST_BUG_DAILY_ALERT') {
+    showNewBugDailyAlert(
+      [
+        {
+          number: 99999,
+          title: 'Test bounty — Bug + Daily lightning popup',
+          url: window.location.href,
+          labels: ['Bug + Daily'],
+        },
+      ],
+      { sound: msg.sound },
+    );
+  }
+});
