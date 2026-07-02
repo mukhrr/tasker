@@ -24,7 +24,7 @@ const chartConfig = {
   },
   completed: {
     label: 'Completed',
-    color: 'var(--chart-3)',
+    color: 'var(--chart-2)',
   },
 } satisfies ChartConfig;
 
@@ -51,37 +51,60 @@ export function ActivityChart({ data }: ActivityChartProps) {
             Start adding and completing tasks to see activity
           </div>
         ) : (
-          <ChartContainer config={chartConfig} className="h-[250px] w-full">
-            <BarChart data={data} accessibilityLayer barGap={4}>
-              <CartesianGrid vertical={false} />
-              <XAxis
-                dataKey="month"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                allowDecimals={false}
-              />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              <Bar
-                dataKey="created"
-                fill="var(--color-created)"
-                radius={[4, 4, 0, 0]}
-                maxBarSize={32}
-              />
-              <Bar
-                dataKey="completed"
-                fill="var(--color-completed)"
-                radius={[4, 4, 0, 0]}
-                maxBarSize={32}
-              />
-            </BarChart>
-          </ChartContainer>
+          <>
+            <ChartContainer config={chartConfig} className="h-[250px] w-full">
+              <BarChart data={data} accessibilityLayer barGap={2}>
+                <CartesianGrid vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  allowDecimals={false}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent />} />
+                <Bar
+                  dataKey="created"
+                  fill="var(--color-created)"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={24}
+                />
+                <Bar
+                  dataKey="completed"
+                  fill="var(--color-completed)"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={24}
+                />
+              </BarChart>
+            </ChartContainer>
+            <table className="sr-only">
+              <caption>
+                Tasks created and completed by month, last 6 months
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Month</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Completed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((d) => (
+                  <tr key={d.month}>
+                    <td>{d.month}</td>
+                    <td>{d.created}</td>
+                    <td>{d.completed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </CardContent>
     </Card>

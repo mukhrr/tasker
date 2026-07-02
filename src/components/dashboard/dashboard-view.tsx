@@ -29,6 +29,19 @@ export function DashboardView({ userId }: { userId: string }) {
     );
   }
 
+  const months = stats.earningsOverTime;
+  const thisMonth = months[months.length - 1]?.amount ?? 0;
+  const lastMonth = months[months.length - 2]?.amount ?? 0;
+  const diff = thisMonth - lastMonth;
+  const earningsDelta =
+    diff !== 0
+      ? {
+          text: `${diff > 0 ? '+' : '-'}$${Math.abs(diff).toLocaleString()} vs last month`,
+          direction: diff > 0 ? ('up' as const) : ('down' as const),
+        }
+      : undefined;
+  const earningsTrend = months.map((m) => m.amount);
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -36,24 +49,19 @@ export function DashboardView({ userId }: { userId: string }) {
           title="Total Earned"
           value={`$${stats.totalEarned.toLocaleString()}`}
           description={`${stats.completedCount} completed tasks`}
-          accent="var(--chart-2)"
+          delta={earningsDelta}
+          trend={stats.totalEarned > 0 ? earningsTrend : undefined}
         />
         <StatCard
           title="Pending"
           value={`$${stats.pendingAmount.toLocaleString()}`}
           description={`${stats.activeCount} active tasks`}
-          accent="var(--chart-1)"
         />
-        <StatCard
-          title="Active Tasks"
-          value={String(stats.activeCount)}
-          accent="var(--chart-4)"
-        />
+        <StatCard title="Active Tasks" value={String(stats.activeCount)} />
         <StatCard
           title="Completed"
           value={String(stats.completedCount)}
           description={`of ${tasks.length} total`}
-          accent="var(--chart-3)"
         />
       </div>
 

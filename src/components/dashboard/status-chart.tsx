@@ -1,12 +1,5 @@
 'use client';
 
-import { Pie, PieChart, Label } from 'recharts';
-import {
-  type ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from '@/components/ui/chart';
 import {
   Card,
   CardContent,
@@ -14,27 +7,29 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import type { TaskStatusGroup } from '@/types/database';
 
-const chartConfig = {
-  value: { label: 'Tasks' },
-  todo: { label: 'To-do', color: 'var(--chart-4)' },
-  in_progress: { label: 'In Progress', color: 'var(--chart-1)' },
-  complete: { label: 'Complete', color: 'var(--chart-2)' },
-} satisfies ChartConfig;
+/** Ordinal ramp: one hue, lightness encodes progression through the pipeline */
+const RAMP: Record<TaskStatusGroup, string> = {
+  todo: 'var(--chart-ramp-1)',
+  in_progress: 'var(--chart-ramp-2)',
+  complete: 'var(--chart-ramp-3)',
+};
 
 interface StatusChartProps {
   data: { name: string; value: number; group: TaskStatusGroup }[];
 }
 
 export function StatusChart({ data }: StatusChartProps) {
-  const hasData = data.some((d) => d.value > 0);
   const total = data.reduce((sum, d) => sum + d.value, 0);
-
-  const chartData = data.map((d) => ({
-    ...d,
-    fill: `var(--color-${d.group})`,
-  }));
+  const hasData = total > 0;
+  const segments = data.filter((d) => d.value > 0);
 
   return (
     <Card>
@@ -50,76 +45,56 @@ export function StatusChart({ data }: StatusChartProps) {
             Add tasks to see status distribution
           </div>
         ) : (
-          <div className="flex items-center gap-6">
-            <ChartContainer
-              config={chartConfig}
-              className="h-[250px] w-[200px] shrink-0"
-            >
-              <PieChart accessibilityLayer>
-                <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
-                <Pie
-                  data={chartData}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={55}
-                  outerRadius={85}
-                  paddingAngle={4}
-                  strokeWidth={0}
-                >
-                  <Label
-                    content={({ viewBox }) => {
-                      if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
-                        return (
-                          <text
-                            x={viewBox.cx}
-                            y={viewBox.cy}
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                          >
-                            <tspan
-                              x={viewBox.cx}
-                              y={viewBox.cy}
-                              className="fill-foreground text-2xl font-bold"
-                            >
-                              {total}
-                            </tspan>
-                            <tspan
-                              x={viewBox.cx}
-                              y={(viewBox.cy ?? 0) + 20}
-                              className="fill-muted-foreground text-xs"
-                            >
-                              Total
-                            </tspan>
-                          </text>
-                        );
+          <div className="flex h-[250px] flex-col justify-center gap-6">
+            <TooltipProvider>
+              <div
+                className="flex h-6 w-full gap-[2px]"
+                role="img"
+                aria-label={data
+                  .map((d) => `${d.name}: ${d.value} of ${total} tasks`)
+                  .join(', ')}
+              >
+                {segments.map((d, i) => (
+                  <Tooltip key={d.group}>
+                    <TooltipTrigger
+                      render={
+                        <div
+                          className={`min-w-2 transition-[filter] hover:brightness-110 ${
+                            i === 0 ? 'rounded-l-[4px]' : ''
+                          } ${i === segments.length - 1 ? 'rounded-r-[4px]' : ''}`}
+                          style={{
+                            width: `${(d.value / total) * 100}%`,
+                            backgroundColor: RAMP[d.group],
+                          }}
+                        />
                       }
-                    }}
-                  />
-                </Pie>
-              </PieChart>
-            </ChartContainer>
+                    />
+                    <TooltipContent>
+                      <span className="font-medium">{d.value}</span>
+                      <span>
+                        {d.name} · {Math.round((d.value / total) * 100)}%
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
+                ))}
+              </div>
+            </TooltipProvider>
             <div className="flex flex-col gap-3">
-              {data.map((entry) => (
-                <div key={entry.group} className="flex items-center gap-2.5">
+              {data.map((d) => (
+                <div key={d.group} className="flex items-center gap-2.5">
                   <span
-                    className="h-3 w-3 shrink-0 rounded-[4px]"
-                    style={{
-                      backgroundColor:
-                        (
-                          chartConfig[
-                            entry.group as keyof typeof chartConfig
-                          ] as { color?: string } | undefined
-                        )?.color,
-                    }}
+                    className="h-3 w-3 shrink-0 rounded-[3px]"
+                    style={{ backgroundColor: RAMP[d.group] }}
                   />
-                  <div>
-                    <p className="text-sm font-medium leading-none">
-                      {entry.value}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {entry.name}
-                    </p>
-                  </div>
+                  <span className="text-sm text-muted-foreground">
+                    {d.name}
+                  </span>
+                  <span className="ml-auto text-sm font-medium tabular-nums">
+                    {d.value}
+                  </span>
+                  <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
+                    {Math.round((d.value / total) * 100)}%
+                  </span>
                 </div>
               ))}
             </div>

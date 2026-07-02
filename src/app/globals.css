@@ -67,11 +67,16 @@
   --border: #e9e9e7;
   --input: #e9e9e7;
   --ring: #37352f;
-  --chart-1: #2eaadc;
-  --chart-2: #0f7b6c;
-  --chart-3: #6940a5;
-  --chart-4: #cb912f;
-  --chart-5: #e03e3e;
+  /* Categorical slots, fixed order — validated (CVD ΔE ≥ 19, ≥3:1 on card) */
+  --chart-1: #11a0d3;
+  --chart-2: #008d7c;
+  --chart-3: #6941a5;
+  --chart-4: #c6891a;
+  --chart-5: #e03d3e;
+  /* Ordinal blue ramp (todo → in progress → complete), light → dark */
+  --chart-ramp-1: #75bfe3;
+  --chart-ramp-2: #0e9fd2;
+  --chart-ramp-3: #016d91;
   --radius: 0.25rem;
   --sidebar: #fbfbfa;
   --sidebar-foreground: #37352f;
@@ -102,11 +107,16 @@
   --border: #2f2f2f;
   --input: #2f2f2f;
   --ring: #e3e2de;
-  --chart-1: #529cca;
-  --chart-2: #4dab9a;
+  /* Same hues re-stepped for the dark card surface — validated as a set */
+  --chart-1: #4e9dcd;
+  --chart-2: #36a996;
   --chart-3: #9065c0;
-  --chart-4: #d9a348;
-  --chart-5: #eb5757;
+  --chart-4: #be8928;
+  --chart-5: #eb5656;
+  /* Ordinal ramp flips anchor on dark: darkest step still ≥2:1 on card */
+  --chart-ramp-1: #2e7097;
+  --chart-ramp-2: #4892be;
+  --chart-ramp-3: #65b8eb;
   --sidebar: #121212;
   --sidebar-foreground: #e3e2de;
   --sidebar-primary: #e3e2de;

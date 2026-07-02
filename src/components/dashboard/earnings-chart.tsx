@@ -46,58 +46,68 @@ export function EarningsChart({ data }: EarningsChartProps) {
             Add amounts and mark tasks as complete to see earnings
           </div>
         ) : (
-          <ChartContainer config={chartConfig} className="h-[250px] w-full">
-            <AreaChart data={data} accessibilityLayer>
-              <defs>
-                <linearGradient id="fillAmount" x1="0" y1="0" x2="0" y2="1">
-                  <stop
-                    offset="0%"
-                    stopColor="var(--color-amount)"
-                    stopOpacity={0.3}
-                  />
-                  <stop
-                    offset="100%"
-                    stopColor="var(--color-amount)"
-                    stopOpacity={0.02}
-                  />
-                </linearGradient>
-              </defs>
-              <CartesianGrid vertical={false} />
-              <XAxis
-                dataKey="month"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => v.slice(0, 3)}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => `$${v}`}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    formatter={(value) => (
-                      <span className="font-mono font-medium tabular-nums">
-                        ${(value as number).toLocaleString()}
-                      </span>
-                    )}
-                  />
-                }
-              />
-              <Area
-                type="monotone"
-                dataKey="amount"
-                stroke="var(--color-amount)"
-                strokeWidth={2}
-                fill="url(#fillAmount)"
-                dot={false}
-                activeDot={{ r: 4, strokeWidth: 0 }}
-              />
-            </AreaChart>
-          </ChartContainer>
+          <>
+            <ChartContainer config={chartConfig} className="h-[250px] w-full">
+              <AreaChart data={data} accessibilityLayer>
+                <CartesianGrid vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => v.slice(0, 3)}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => `$${Number(v).toLocaleString()}`}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => (
+                        <span className="font-mono font-medium tabular-nums">
+                          ${(value as number).toLocaleString()}
+                        </span>
+                      )}
+                    />
+                  }
+                />
+                <Area
+                  type="monotone"
+                  dataKey="amount"
+                  stroke="var(--color-amount)"
+                  strokeWidth={2}
+                  fill="var(--color-amount)"
+                  fillOpacity={0.1}
+                  dot={false}
+                  activeDot={{
+                    r: 4,
+                    stroke: 'var(--card)',
+                    strokeWidth: 2,
+                  }}
+                />
+              </AreaChart>
+            </ChartContainer>
+            <table className="sr-only">
+              <caption>Earnings by month, last 12 months</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Month</th>
+                  <th scope="col">Earnings</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((d) => (
+                  <tr key={d.month}>
+                    <td>{d.month}</td>
+                    <td>${d.amount.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </CardContent>
     </Card>
