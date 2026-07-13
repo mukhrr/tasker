@@ -26,6 +26,8 @@ opening we exploit:
 The proposal body is loaded and cached when the issue is first tracked, so the
 trigger path does no disk I/O. Poll requests never overlap; if a GitHub response
 takes longer than the configured interval, the next request starts immediately.
+In extension mode, one shared repo-level detector watches for `External`; armed
+proposals do not each create a permanent polling loop.
 
 ### Latency reality
 

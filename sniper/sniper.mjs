@@ -41,7 +41,9 @@ const TRIGGER_NAME = process.env.LABEL_TRIGGER || 'Help Wanted';
 const LOCK = LOCK_NAME.toLowerCase();
 const TRIGGER = TRIGGER_NAME.toLowerCase();
 
-const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 600); // repo + slow per-issue poll
+// One shared repo request stays below GitHub's 5,000/hour primary limit while
+// still catching External well inside its 2–3 second lead over Help Wanted.
+const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 900);
 const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 80); // poll once External is seen
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
@@ -125,10 +127,13 @@ async function syncArmedProposals() {
     const body = typeof proposal.body === 'string' ? proposal.body.trim() : '';
     if (!Number.isInteger(n) || n <= 0 || !body) continue;
     armedNow.add(n);
+    const wasKnown = cloudProposals.has(n);
     cloudProposals.set(n, proposal);
     bodies.set(n, Promise.resolve(body));
-    if (!tracked.has(n) && !posted.has(n)) {
-      track(n, { isWatch: true, mode: 'slow', source: 'cloud' });
+    if (!wasKnown) {
+      posted.delete(n); // allow an intentionally re-armed issue in this process
+      etags.delete('discover'); // re-evaluate an External label already in the cached page
+      log(`📌 #${n} armed and staged`);
     }
   }
 
@@ -236,13 +241,21 @@ async function discoverTick() {
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
+      // Cloud mode is deliberately selective: the single repo-level detector
+      // ignores everything except proposals explicitly armed in the extension.
+      if (!DISCOVER && !cloudProposals.has(n)) continue;
       if (posted.has(n) || tracked.has(n)) continue;
       const names = labelNames(issue.labels);
       const hasHW = names.includes(TRIGGER);
       const updatedAgo = Date.now() - Date.parse(issue.updated_at);
       if (!hasHW && updatedAgo < FRESH_LOCK_MS) {
         // Fresh `External`, no HW yet — exactly the pre-HW window. Lock tight.
-        track(n, { mode: 'tight', issue });
+        track(n, {
+          mode: 'tight',
+          issue,
+          isWatch: cloudProposals.has(n),
+          source: cloudProposals.has(n) ? 'cloud' : 'local',
+        });
       } else if (hasHW && updatedAgo < FIRE_FRESH_MS && Date.parse(issue.updated_at) > START) {
         // Both labels already on but HW is fresh and landed after we started —
         // we missed the pre-lock; fire a catch-up (still likely top-of-pack).
@@ -310,7 +323,13 @@ async function tick(n) {
   }
 
   if (st.mode === 'tight' && Date.now() > st.tightUntil) {
-    if (st.isWatch) {
+    if (st.source === 'cloud') {
+      // Return cloud proposals to the shared repo detector instead of giving
+      // every armed row its own permanent polling loop.
+      tracked.delete(n);
+      log(`#${n} tight window elapsed → back to shared detector`);
+      return;
+    } else if (st.isWatch) {
       st.mode = 'slow'; // watched issue — drop back to slow and keep waiting
       log(`#${n} tight window elapsed → back to slow watch`);
     } else {
@@ -488,7 +507,7 @@ function main() {
   }
 
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
-  if (DISCOVER) void discoverTick();
+  if (DISCOVER || CLOUD_MODE) void discoverTick();
   if (CLOUD_MODE) void cloudSyncTick();
 }
 
