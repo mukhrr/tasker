@@ -18,6 +18,7 @@
  * Two ways to feed it issues:
  *   WATCH=92367,92400   → race these specific issues you've staged a body for
  *   DISCOVER=true       → watch the whole repo: lock on `External`, fire on HW
+ *   Supabase variables  → continuously watch proposals armed in the extension
  *
  * Safety: DRY_RUN=true (default) logs what it WOULD post — nothing is posted.
  * ⚠️  Posting a generic body to EVERY Help Wanted issue is spam and WILL get you
@@ -59,15 +60,119 @@ const PROPOSAL_DIR = process.env.PROPOSAL_DIR || path.join(HERE, 'proposals');
 const DEFAULT_BODY_FILE = process.env.PROPOSAL_FILE || path.join(HERE, 'proposal.md');
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
+const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
+const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
-const API = 'https://api.github.com';
+const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
 const START = Date.now();
 
 // ── state ───────────────────────────────────────────────────────────────────
 const posted = new Set(); // issue numbers we've already fired on
 const tracked = new Map(); // n -> { mode:'slow'|'tight', isWatch, tightUntil, issue }
 const etags = new Map(); // request key -> last ETag (for conditional GETs)
+const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off the fire path
+const cloudProposals = new Map(); // issue number -> armed Supabase proposal
 let backoffUntil = 0;
+
+// ── Supabase proposal source ─────────────────────────────────────────────────
+async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) {
+  const headers = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (prefer) headers.Prefer = prefer;
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${pathname}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text().catch(() => '');
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  if (!res.ok) {
+    const detail = typeof data === 'string' ? data : JSON.stringify(data);
+    throw new Error(`Supabase ${res.status}: ${detail.slice(0, 300)}`);
+  }
+  return data;
+}
+
+async function syncArmedProposals() {
+  const [owner, repo] = REPO.split('/');
+  const query = new URLSearchParams({
+    select: 'id,user_id,repo_owner,repo_name,issue_number,body,state',
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    repo_owner: `ilike.${owner}`,
+    repo_name: `ilike.${repo}`,
+    state: 'eq.armed',
+  });
+  const rows = await supabaseRequest(`proposals?${query}`);
+  if (!Array.isArray(rows)) throw new Error('Supabase proposals response was not an array');
+
+  const armedNow = new Set();
+  for (const proposal of rows) {
+    const n = Number(proposal.issue_number);
+    const body = typeof proposal.body === 'string' ? proposal.body.trim() : '';
+    if (!Number.isInteger(n) || n <= 0 || !body) continue;
+    armedNow.add(n);
+    cloudProposals.set(n, proposal);
+    bodies.set(n, Promise.resolve(body));
+    if (!tracked.has(n) && !posted.has(n)) {
+      track(n, { isWatch: true, mode: 'slow', source: 'cloud' });
+    }
+  }
+
+  for (const [n] of cloudProposals) {
+    if (armedNow.has(n)) continue;
+    cloudProposals.delete(n);
+    const st = tracked.get(n);
+    if (st?.source === 'cloud') tracked.delete(n);
+    if (!WATCH.includes(n)) bodies.delete(n);
+  }
+}
+
+async function cloudSyncTick() {
+  try {
+    await syncArmedProposals();
+  } catch (e) {
+    log(`Supabase sync failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  setTimeout(() => void cloudSyncTick(), ARMED_SYNC_INTERVAL_MS);
+}
+
+async function claimCloudProposal(proposal) {
+  const query = new URLSearchParams({
+    id: `eq.${proposal.id}`,
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    state: 'eq.armed',
+    select: '*',
+  });
+  const rows = await supabaseRequest(`proposals?${query}`, {
+    method: 'PATCH',
+    body: { state: 'posting', last_error: null },
+    prefer: 'return=representation',
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function updateCloudProposal(id, values) {
+  const query = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}` });
+  await supabaseRequest(`proposals?${query}`, {
+    method: 'PATCH',
+    body: values,
+    prefer: 'return=minimal',
+  });
+}
 
 // ── GitHub fetch (conditional + rate-limit aware) ─────────────────────────────
 async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
@@ -149,15 +254,24 @@ async function discoverTick() {
 }
 
 // ── per-issue tracker: slow until `External`, then tight until `Help Wanted` ──
-function track(n, { isWatch = false, mode = 'slow', issue = null } = {}) {
+function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'local' } = {}) {
   if (posted.has(n)) return;
+  // External normally gives us a 2–3 second head start. Use it to resolve and
+  // cache the proposal now, never after Help Wanted has landed.
+  void prepareBody(n);
   const existing = tracked.get(n);
   if (existing) {
     if (issue) existing.issue = issue;
     if (mode === 'tight' && existing.mode !== 'tight') upgradeToTight(n, existing);
     return;
   }
-  const st = { mode, isWatch, issue, tightUntil: mode === 'tight' ? Date.now() + TIGHT_WINDOW_MS : 0 };
+  const st = {
+    mode,
+    isWatch,
+    issue,
+    source,
+    tightUntil: mode === 'tight' ? Date.now() + TIGHT_WINDOW_MS : 0,
+  };
   tracked.set(n, st);
   log(mode === 'tight' ? `🔒 #${n} locked (tight) via discovery` : `👁  #${n} watching`);
   void tick(n);
@@ -172,6 +286,11 @@ function upgradeToTight(n, st) {
 async function tick(n) {
   let st = tracked.get(n);
   if (!st || posted.has(n)) return;
+
+  // Keep the configured interval start-to-start. Previously we waited for the
+  // request AND THEN slept for the full interval, making an advertised 80 ms
+  // poll run at (GitHub RTT + 80 ms). We still never overlap requests.
+  const tickStartedAt = Date.now();
 
   const { status, data } = await gh(`/repos/${REPO}/issues/${n}/labels`, {
     useEtag: true,
@@ -202,7 +321,8 @@ async function tick(n) {
   }
 
   const interval = st.mode === 'tight' ? TIGHT_INTERVAL_MS : DISCOVERY_INTERVAL_MS;
-  setTimeout(() => void tick(n), interval);
+  const elapsed = Date.now() - tickStartedAt;
+  setTimeout(() => void tick(n), Math.max(0, interval - elapsed));
 }
 
 // ── fire: post the staged proposal ────────────────────────────────────────────
@@ -221,6 +341,21 @@ async function fire(n, issue, via) {
     return;
   }
 
+  const cloudProposal = cloudProposals.get(n);
+  if (cloudProposal) {
+    try {
+      const claimed = await claimCloudProposal(cloudProposal);
+      if (!claimed) {
+        log(`#${n} skipped — proposal was already claimed or disarmed`);
+        return;
+      }
+    } catch (e) {
+      posted.delete(n);
+      log(`❌ claim #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+  }
+
   const t0 = Date.now();
   const { status, data } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
     method: 'POST',
@@ -230,17 +365,55 @@ async function fire(n, issue, via) {
 
   if (status === 201 && data?.html_url) {
     log(`✅ sniped #${n} via ${via} in ${dt}ms → ${data.html_url}`);
+    if (cloudProposal) {
+      try {
+        await updateCloudProposal(cloudProposal.id, {
+          state: 'posted',
+          github_comment_id: data.id,
+          posted_at: new Date().toISOString(),
+          last_error: null,
+        });
+      } catch (e) {
+        log(`⚠️  posted #${n}, but Supabase update failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     await notify(`✅ Sniped #${n} in ${dt}ms${title}\nGo edit your proposal:\n${data.html_url}`);
   } else {
-    posted.delete(n); // allow a retry on transient failures
     const detail = typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200);
     log(`❌ post #${n} failed: ${status} ${detail}`);
+    if (cloudProposal) {
+      try {
+        await updateCloudProposal(cloudProposal.id, {
+          state: 'failed',
+          last_error: `${status} ${detail}`.slice(0, 300),
+        });
+      } catch (e) {
+        log(`Supabase failure update failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      posted.delete(n); // local-file mode can retry transient failures
+    }
     await notify(`❌ Snipe #${n} failed (HTTP ${status})`);
   }
 }
 
 // ── proposal body resolution ──────────────────────────────────────────────────
 async function bodyFor(n) {
+  return prepareBody(n);
+}
+
+function prepareBody(n) {
+  const cached = bodies.get(n);
+  if (cached) return cached;
+  const loading = loadBody(n).catch((error) => {
+    bodies.delete(n);
+    throw error;
+  });
+  bodies.set(n, loading);
+  return loading;
+}
+
+async function loadBody(n) {
   const perIssue = path.join(PROPOSAL_DIR, `${n}.md`);
   if (existsSync(perIssue)) return (await readFile(perIssue, 'utf8')).trim();
   if (existsSync(DEFAULT_BODY_FILE)) return (await readFile(DEFAULT_BODY_FILE, 'utf8')).trim();
@@ -291,14 +464,20 @@ function log(...a) {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 function main() {
-  if (!DISCOVER && WATCH.length === 0) {
-    console.error('Nothing to do — set WATCH=<issue#,...> and/or DISCOVER=true');
+  const supabaseParts = [SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_USER_ID].filter(Boolean).length;
+  if (supabaseParts > 0 && !CLOUD_MODE) {
+    console.error('Supabase mode requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_USER_ID');
+    process.exit(1);
+  }
+  if (!DISCOVER && WATCH.length === 0 && !CLOUD_MODE) {
+    console.error('Nothing to do — configure Supabase mode, WATCH=<issue#,...>, and/or DISCOVER=true');
     process.exit(1);
   }
   log(
     `sniper up — repo=${REPO} ` +
       `${DISCOVER ? 'discover=on ' : ''}` +
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
+      `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms`
   );
   if (DISCOVER && !DRY_RUN) {
@@ -310,6 +489,7 @@ function main() {
 
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
   if (DISCOVER) void discoverTick();
+  if (CLOUD_MODE) void cloudSyncTick();
 }
 
 main();
