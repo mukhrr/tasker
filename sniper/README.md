@@ -26,8 +26,9 @@ opening we exploit:
 The proposal body is loaded and cached when the issue is first tracked, so the
 trigger path does no disk I/O. Poll requests never overlap; if a GitHub response
 takes longer than the configured interval, the next request starts immediately.
-In extension mode, one shared repo-level detector watches for `External`; armed
-proposals do not each create a permanent polling loop.
+In extension mode, one shared repo-level detector watches recently updated open
+issues. It catches both the usual `External` lead and cases where `Help Wanted`
+is added directly; armed proposals do not each create a permanent polling loop.
 
 ### Latency reality
 
@@ -76,7 +77,8 @@ latency before you ever post for real.
   The service-role key bypasses RLS, so the worker additionally requires and
   filters by `SUPABASE_USER_ID`. Store both as host secrets and never commit
   them. At trigger time it atomically changes `armed` to `posting`; this prevents
-  duplicate comments if an extension tab detects the label at the same time.
+  duplicate comments. Newly seen armed rows are checked against GitHub once;
+  closed issues are automatically returned to `draft` and never staged.
 
 - **Watch list** — race specific issues you've prepared:
   ```bash

@@ -9,39 +9,13 @@ import type {
   TasksBatchResponse,
   IssueLabelsResponse,
   ProposalResponse,
-  IssueLabelsEtagResponse,
   AutoPostResponse,
 } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
 
 const PROPOSAL_REQUIRED_LABELS = ['bug', 'daily'];
 const PROPOSAL_READY_LABEL = 'help wanted';
-// Melvin's automation applies `External` first, then `Help Wanted` follows
-// within ~2–3 s (empirically measured across 20 recent Help Wanted issues:
-// min 2 s, max 3 s, avg ~2.5 s, GitHub API timestamps are second-precision).
-// Once we see `External` on an armed proposal we stop the lazy 500 ms poll and
-// tight-poll THIS issue every EXTERNAL_HW_TIGHT_POLL_MS, firing the *instant*
-// Help Wanted lands — so we post at ~(HW + one tight interval + RTT) instead of
-// the old fixed 3001 ms force (up to ~1 s late on a 2 s gap). The polls are
-// ETag-conditional, so the in-window burst is almost entirely free 304s.
-// EXTERNAL_HW_FORCE_MS is a backstop: if detection stalls we post anyway, since
-// HW is essentially guaranteed within ~3 s of External in Melvin's pipeline.
-const EXTERNAL_LABEL = 'external';
-const EXTERNAL_HW_TIGHT_POLL_MS = 120;
-const EXTERNAL_HW_FORCE_MS = 3400;
 const PROPOSAL_POLL_INTERVAL_MS = 2000;
-// Tab-side fast-path: ETag-cached label fetch interval. 304 responses cost
-// no GitHub rate-limit quota, so this can run aggressively without burning
-// the 5,000/hr authenticated budget. Tightened from 1500 → 500 ms to shrink
-// the worst-case label-detection delay below the External→HW race window.
-const FAST_LABEL_POLL_MS = 500;
-// Selectors for the labels container — covers both the classic Rails issue
-// page and the React rewrite. Observer attaches to whichever is found.
-const LABELS_CONTAINER_SELECTORS = [
-  '.js-issue-labels',
-  '[data-testid="issue-labels"]',
-  '[aria-label="Labels"]',
-];
 
 function sendMessage<T>(msg: MessageRequest): Promise<T> {
   return chrome.runtime.sendMessage(msg);
@@ -81,19 +55,7 @@ export class StatusWidget {
   private proposalPollHandle: ReturnType<typeof setInterval> | null = null;
   private proposalNotice: string | null = null;
   private destroyed = false;
-  // Fast-path state: tab-side detection of the Help Wanted label.
   private autoPostEnabled = true;
-  private fastPathHandle: ReturnType<typeof setInterval> | null = null;
-  private fastPathObservers: MutationObserver[] = [];
-  private fastPathEtag: string | null = null;
-  private fastPathTriggered = false;
-  private fastPathVisibilityListener: (() => void) | null = null;
-  // External-label race: once seen on an armed proposal, tight-poll this issue
-  // for Help Wanted and post the instant it lands (force-post backstop at
-  // EXTERNAL_HW_FORCE_MS). Cleared if the fast-path stops (posted/failed/disarmed).
-  private externalTightHandle: ReturnType<typeof setTimeout> | null = null;
-  private externalRaceDeadline = 0;
-  private externalRaceStarted = false;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
     this.owner = owner;
@@ -192,7 +154,6 @@ export class StatusWidget {
 
     if (this.proposal?.state === 'armed' || this.proposal?.state === 'posting') {
       this.startProposalPoll();
-      this.startFastPath();
     }
 
     // If the row says 'posted' but the user deleted the comment on GitHub,
@@ -567,10 +528,6 @@ export class StatusWidget {
     return this.labels.some((l) => l.toLowerCase() === PROPOSAL_READY_LABEL);
   }
 
-  private hasExternalLabel(): boolean {
-    return this.labels.some((l) => l.toLowerCase() === EXTERNAL_LABEL);
-  }
-
   private hasRequiredDraftLabels(): boolean {
     const lower = this.labels.map((l) => l.toLowerCase());
     return PROPOSAL_REQUIRED_LABELS.every((req) => lower.includes(req));
@@ -635,9 +592,7 @@ export class StatusWidget {
     if (readyAlready) {
       const notice = document.createElement('div');
       notice.className = 'proposal-notice';
-      notice.textContent = state === 'armed'
-        ? '"Help Wanted" already added — posting on next poll cycle.'
-        : '"Help Wanted" is already on this issue. Arm to post immediately.';
+      notice.textContent = '"Help Wanted" is already on this issue. Use “Post now” for an immediate manual post.';
       body.appendChild(notice);
     } else if (!hasBugDaily) {
       const notice = document.createElement('div');
@@ -799,10 +754,8 @@ export class StatusWidget {
       this.proposal = res.data;
       if (res.data.state === 'armed' || res.data.state === 'posting') {
         this.startProposalPoll();
-        this.startFastPath();
       } else {
         this.stopProposalPoll();
-        this.stopFastPath();
       }
     } else {
       this.error = res.error ?? 'Update failed';
@@ -859,7 +812,6 @@ export class StatusWidget {
         this.proposal = postRes.data;
         if (postRes.data.state === 'posted' || postRes.data.state === 'failed') {
           this.stopProposalPoll();
-          this.stopFastPath();
         }
       } else {
         this.error = postRes.error ?? 'Post failed';
@@ -909,247 +861,9 @@ export class StatusWidget {
       this.proposal = next;
       if (next.state === 'posted' || next.state === 'failed' || next.state === 'draft') {
         this.stopProposalPoll();
-        this.stopFastPath();
       }
       this.render();
     }
-  }
-
-  // ── Tab-side fast-path: detect "Help Wanted" the moment it appears ──
-
-  private startFastPath(): void {
-    if (!this.autoPostEnabled) return;
-    if (!this.proposal || this.proposal.state !== 'armed') return;
-    if (this.fastPathTriggered) return;
-
-    // If the label is already on the issue (we just loaded it), fire immediately.
-    if (this.hasReadyLabel()) {
-      void this.tryFastPost('initial-labels');
-      return;
-    }
-
-    // External may already be applied from a prior page load — arm the race
-    // so we don't miss the 2–3 s window waiting for a DOM mutation that
-    // already happened before the widget mounted.
-    if (this.hasExternalLabel()) {
-      this.startExternalRace('initial-labels');
-    }
-
-    this.attachFastPathObservers();
-    this.startFastPathPoll();
-
-    // Pause the ETag poll while the tab is hidden to be a polite citizen;
-    // resume on focus. The MutationObserver still runs (free) in case GitHub
-    // pushes a label update via their own live channel.
-    if (!this.fastPathVisibilityListener) {
-      this.fastPathVisibilityListener = () => {
-        if (document.visibilityState === 'visible' && this.proposal?.state === 'armed') {
-          this.startFastPathPoll();
-        } else {
-          this.stopFastPathPoll();
-        }
-      };
-      document.addEventListener('visibilitychange', this.fastPathVisibilityListener);
-    }
-  }
-
-  private stopFastPath(): void {
-    this.stopFastPathPoll();
-    this.stopExternalRace();
-    for (const obs of this.fastPathObservers) obs.disconnect();
-    this.fastPathObservers = [];
-    if (this.fastPathVisibilityListener) {
-      document.removeEventListener('visibilitychange', this.fastPathVisibilityListener);
-      this.fastPathVisibilityListener = null;
-    }
-    this.fastPathEtag = null;
-  }
-
-  private attachFastPathObservers(): void {
-    // Walk through every known labels-container selector. Some pages have
-    // both classic and React variants in flight during navigation.
-    const seen = new Set<Element>();
-    for (const sel of LABELS_CONTAINER_SELECTORS) {
-      document.querySelectorAll(sel).forEach((el) => {
-        if (seen.has(el)) return;
-        seen.add(el);
-        const obs = new MutationObserver(() => this.checkLabelsContainer(el as HTMLElement));
-        obs.observe(el, { childList: true, subtree: true, characterData: true });
-        this.fastPathObservers.push(obs);
-        // Run an initial pass — the container may already contain the label
-        // when GitHub renders it via Turbo navigation.
-        this.checkLabelsContainer(el as HTMLElement);
-      });
-    }
-  }
-
-  private checkLabelsContainer(el: HTMLElement): void {
-    if (this.fastPathTriggered) return;
-    const text = (el.innerText || el.textContent || '').toLowerCase();
-    if (text.includes(PROPOSAL_READY_LABEL)) {
-      void this.tryFastPost('mutation-observer');
-      return;
-    }
-    // External lands first in Melvin's pipeline; arm the race so we can post
-    // within 2–3 s even if the HW label DOM update is missed by the observer.
-    if (text.includes(EXTERNAL_LABEL)) {
-      this.startExternalRace('mutation-observer');
-    }
-  }
-
-  private startFastPathPoll(): void {
-    if (this.fastPathHandle !== null) return;
-    // While the External→HW tight poll owns this issue's ETag, don't run the
-    // lazy poll alongside it — two pollers sharing fastPathEtag can race and
-    // make one see a stale 304 while the other consumed the changed labels.
-    if (this.externalRaceStarted) return;
-    if (document.visibilityState !== 'visible') return;
-    this.fastPathHandle = setInterval(() => {
-      void this.fastPollTick();
-    }, FAST_LABEL_POLL_MS);
-    // Fire one immediate tick so we don't wait for the first interval.
-    void this.fastPollTick();
-  }
-
-  private stopFastPathPoll(): void {
-    if (this.fastPathHandle !== null) {
-      clearInterval(this.fastPathHandle);
-      this.fastPathHandle = null;
-    }
-  }
-
-  private async fastPollTick(): Promise<void> {
-    if (this.destroyed || this.fastPathTriggered) return;
-    if (!this.proposal || this.proposal.state !== 'armed') {
-      this.stopFastPath();
-      return;
-    }
-    const res = await sendMessage<IssueLabelsEtagResponse>({
-      type: 'QUERY_ISSUE_LABELS_ETAG',
-      owner: this.owner,
-      repo: this.repo,
-      number: this.number,
-      etag: this.fastPathEtag,
-    });
-    if (!res.ok || !res.data) return;
-    if (res.data.etag) this.fastPathEtag = res.data.etag;
-    if (res.data.notModified || !res.data.labels) return;
-    this.labels = res.data.labels;
-    if (this.hasReadyLabel()) {
-      void this.tryFastPost('etag-poll');
-      return;
-    }
-    if (this.hasExternalLabel()) {
-      this.startExternalRace('etag-poll');
-    }
-  }
-
-  // ── External → Help Wanted race ──
-  //
-  // Melvin applies `External` 5–10 s after his proposal-template comment, then
-  // applies `Help Wanted` 2–3 s after `External`. The External sighting is a
-  // high-confidence signal that HW is imminent, so we switch from the lazy
-  // 500 ms poll to a tight poll of THIS issue (every EXTERNAL_HW_TIGHT_POLL_MS)
-  // and fire the *instant* HW lands — landing us at ~(HW + one tight interval)
-  // instead of the old fixed 3001 ms force (up to ~1 s late on a 2 s gap).
-  // A force-post backstop at EXTERNAL_HW_FORCE_MS guarantees a post if detection
-  // stalls. The HW-direct fast-path still wins if it fires first;
-  // `fastPathTriggered` guards against double-posts.
-  private startExternalRace(source: string): void {
-    if (this.externalRaceStarted) return;
-    if (this.fastPathTriggered) return;
-    if (!this.autoPostEnabled) return;
-    if (!this.proposal || this.proposal.state !== 'armed') return;
-    this.externalRaceStarted = true;
-    this.externalRaceDeadline = performance.now() + EXTERNAL_HW_FORCE_MS;
-    // The tight poll is now the sole label fetcher for this issue — stop the
-    // lazy 500 ms poll so the two don't race on the shared ETag.
-    this.stopFastPathPoll();
-    console.debug('[tasker] external-race armed via', source, '— tight-polling for HW');
-    void this.externalRaceTick();
-  }
-
-  // One tight-poll iteration. Self-reschedules via setTimeout (not setInterval)
-  // so a slow round-trip can never stack overlapping label fetches.
-  private async externalRaceTick(): Promise<void> {
-    if (this.fastPathTriggered || this.destroyed || !this.externalRaceStarted) return;
-    if (!this.proposal || this.proposal.state !== 'armed') {
-      this.stopExternalRace();
-      return;
-    }
-    // Backstop: HW is essentially guaranteed within ~3 s of External; if we
-    // somehow haven't detected it by the deadline, post anyway.
-    if (performance.now() >= this.externalRaceDeadline) {
-      void this.tryFastPost('external-race-force');
-      return;
-    }
-    const res = await sendMessage<IssueLabelsEtagResponse>({
-      type: 'QUERY_ISSUE_LABELS_ETAG',
-      owner: this.owner,
-      repo: this.repo,
-      number: this.number,
-      etag: this.fastPathEtag,
-    });
-    if (this.fastPathTriggered || this.destroyed || !this.externalRaceStarted) return;
-    if (res.ok && res.data) {
-      if (res.data.etag) this.fastPathEtag = res.data.etag;
-      if (!res.data.notModified && res.data.labels) {
-        this.labels = res.data.labels;
-        if (this.hasReadyLabel()) {
-          void this.tryFastPost('external-race-tight-poll');
-          return;
-        }
-      }
-    }
-    // Re-check the deadline after the await before scheduling another round.
-    if (performance.now() >= this.externalRaceDeadline) {
-      void this.tryFastPost('external-race-force');
-      return;
-    }
-    this.externalTightHandle = setTimeout(() => {
-      this.externalTightHandle = null;
-      void this.externalRaceTick();
-    }, EXTERNAL_HW_TIGHT_POLL_MS);
-  }
-
-  private stopExternalRace(): void {
-    if (this.externalTightHandle !== null) {
-      clearTimeout(this.externalTightHandle);
-      this.externalTightHandle = null;
-    }
-    this.externalRaceStarted = false;
-    this.externalRaceDeadline = 0;
-  }
-
-  private async tryFastPost(source: string): Promise<void> {
-    console.debug('[tasker] fast-post triggered via', source);
-    if (this.fastPathTriggered) return;
-    if (!this.autoPostEnabled) return;
-    if (!this.proposal || this.proposal.state !== 'armed') return;
-    this.fastPathTriggered = true;
-    this.stopFastPath();
-    const proposalId = this.proposal.id;
-
-    // Optimistic UI: flip to "posting" so the user sees instant feedback.
-    this.proposal = { ...this.proposal, state: 'posting' };
-    this.render();
-
-    const res = await sendMessage<MessageResponse<Proposal>>({
-      type: 'POST_PROPOSAL_NOW',
-      proposalId,
-    });
-
-    if (this.destroyed) return;
-    if (res.ok && res.data) {
-      this.proposal = res.data;
-      this.stopProposalPoll();
-    } else {
-      // Reset trigger so a retry is possible if the row went back to armed.
-      this.fastPathTriggered = false;
-      // Pull canonical state — the row may already be `failed` or back to `armed`.
-      void this.refreshProposal();
-    }
-    this.render();
   }
 
   // ── Shared helpers ──
@@ -1178,7 +892,6 @@ export class StatusWidget {
   destroy() {
     this.destroyed = true;
     this.stopProposalPoll();
-    this.stopFastPath();
     this.container.remove();
   }
 

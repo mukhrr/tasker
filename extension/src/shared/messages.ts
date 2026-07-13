@@ -124,28 +124,13 @@ export interface DisarmProposalRequest {
   number: number;
 }
 
-// Tab-side fast-path: content script asks the background to claim the
-// armed proposal and post the comment immediately, without waiting on
-// the cloud worker's poll cycle.
+// Manual "Post now" asks the background to claim the proposal and post it.
 export interface PostProposalNowRequest {
   type: 'POST_PROPOSAL_NOW';
   proposalId: string;
-  // When true: bypass the auto-post kill switch and allow the row to
-  // transition to 'posting' from any non-terminal state (draft, armed,
-  // failed). This is for the manual "Post now" button — explicit user
-  // intent overrides the master toggle.
+  // Required for the explicit manual flow. Calls without it are rejected so
+  // older content scripts cannot invoke the retired automatic fast path.
   force?: boolean;
-}
-
-// ETag-cached labels query — content script polls this every ~1.5s while
-// the issue tab is visible. 304 responses cost no GitHub rate-limit quota,
-// so the loop is essentially free.
-export interface QueryIssueLabelsEtagRequest {
-  type: 'QUERY_ISSUE_LABELS_ETAG';
-  owner: string;
-  repo: string;
-  number: number;
-  etag: string | null;
 }
 
 export interface GetAutoPostRequest {
@@ -187,7 +172,6 @@ export type MessageRequest =
   | ArmProposalRequest
   | DisarmProposalRequest
   | PostProposalNowRequest
-  | QueryIssueLabelsEtagRequest
   | GetAutoPostRequest
   | SetAutoPostRequest
   | VerifyPostedCommentRequest;
@@ -216,10 +200,4 @@ export type TasksBatchResponse = MessageResponse<Task[]>;
 export type IssueLabelsResponse = MessageResponse<string[]>;
 export type ProposalResponse = MessageResponse<Proposal | null>;
 
-export interface IssueLabelsEtagData {
-  etag: string | null;
-  labels: string[] | null;
-  notModified: boolean;
-}
-export type IssueLabelsEtagResponse = MessageResponse<IssueLabelsEtagData>;
 export type AutoPostResponse = MessageResponse<{ enabled: boolean }>;

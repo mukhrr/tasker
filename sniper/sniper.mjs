@@ -41,8 +41,8 @@ const TRIGGER_NAME = process.env.LABEL_TRIGGER || 'Help Wanted';
 const LOCK = LOCK_NAME.toLowerCase();
 const TRIGGER = TRIGGER_NAME.toLowerCase();
 
-// One shared repo request stays below GitHub's 5,000/hour primary limit while
-// still catching External well inside its 2–3 second lead over Help Wanted.
+// One shared recent-open-issues request stays below GitHub's 5,000/hour primary
+// limit. It catches both External → Help Wanted and direct Help Wanted changes.
 const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 900);
 const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 80); // poll once External is seen
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
@@ -77,6 +77,7 @@ const tracked = new Map(); // n -> { mode:'slow'|'tight', isWatch, tightUntil, i
 const etags = new Map(); // request key -> last ETag (for conditional GETs)
 const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off the fire path
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
+const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
 let backoffUntil = 0;
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -111,6 +112,14 @@ async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) 
 
 async function syncArmedProposals() {
   const [owner, repo] = REPO.split('/');
+  const settingsQuery = new URLSearchParams({
+    select: 'proposal_auto_post',
+    id: `eq.${SUPABASE_USER_ID}`,
+    limit: '1',
+  });
+  const settingsRows = await supabaseRequest(`user_settings?${settingsQuery}`);
+  const autoPostEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.proposal_auto_post !== false;
+
   const query = new URLSearchParams({
     select: 'id,user_id,repo_owner,repo_name,issue_number,body,state',
     user_id: `eq.${SUPABASE_USER_ID}`,
@@ -118,7 +127,7 @@ async function syncArmedProposals() {
     repo_name: `ilike.${repo}`,
     state: 'eq.armed',
   });
-  const rows = await supabaseRequest(`proposals?${query}`);
+  const rows = autoPostEnabled ? await supabaseRequest(`proposals?${query}`) : [];
   if (!Array.isArray(rows)) throw new Error('Supabase proposals response was not an array');
 
   const armedNow = new Set();
@@ -126,6 +135,24 @@ async function syncArmedProposals() {
     const n = Number(proposal.issue_number);
     const body = typeof proposal.body === 'string' ? proposal.body.trim() : '';
     if (!Number.isInteger(n) || n <= 0 || !body) continue;
+
+    if (!validatedCloudProposalIds.has(proposal.id)) {
+      const { status, data } = await gh(`/repos/${REPO}/issues/${n}`);
+      if (status !== 200 || !data || typeof data !== 'object') {
+        log(`GitHub state check failed for #${n} (${status}); not staging yet`);
+        continue;
+      }
+      if (data.state !== 'open') {
+        await updateCloudProposal(proposal.id, {
+          state: 'draft',
+          last_error: 'Auto-disarmed because the GitHub issue is closed.',
+        });
+        log(`🚫 #${n} is closed — auto-disarmed`);
+        continue;
+      }
+      validatedCloudProposalIds.add(proposal.id);
+    }
+
     armedNow.add(n);
     const wasKnown = cloudProposals.has(n);
     cloudProposals.set(n, proposal);
@@ -139,6 +166,8 @@ async function syncArmedProposals() {
 
   for (const [n] of cloudProposals) {
     if (armedNow.has(n)) continue;
+    const previous = cloudProposals.get(n);
+    if (previous) validatedCloudProposalIds.delete(previous.id);
     cloudProposals.delete(n);
     const st = tracked.get(n);
     if (st?.source === 'cloud') tracked.delete(n);
@@ -231,17 +260,16 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
   return { status: res.status, data };
 }
 
-// ── discovery: find issues that just got `External` (repo-wide) ───────────────
+// ── discovery: inspect the repository's most recently updated open issues ────
 async function discoverTick() {
   const q =
-    `/repos/${REPO}/issues?labels=${encodeURIComponent(LOCK_NAME)}` +
-    `&state=open&sort=updated&direction=desc&per_page=20`;
+    `/repos/${REPO}/issues?state=open&sort=updated&direction=desc&per_page=50`;
   const { status, data } = await gh(q, { useEtag: true, key: 'discover' });
   if (status === 200 && Array.isArray(data)) {
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
-      // Cloud mode is deliberately selective: the single repo-level detector
+      // Cloud mode is deliberately selective: the shared recent-issue detector
       // ignores everything except proposals explicitly armed in the extension.
       if (!DISCOVER && !cloudProposals.has(n)) continue;
       if (posted.has(n) || tracked.has(n)) continue;

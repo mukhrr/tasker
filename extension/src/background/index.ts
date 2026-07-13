@@ -4,7 +4,6 @@ import type {
   MessageRequest,
   MessageResponse,
   SessionData,
-  IssueLabelsEtagData,
 } from '../shared/messages';
 import type { Task, UserStatus, Proposal } from '../shared/types';
 import { handleTestTelegram } from './telegram';
@@ -88,8 +87,6 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleSetProposalState(msg.owner, msg.repo, msg.number, 'draft');
     case 'POST_PROPOSAL_NOW':
       return handlePostProposalNow(msg.proposalId, msg.force === true);
-    case 'QUERY_ISSUE_LABELS_ETAG':
-      return handleQueryIssueLabelsEtag(msg.owner, msg.repo, msg.number, msg.etag);
     case 'GET_AUTOPOST':
       return handleGetAutoPost();
     case 'SET_AUTOPOST':
@@ -643,6 +640,30 @@ async function handleSetProposalState(
     return { ok: false, error: `Proposal already ${existing.state}` };
   }
 
+  if (newState === 'armed') {
+    const providerToken = await getGithubProviderToken();
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (providerToken) headers.Authorization = `Bearer ${providerToken}`;
+    try {
+      const issueRes = await fetch(
+        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`,
+        { headers },
+      );
+      if (!issueRes.ok) {
+        return { ok: false, error: `Cannot verify issue state (GitHub ${issueRes.status})` };
+      }
+      const issue = (await issueRes.json()) as { state?: string };
+      if (issue.state !== 'open') {
+        return { ok: false, error: 'Closed issues cannot be armed for auto-post.' };
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Cannot verify issue state' };
+    }
+  }
+
   const { data, error } = await supabase
     .from('proposals')
     .update({ state: newState, last_error: null })
@@ -654,8 +675,7 @@ async function handleSetProposalState(
   return { ok: true, data: data as Proposal };
 }
 
-// ── Tab-side fast-path: claim and post directly using the user's
-// session.provider_token, instead of waiting for the cloud worker. ──
+// ── Proposal controls shared by the popup, manual post, and Railway worker ──
 
 const AUTOPOST_KEY = 'proposalAutoPost';
 
@@ -672,8 +692,7 @@ async function handleGetAutoPost(): Promise<MessageResponse<{ enabled: boolean }
 async function handleSetAutoPost(enabled: boolean): Promise<MessageResponse<{ enabled: boolean }>> {
   await chrome.storage.local.set({ [AUTOPOST_KEY]: enabled });
 
-  // Mirror to user_settings so the cloud worker honors it too. Best-effort —
-  // the local toggle still gates the tab-side fast path even if this fails.
+  // Mirror to user_settings so the Railway worker honors it too.
   try {
     const supabase = getSupabaseClient();
     const { data: session } = await supabase.auth.getSession();
@@ -690,59 +709,15 @@ async function handleSetAutoPost(enabled: boolean): Promise<MessageResponse<{ en
   return { ok: true, data: { enabled } };
 }
 
-async function handleQueryIssueLabelsEtag(
-  owner: string,
-  repo: string,
-  number: number,
-  etag: string | null,
-): Promise<MessageResponse<IssueLabelsEtagData>> {
-  const validationErr = validateRepoTuple(owner, repo, number);
-  if (validationErr) return { ok: false, error: validationErr };
-
-  const providerToken = await getGithubProviderToken();
-
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-  if (providerToken) headers.Authorization = `Bearer ${providerToken}`;
-  if (etag) headers['If-None-Match'] = etag;
-
-  try {
-    const res = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/labels`,
-      { headers },
-    );
-
-    if (res.status === 304) {
-      return { ok: true, data: { etag, labels: null, notModified: true } };
-    }
-    if (!res.ok) {
-      const remaining = res.headers.get('x-ratelimit-remaining');
-      const detail = remaining === '0' ? ' (rate limit exhausted)' : '';
-      return { ok: false, error: `GitHub ${res.status}${detail}` };
-    }
-
-    const newEtag = res.headers.get('etag');
-    const data = (await res.json()) as Array<{ name?: string } | string>;
-    const labels = data
-      .map((l) => (typeof l === 'string' ? l : l?.name ?? ''))
-      .filter((n): n is string => !!n);
-    return { ok: true, data: { etag: newEtag, labels, notModified: false } };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
-  }
-}
-
 async function handlePostProposalNow(proposalId: string, force = false): Promise<MessageResponse<Proposal>> {
   console.log('[tasker bg] post-now:start', { proposalId, force });
   if (!proposalId || typeof proposalId !== 'string') {
     return { ok: false, error: 'Invalid proposal id' };
   }
-  // Auto-post kill switch only gates the *automatic* fast path. A manual
-  // "Post now" click is explicit user intent — let it through.
-  if (!force && !(await isAutoPostAllowedLocally())) {
-    return { ok: false, error: 'Auto-post is disabled' };
+  // Railway is the sole automatic posting owner. Only the explicit manual
+  // "Post now" flow is accepted by the extension background.
+  if (!force) {
+    return { ok: false, error: 'Automatic tab-side posting has been retired' };
   }
 
   const supabase = getSupabaseClient();
@@ -755,11 +730,8 @@ async function handlePostProposalNow(proposalId: string, force = false): Promise
     return { ok: false, error: 'No GitHub provider token; sign out and back in with public_repo scope.' };
   }
 
-  // Atomic claim. Auto path: armed → posting only. Forced path: any
-  // non-terminal state → posting (draft, armed, or failed). Two parallel
-  // callers (mutation observer + ETag poll, or two tabs) collapse here;
-  // the loser gets claimed=null.
-  const allowedFromStates = force ? ['draft', 'armed', 'failed'] : ['armed'];
+  // Atomic manual claim from any non-terminal editable state.
+  const allowedFromStates = ['draft', 'armed', 'failed'];
   const { data: claimed, error: claimErr } = await supabase
     .from('proposals')
     .update({ state: 'posting' })
