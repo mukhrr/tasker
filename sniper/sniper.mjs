@@ -143,6 +143,15 @@ async function syncArmedProposals() {
       if (retry && Date.now() < retry.retryAt) continue;
 
       const { status, data, error } = await gh(`/repos/${REPO}/issues/${n}`);
+      if ([301, 404, 410].includes(status)) {
+        cloudValidationBackoff.delete(proposal.id);
+        await updateCloudProposal(proposal.id, {
+          state: 'draft',
+          last_error: 'Auto-disarmed because the GitHub issue was moved, deleted, or is unavailable.',
+        });
+        log(`🚫 #${n} is moved or unavailable — auto-disarmed`);
+        continue;
+      }
       if (status !== 200 || !data || typeof data !== 'object') {
         const attempts = (retry?.attempts || 0) + 1;
         const delayMs = Math.min(15 * 60_000, 30_000 * 2 ** (attempts - 1));
@@ -242,7 +251,14 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
 
   let res;
   try {
-    res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    res = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      // GitHub occasionally returns a 301 with an empty Location for removed
+      // issues. Inspect it instead of letting fetch turn it into a network error.
+      redirect: 'manual',
+    });
   } catch (e) {
     return { status: 0, data: null, error: e.message };
   }
