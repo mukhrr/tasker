@@ -48,7 +48,7 @@ cd sniper
 cp .env.example .env          # then edit .env
 # GITHUB_TOKEN: a *classic* PAT with the `public_repo` scope
 #   github.com → Settings → Developer settings → Personal access tokens (classic)
-node sniper.mjs               # Node 18+; zero dependencies
+node sniper.mjs               # Node 22 LTS; zero dependencies
 ```
 
 ## Test it safely (no infra, no posting)
