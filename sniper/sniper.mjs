@@ -79,6 +79,7 @@ const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
 const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
+const checkedTriggerUpdates = new Map(); // issue number -> issue.updated_at already verified
 let backoffUntil = 0;
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -122,7 +123,7 @@ async function syncArmedProposals() {
   const autoPostEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.proposal_auto_post !== false;
 
   const query = new URLSearchParams({
-    select: 'id,user_id,repo_owner,repo_name,issue_number,body,state',
+    select: 'id,user_id,repo_owner,repo_name,issue_number,body,state,updated_at',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${owner}`,
     repo_name: `ilike.${repo}`,
@@ -319,13 +320,31 @@ async function discoverTick() {
           source: cloudProposals.has(n) ? 'cloud' : 'local',
         });
       } else if (hasHW && updatedAgo < FIRE_FRESH_MS && Date.parse(issue.updated_at) > START) {
-        // Both labels already on but HW is fresh and landed after we started —
-        // we missed the pre-lock; fire a catch-up (still likely top-of-pack).
-        void fire(n, issue, 'discover-hw-fresh');
+        // `updated_at` also changes for unrelated activity. Confirm the actual
+        // Help Wanted labeled event is newer than both startup and arm time.
+        const proposal = cloudProposals.get(n);
+        const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
+        const after = Math.max(START, Number.isFinite(armedAt) ? armedAt : START);
+        if (await hasRecentTriggerEvent(n, after, issue.updated_at)) {
+          void fire(n, issue, 'direct-hw-event');
+        }
       }
     }
   }
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
+}
+
+async function hasRecentTriggerEvent(n, after, issueUpdatedAt) {
+  if (checkedTriggerUpdates.get(n) === issueUpdatedAt) return false;
+  checkedTriggerUpdates.set(n, issueUpdatedAt);
+  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=30`);
+  if (status !== 200 || !Array.isArray(data)) return false;
+  return data.some((event) => {
+    if (event?.event !== 'labeled') return false;
+    if (event?.label?.name?.toLowerCase() !== TRIGGER) return false;
+    const createdAt = Date.parse(event.created_at || '');
+    return Number.isFinite(createdAt) && createdAt >= after;
+  });
 }
 
 // ── per-issue tracker: slow until `External`, then tight until `Help Wanted` ──
