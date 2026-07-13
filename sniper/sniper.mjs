@@ -78,6 +78,7 @@ const etags = new Map(); // request key -> last ETag (for conditional GETs)
 const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off the fire path
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
 const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
+const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 let backoffUntil = 0;
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -131,17 +132,28 @@ async function syncArmedProposals() {
   if (!Array.isArray(rows)) throw new Error('Supabase proposals response was not an array');
 
   const armedNow = new Set();
+  const queriedProposalIds = new Set(rows.map((proposal) => proposal.id));
   for (const proposal of rows) {
     const n = Number(proposal.issue_number);
     const body = typeof proposal.body === 'string' ? proposal.body.trim() : '';
     if (!Number.isInteger(n) || n <= 0 || !body) continue;
 
     if (!validatedCloudProposalIds.has(proposal.id)) {
-      const { status, data } = await gh(`/repos/${REPO}/issues/${n}`);
+      const retry = cloudValidationBackoff.get(proposal.id);
+      if (retry && Date.now() < retry.retryAt) continue;
+
+      const { status, data, error } = await gh(`/repos/${REPO}/issues/${n}`);
       if (status !== 200 || !data || typeof data !== 'object') {
-        log(`GitHub state check failed for #${n} (${status}); not staging yet`);
+        const attempts = (retry?.attempts || 0) + 1;
+        const delayMs = Math.min(15 * 60_000, 30_000 * 2 ** (attempts - 1));
+        cloudValidationBackoff.set(proposal.id, { attempts, retryAt: Date.now() + delayMs });
+        log(
+          `GitHub state check failed for #${n} (${status}${error ? `: ${error}` : ''}); ` +
+            `not staging, retry in ${Math.round(delayMs / 1000)}s`,
+        );
         continue;
       }
+      cloudValidationBackoff.delete(proposal.id);
       if (data.state !== 'open') {
         await updateCloudProposal(proposal.id, {
           state: 'draft',
@@ -167,11 +179,17 @@ async function syncArmedProposals() {
   for (const [n] of cloudProposals) {
     if (armedNow.has(n)) continue;
     const previous = cloudProposals.get(n);
-    if (previous) validatedCloudProposalIds.delete(previous.id);
+    if (previous) {
+      validatedCloudProposalIds.delete(previous.id);
+      cloudValidationBackoff.delete(previous.id);
+    }
     cloudProposals.delete(n);
     const st = tracked.get(n);
     if (st?.source === 'cloud') tracked.delete(n);
     if (!WATCH.includes(n)) bodies.delete(n);
+  }
+  for (const id of cloudValidationBackoff.keys()) {
+    if (!queriedProposalIds.has(id)) cloudValidationBackoff.delete(id);
   }
 }
 
