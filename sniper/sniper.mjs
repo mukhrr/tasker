@@ -428,6 +428,7 @@ async function tick(n) {
 // ── fire: post the staged proposal ────────────────────────────────────────────
 async function fire(n, issue, via) {
   if (posted.has(n)) return;
+  const fireStartedAt = performance.now();
   posted.add(n);
   tracked.delete(n);
 
@@ -442,9 +443,12 @@ async function fire(n, issue, via) {
   }
 
   const cloudProposal = cloudProposals.get(n);
+  let claimMs = 0;
   if (cloudProposal) {
     try {
+      const claimStartedAt = performance.now();
       const claimed = await claimCloudProposal(cloudProposal);
+      claimMs = performance.now() - claimStartedAt;
       if (!claimed) {
         log(`#${n} skipped — proposal was already claimed or disarmed`);
         return;
@@ -456,15 +460,19 @@ async function fire(n, issue, via) {
     }
   }
 
-  const t0 = Date.now();
+  const postStartedAt = performance.now();
   const { status, data } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
     method: 'POST',
     body: { body },
   });
-  const dt = Date.now() - t0;
+  const postMs = performance.now() - postStartedAt;
+  const hotPathMs = performance.now() - fireStartedAt;
 
   if (status === 201 && data?.html_url) {
-    log(`✅ sniped #${n} via ${via} in ${dt}ms → ${data.html_url}`);
+    log(
+        `✅ sniped #${n} via ${via} → ${data.html_url} ` +
+        `[claim=${claimMs.toFixed(1)}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms]`,
+    );
     if (cloudProposal) {
       try {
         await updateCloudProposal(cloudProposal.id, {
@@ -477,7 +485,11 @@ async function fire(n, issue, via) {
         log(`⚠️  posted #${n}, but Supabase update failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    await notify(`✅ Sniped #${n} in ${dt}ms${title}\nGo edit your proposal:\n${data.html_url}`);
+    await notify(
+      `✅ Sniped #${n} in ${hotPathMs.toFixed(0)}ms ` +
+        `(claim ${claimMs.toFixed(0)} / post ${postMs.toFixed(0)})${title}\n` +
+        `Go edit your proposal:\n${data.html_url}`,
+    );
   } else {
     const detail = typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200);
     log(`❌ post #${n} failed: ${status} ${detail}`);
