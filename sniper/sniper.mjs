@@ -276,8 +276,28 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
     if (et) etags.set(k, et);
   }
 
-  if (res.status === 403 || res.status === 429) {
-    const retryAfter = parseInt(res.headers.get('retry-after') || '', 10);
+  let data = null;
+  const text = await res.text().catch(() => '');
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+
+  const message = typeof data === 'string' ? data : data?.message || '';
+  const retryAfterHeader = res.headers.get('retry-after');
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  const isRateLimited =
+    res.status === 429 ||
+    (res.status === 403 && (
+      retryAfterHeader !== null ||
+      remaining === '0' ||
+      /rate limit|abuse detection|temporarily blocked/i.test(message)
+    ));
+  if (isRateLimited) {
+    const retryAfter = parseInt(retryAfterHeader || '', 10);
     const reset = parseInt(res.headers.get('x-ratelimit-reset') || '', 10);
     let waitMs = 60000;
     if (!Number.isNaN(retryAfter)) waitMs = retryAfter * 1000;
@@ -288,22 +308,12 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
     log(`⏸️  rate-limited (${res.status}) — backing off ${Math.round(waitMs / 1000)}s`);
     return {
       status: res.status,
-      data: null,
+      data,
       rateLimited: true,
       retryAt: backoffUntil,
     };
   }
   if (res.status === 304) return { status: 304, data: null };
-
-  let data = null;
-  const text = await res.text().catch(() => '');
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-  }
   return { status: res.status, data };
 }
 
