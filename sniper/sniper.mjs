@@ -81,6 +81,7 @@ const validatedCloudProposalIds = new Set(); // GitHub-open check, once per arme
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
+const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
 let backoffUntil = 0;
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -189,6 +190,9 @@ async function syncArmedProposals() {
 
   for (const [n] of cloudProposals) {
     if (armedNow.has(n)) continue;
+    // Claiming changes the row from armed → posting. Keep its cached body and
+    // metadata until fire() finishes; otherwise a fast sync can cancel retry.
+    if (inFlightCloud.has(n)) continue;
     const previous = cloudProposals.get(n);
     if (previous) {
       validatedCloudProposalIds.delete(previous.id);
@@ -478,15 +482,18 @@ async function fire(n, issue, via) {
   const cloudProposal = cloudProposals.get(n);
   let claimMs = 0;
   if (cloudProposal) {
+    inFlightCloud.add(n);
     try {
       const claimStartedAt = performance.now();
       const claimed = await claimCloudProposal(cloudProposal);
       claimMs = performance.now() - claimStartedAt;
       if (!claimed) {
+        inFlightCloud.delete(n);
         log(`#${n} skipped — proposal was already claimed or disarmed`);
         return;
       }
     } catch (e) {
+      inFlightCloud.delete(n);
       posted.delete(n);
       log(`❌ claim #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
       return;
@@ -516,6 +523,8 @@ async function fire(n, issue, via) {
         });
       } catch (e) {
         log(`⚠️  posted #${n}, but Supabase update failed: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        inFlightCloud.delete(n);
       }
     }
     await notify(
@@ -537,6 +546,8 @@ async function fire(n, issue, via) {
         });
       } catch (e) {
         log(`Supabase retry update failed: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        inFlightCloud.delete(n);
       }
       posted.delete(n);
       log(`↻ #${n} returned to armed; retrying post in ${Math.round(retryDelayMs / 1000)}s`);
@@ -558,6 +569,8 @@ async function fire(n, issue, via) {
         });
       } catch (e) {
         log(`Supabase failure update failed: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        inFlightCloud.delete(n);
       }
     } else {
       posted.delete(n); // local-file mode can retry transient failures

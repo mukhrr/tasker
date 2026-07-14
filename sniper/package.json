@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node sniper.mjs",
-    "dry": "DRY_RUN=true node sniper.mjs"
+    "dry": "DRY_RUN=true node sniper.mjs",
+    "stress": "node stress-test.mjs"
   },
   "engines": {
     "node": "22.x"
