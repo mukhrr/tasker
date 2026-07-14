@@ -79,7 +79,8 @@ const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
 const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
-const checkedTriggerUpdates = new Map(); // issue number -> issue.updated_at already verified
+const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
+const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 let backoffUntil = 0;
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -238,7 +239,9 @@ async function updateCloudProposal(id, values) {
 
 // ── GitHub fetch (conditional + rate-limit aware) ─────────────────────────────
 async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
-  if (Date.now() < backoffUntil) return { status: 429, data: null };
+  if (Date.now() < backoffUntil) {
+    return { status: 429, data: null, rateLimited: true, retryAt: backoffUntil };
+  }
   const url = p.startsWith('http') ? p : API + p;
   const headers = {
     Authorization: `Bearer ${TOKEN}`,
@@ -279,7 +282,12 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
     }
     backoffUntil = Date.now() + waitMs;
     log(`⏸️  rate-limited (${res.status}) — backing off ${Math.round(waitMs / 1000)}s`);
-    return { status: res.status, data: null };
+    return {
+      status: res.status,
+      data: null,
+      rateLimited: true,
+      retryAt: backoffUntil,
+    };
   }
   if (res.status === 304) return { status: 304, data: null };
 
@@ -309,23 +317,40 @@ async function discoverTick() {
       if (!DISCOVER && !cloudProposals.has(n)) continue;
       if (posted.has(n) || tracked.has(n)) continue;
       const names = labelNames(issue.labels);
+      const hasLock = names.includes(LOCK);
       const hasHW = names.includes(TRIGGER);
       const updatedAgo = Date.now() - Date.parse(issue.updated_at);
-      if (!hasHW && updatedAgo < FRESH_LOCK_MS) {
-        // Fresh `External`, no HW yet — exactly the pre-HW window. Lock tight.
-        track(n, {
-          mode: 'tight',
-          issue,
-          isWatch: cloudProposals.has(n),
-          source: cloudProposals.has(n) ? 'cloud' : 'local',
-        });
-      } else if (hasHW && updatedAgo < FIRE_FRESH_MS && Date.parse(issue.updated_at) > START) {
+      if (hasLock && !hasHW && updatedAgo < FRESH_LOCK_MS) {
+        const proposal = cloudProposals.get(n);
+        const armedAt = proposal ? Date.parse(proposal.updated_at || '') : 0;
+        const after = Math.max(
+          Number.isFinite(armedAt) ? armedAt : 0,
+          Date.now() - FRESH_LOCK_MS,
+        );
+        const lockEventAt = await getRecentLabelEvent(
+          n,
+          LOCK,
+          after,
+          issue.updated_at,
+        );
+        if (lockEventAt && lockEventAt > (consumedLockEvents.get(n) || 0)) {
+          // Consume this exact External event once. Comments and other issue
+          // updates cannot restart another expensive tight window.
+          consumedLockEvents.set(n, lockEventAt);
+          track(n, {
+            mode: 'tight',
+            issue,
+            isWatch: cloudProposals.has(n),
+            source: cloudProposals.has(n) ? 'cloud' : 'local',
+          });
+        }
+      } else if (hasHW && updatedAgo < FIRE_FRESH_MS) {
         // `updated_at` also changes for unrelated activity. Confirm the actual
         // Help Wanted labeled event is newer than both startup and arm time.
         const proposal = cloudProposals.get(n);
         const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
-        const after = Math.max(START, Number.isFinite(armedAt) ? armedAt : START);
-        if (await hasRecentTriggerEvent(n, after, issue.updated_at)) {
+        const after = Number.isFinite(armedAt) ? armedAt : START;
+        if (await getRecentLabelEvent(n, TRIGGER, after, issue.updated_at)) {
           void fire(n, issue, 'direct-hw-event');
         }
       }
@@ -334,17 +359,25 @@ async function discoverTick() {
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
 }
 
-async function hasRecentTriggerEvent(n, after, issueUpdatedAt) {
-  if (checkedTriggerUpdates.get(n) === issueUpdatedAt) return false;
-  checkedTriggerUpdates.set(n, issueUpdatedAt);
+async function getRecentLabelEvent(n, label, after, issueUpdatedAt) {
+  const checkKey = `${n}:${label}`;
+  if (checkedLabelUpdates.get(checkKey) === issueUpdatedAt) return null;
+  checkedLabelUpdates.set(checkKey, issueUpdatedAt);
   const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=30`);
-  if (status !== 200 || !Array.isArray(data)) return false;
-  return data.some((event) => {
-    if (event?.event !== 'labeled') return false;
-    if (event?.label?.name?.toLowerCase() !== TRIGGER) return false;
+  if (status !== 200 || !Array.isArray(data)) {
+    checkedLabelUpdates.delete(checkKey); // transient failure: allow a later retry
+    return null;
+  }
+  let latest = null;
+  for (const event of data) {
+    if (event?.event !== 'labeled') continue;
+    if (event?.label?.name?.toLowerCase() !== label) continue;
     const createdAt = Date.parse(event.created_at || '');
-    return Number.isFinite(createdAt) && createdAt >= after;
-  });
+    if (Number.isFinite(createdAt) && createdAt >= after && (latest === null || createdAt > latest)) {
+      latest = createdAt;
+    }
+  }
+  return latest;
 }
 
 // ── per-issue tracker: slow until `External`, then tight until `Help Wanted` ──
@@ -461,7 +494,7 @@ async function fire(n, issue, via) {
   }
 
   const postStartedAt = performance.now();
-  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
+  const { status, data, rateLimited, retryAt } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
     method: 'POST',
     body: { body },
   });
@@ -491,8 +524,32 @@ async function fire(n, issue, via) {
         `Go edit your proposal:\n${data.html_url}`,
     );
   } else {
-    const detail = typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200);
+    const detail = typeof data === 'string'
+      ? data.slice(0, 200)
+      : JSON.stringify(data ?? null).slice(0, 200);
     log(`❌ post #${n} failed: ${status} ${detail}`);
+    if (cloudProposal && rateLimited) {
+      const retryDelayMs = Math.max(1000, (retryAt || Date.now() + 60_000) - Date.now() + 1000);
+      try {
+        await updateCloudProposal(cloudProposal.id, {
+          state: 'armed',
+          last_error: `GitHub rate-limited posting (${status}); retry scheduled.`,
+        });
+      } catch (e) {
+        log(`Supabase retry update failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      posted.delete(n);
+      log(`↻ #${n} returned to armed; retrying post in ${Math.round(retryDelayMs / 1000)}s`);
+      setTimeout(() => {
+        // A manual post, disarm, or kill-switch removes it from this map and
+        // cancels the retry, preventing duplicate comments.
+        if (cloudProposals.has(n) && !posted.has(n)) {
+          void fire(n, issue, 'rate-limit-retry');
+        }
+      }, retryDelayMs);
+      await notify(`⏸️ #${n} rate-limited; automatic retry scheduled`);
+      return;
+    }
     if (cloudProposal) {
       try {
         await updateCloudProposal(cloudProposal.id, {
