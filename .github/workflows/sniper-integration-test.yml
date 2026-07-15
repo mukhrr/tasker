@@ -2,6 +2,11 @@ name: Proposal worker integration test
 
 on:
   workflow_dispatch:
+    inputs:
+      safety_delay_ms:
+        description: Minimum delay between Help Wanted detection and comment POST
+        required: true
+        default: '100'
 
 permissions:
   contents: read
@@ -24,6 +29,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           MARKER: sniper-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          SAFETY_DELAY_MS: ${{ inputs.safety_delay_ms }}
         shell: bash
         run: |
           set -euo pipefail
@@ -45,7 +51,7 @@ jobs:
           gh api "repos/$REPO/labels" --method POST -f name='Help Wanted' -f color=0e8a16 >/dev/null 2>&1 || true
 
           WATCH="$issue" DRY_RUN=false DISCOVERY_INTERVAL_MS=50 TIGHT_INTERVAL_MS=20 \
-            POST_SAFETY_DELAY_MS=100 PROPOSAL_BODY="## Proposal\n\n$MARKER" \
+            POST_SAFETY_DELAY_MS="$SAFETY_DELAY_MS" PROPOSAL_BODY="## Proposal\n\n$MARKER" \
             node sniper/sniper.mjs >worker.log 2>&1 &
           worker_pid=$!
 
@@ -68,4 +74,8 @@ jobs:
 
           cat worker.log
           test "$found" -eq 1
-          echo "PASS: no comment before Help Wanted; comment observed $((comment_seen_ms-label_sent_ms))ms after label request"
+          label_created_at=$(gh api "repos/$REPO/issues/$issue/events?per_page=100" \
+            --jq '[.[] | select(.event == "labeled" and (.label.name | ascii_downcase) == "help wanted")][-1].created_at')
+          comment_created_at=$(gh api "repos/$REPO/issues/$issue/comments" --jq '.[0].created_at')
+          echo "RESULT: issue=$issue safety=${SAFETY_DELAY_MS}ms label=$label_created_at comment=$comment_created_at observed=$((comment_seen_ms-label_sent_ms))ms"
+          echo "PASS: no comment existed before Help Wanted"
