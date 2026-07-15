@@ -48,6 +48,7 @@ const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 80); // poll once External is
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
+const POST_SAFETY_DELAY_MS = int('POST_SAFETY_DELAY_MS', 100); // visible ordering buffer after HW
 
 const DRY_RUN = bool('DRY_RUN', true);
 const DISCOVER = bool('DISCOVER', false);
@@ -510,6 +511,13 @@ async function fire(n, issue, via) {
     }
   }
 
+  // Body resolution and the atomic Supabase claim count toward the safety
+  // buffer, preserving as much of the latency budget as possible.
+  const safetyRemainingMs = POST_SAFETY_DELAY_MS - (performance.now() - fireStartedAt);
+  if (safetyRemainingMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, safetyRemainingMs));
+  }
+
   const postStartedAt = performance.now();
   const { status, data, rateLimited, retryAt } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
     method: 'POST',
@@ -670,7 +678,7 @@ function main() {
       `${DISCOVER ? 'discover=on ' : ''}` +
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
-      `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms`
+      `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms safety=${POST_SAFETY_DELAY_MS}ms`
   );
   if (DISCOVER && !DRY_RUN) {
     log(

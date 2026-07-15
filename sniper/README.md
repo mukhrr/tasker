@@ -23,6 +23,10 @@ opening we exploit:
    responses minimize payload size).
 3. **Fire** the staged proposal the moment `Help Wanted` appears.
 
+Live posts include a configurable `POST_SAFETY_DELAY_MS=100` buffer after
+detection. Proposal loading and the Supabase claim happen inside that buffer,
+so only the unused portion is slept before the GitHub comment request.
+
 The proposal body is loaded and cached when the issue is first tracked, so the
 trigger path does no disk I/O. Poll requests never overlap; if a GitHub response
 takes longer than the configured interval, the next request starts immediately.
@@ -63,6 +67,11 @@ DRY_RUN=true DISCOVER=true node sniper.mjs
 You'll see `🔒 locked` when an issue gets `External`, then `🧪 DRY_RUN: would
 POST … via tight-poll` the moment `Help Wanted` lands. That proves the detection
 latency before you ever post for real.
+
+Run the deterministic local stress test with `npm run stress`. A manual GitHub
+Actions workflow named **Proposal worker integration test** is also available;
+it creates and closes a temporary issue only in this repository and verifies
+that no proposal comment exists before Help Wanted is applied.
 
 ## Modes
 

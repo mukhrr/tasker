@@ -1,0 +1,73 @@
+name: Proposal worker integration test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live-ordering-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify Help Wanted precedes worker comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MARKER: sniper-integration-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          issue_url=$(gh api "repos/$REPO/issues" \
+            --method POST \
+            -f title="Proposal worker integration test $MARKER" \
+            -f body="Temporary automated test issue. It will be closed by the workflow." \
+            --jq .html_url)
+          issue=${issue_url##*/}
+
+          cleanup() {
+            if [[ -n "${worker_pid:-}" ]]; then kill "$worker_pid" 2>/dev/null || true; fi
+            gh api "repos/$REPO/issues/$issue" --method PATCH -f state=closed >/dev/null || true
+          }
+          trap cleanup EXIT
+
+          gh api "repos/$REPO/labels" --method POST -f name=External -f color=1d76db >/dev/null 2>&1 || true
+          gh api "repos/$REPO/labels" --method POST -f name='Help Wanted' -f color=0e8a16 >/dev/null 2>&1 || true
+
+          WATCH="$issue" DRY_RUN=false DISCOVERY_INTERVAL_MS=50 TIGHT_INTERVAL_MS=20 \
+            POST_SAFETY_DELAY_MS=100 PROPOSAL_BODY="## Proposal\n\n$MARKER" \
+            node sniper/sniper.mjs >worker.log 2>&1 &
+          worker_pid=$!
+
+          gh api "repos/$REPO/issues/$issue/labels" --method POST -f 'labels[]=External' >/dev/null
+          sleep 0.25
+
+          before=$(gh api "repos/$REPO/issues/$issue/comments" \
+            --jq "[.[] | select(.body | contains(\"$MARKER\"))] | length")
+          test "$before" -eq 0
+
+          label_sent_ms=$(date +%s%3N)
+          gh api "repos/$REPO/issues/$issue/labels" --method POST -f 'labels[]=Help Wanted' >/dev/null
+
+          found=0
+          for _ in $(seq 1 100); do
+            found=$(gh api "repos/$REPO/issues/$issue/comments" \
+              --jq "[.[] | select(.body | contains(\"$MARKER\"))] | length")
+            [[ "$found" -eq 1 ]] && break
+            sleep 0.1
+          done
+          comment_seen_ms=$(date +%s%3N)
+
+          cat worker.log
+          test "$found" -eq 1
+          echo "PASS: no comment before Help Wanted; comment observed $((comment_seen_ms-label_sent_ms))ms after label request"
