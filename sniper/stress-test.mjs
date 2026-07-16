@@ -103,6 +103,8 @@ const worker = spawn(process.execPath, ['sniper.mjs'], {
     TIGHT_WINDOW_MS: '500',
     FRESH_LOCK_MS: '1000',
     FIRE_FRESH_MS: '1000',
+    REQUEST_BUDGET_PER_MIN: '100000', // aggressive test intervals must not self-throttle
+    POST_MORTEM_DELAY_MS: '0',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -139,8 +141,13 @@ try {
   labels = [{ name: 'External' }, { name: 'Help Wanted' }];
   updatedAt = new Date(helpWantedAt).toISOString();
   events.push({ event: 'labeled', label: { name: 'Help Wanted' }, created_at: updatedAt });
-  await deadline(() => commentPosts === 1, 1000, 'worker did not attempt the first post');
-  assert.ok(firstPostAt - helpWantedAt < 150, `detection took ${firstPostAt - helpWantedAt}ms`);
+  await deadline(() => commentPosts === 1, 2500, 'worker did not attempt the first post');
+  // The worker must wait out the Help Wanted second: a comment created in the
+  // same second can render above the label. The mock server's Date headers use
+  // this machine's clock, so local ms compare directly.
+  const hwBoundary = (Math.floor(helpWantedAt / 1000) + 1) * 1000;
+  assert.ok(firstPostAt >= hwBoundary, `posted ${hwBoundary - firstPostAt}ms before the post-HW second boundary`);
+  assert.ok(firstPostAt - helpWantedAt < 1600, `boundary wait took ${firstPostAt - helpWantedAt}ms`);
   await deadline(() => commentPosts === 2 && proposal.state === 'posted', 4000, '403 was not retried');
 
   assert.equal(commentPosts, 2, 'worker posted more than the initial attempt and one retry');
@@ -150,7 +157,7 @@ try {
 
   console.log(
     `PASS: 250 unrelated updates, ${labelPolls} tight polls, ` +
-      `${firstPostAt - helpWantedAt}ms detection, 403 recovered with one retry`,
+      `${firstPostAt - helpWantedAt}ms HW→post (boundary-aligned), 403 recovered with one retry`,
   );
 } catch (error) {
   console.error(output.join(''));

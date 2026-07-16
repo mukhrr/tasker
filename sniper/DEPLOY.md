@@ -165,5 +165,8 @@ pm2 stop sniper            # pause it
   days, the VM could be reclaimed. Just recreate from these steps if so.
 - **Stay on Always Free:** don’t “upgrade to Paid” or add resources beyond the
   free shapes, and you won’t be billed.
-- **Rate limits:** if logs ever show `⏸️ rate-limited`, bump `TIGHT_INTERVAL_MS`
-  to 120 and `DISCOVERY_INTERVAL_MS` to 1000 in `.env`, then `pm2 restart sniper`.
+- **Rate limits:** the worker self-throttles at `REQUEST_BUDGET_PER_MIN=500`
+  (304s included) before GitHub's ~900 points/min secondary limit; `🐢 request
+  budget` lines mean the guard is working. If logs ever show `⏸️ rate-limited`
+  anyway, lower `REQUEST_BUDGET_PER_MIN` and bump `TIGHT_INTERVAL_MS` to 80 and
+  `DISCOVERY_INTERVAL_MS` to 1000 in `.env`, then `pm2 restart sniper`.

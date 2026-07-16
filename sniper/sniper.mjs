@@ -2,18 +2,25 @@
 /**
  * Tasker proposal sniper — always-on, server-side.
  *
- * Races the Expensify `Help Wanted` label and posts a pre-staged proposal
- * within ~100-300ms of the label landing — far ahead of a browser tab, which
- * is throttled by Chrome MV3 service-worker cold-starts and only watches one
- * open issue at a time.
+ * Races the Expensify `Help Wanted` label and posts a pre-staged proposal in
+ * the first instant of the second AFTER the label lands — far ahead of a
+ * browser tab, which is throttled by Chrome MV3 service-worker cold-starts and
+ * only watches one open issue at a time.
  *
  * Strategy (confirmed against real issue timing on Expensify/App):
  *   - Proposals must be posted AFTER the `Help Wanted` label (posting in the
  *     External→Help Wanted gap is not accepted).
  *   - Melvin applies `External` ~2-3s BEFORE `Help Wanted`, so we LOCK onto an
- *     issue the instant it gets `External`, tight-poll its labels at ~80ms, and
+ *     issue the instant it gets `External`, tight-poll its labels at ~50ms, and
  *     FIRE the moment `Help Wanted` appears. Label polls are ETag-conditional,
- *     so the in-window burst is almost entirely free 304s.
+ *     so the in-window burst is cheap 304s (they still count toward limits).
+ *   - GitHub truncates created_at to whole seconds, and a comment created in
+ *     the SAME second as `Help Wanted` can render ABOVE the label. After
+ *     detection we wait just past the next server-second boundary — and no
+ *     longer — using response Date headers as the clock reference.
+ *   - Every GitHub request (304s included) counts toward a per-minute budget;
+ *     polling degrades gracefully at the cap instead of tripping the secondary
+ *     rate limit mid-race.
  *
  * Two ways to feed it issues:
  *   WATCH=92367,92400   → race these specific issues you've staged a body for
@@ -44,11 +51,15 @@ const TRIGGER = TRIGGER_NAME.toLowerCase();
 // One shared recent-open-issues request stays below GitHub's 5,000/hour primary
 // limit. It catches both External → Help Wanted and direct Help Wanted changes.
 const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 900);
-const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 80); // poll once External is seen
+const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 50); // poll once External is seen
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
-const POST_SAFETY_DELAY_MS = int('POST_SAFETY_DELAY_MS', 100); // visible ordering buffer after HW
+const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 150); // past the second boundary after HW
+const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
+const REQUEST_BUDGET_PER_MIN = int('REQUEST_BUDGET_PER_MIN', 500); // all GitHub requests, 304s included
+const THROTTLED_INTERVAL_MS = int('THROTTLED_INTERVAL_MS', 250); // poll cadence while over budget
+const POST_MORTEM_DELAY_MS = int('POST_MORTEM_DELAY_MS', 10000); // 0 disables the race report
 
 const DRY_RUN = bool('DRY_RUN', true);
 const DISCOVER = bool('DISCOVER', false);
@@ -84,6 +95,51 @@ const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at alre
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
 let backoffUntil = 0;
+const requestTimes = []; // GitHub request timestamps within the last 60s (budget window)
+let clockLB = null; // { localMs, serverMs } — lower bound on GitHub's clock
+let budgetThrottleLoggedAt = 0;
+
+// ── request budget + GitHub clock tracking ───────────────────────────────────
+// Secondary rate limits count 304s too (learned the hard way on #95956), so
+// EVERY request is budgeted. Pollers check the budget and degrade instead of
+// hammering into a 403.
+function pruneRequestTimes(now) {
+  while (requestTimes.length && requestTimes[0] <= now - 60_000) requestTimes.shift();
+}
+
+// Background discovery yields at 80% of the budget so an in-progress race
+// (tight polling) always has reserve headroom; the fire POST is never gated.
+function budgetExhausted(fraction = 1) {
+  const now = Date.now();
+  pruneRequestTimes(now);
+  return requestTimes.length >= REQUEST_BUDGET_PER_MIN * fraction;
+}
+
+function logBudgetThrottle(what) {
+  const now = Date.now();
+  if (now - budgetThrottleLoggedAt < 10_000) return;
+  budgetThrottleLoggedAt = now;
+  log(`🐢 request budget ${REQUEST_BUDGET_PER_MIN}/min reached — ${what} throttled to ${THROTTLED_INTERVAL_MS}ms`);
+}
+
+// GitHub's Date header is truncated to whole seconds, so each response yields a
+// LOWER bound on the server clock. Keep the tightest one: samples taken right
+// after a second rollover (tight polling sees one every second) dominate, which
+// pins the boundary phase to within one poll interval.
+function noteServerDate(dateHeader) {
+  const parsed = Date.parse(dateHeader || '');
+  if (!Number.isFinite(parsed)) return NaN;
+  const localMs = Date.now();
+  const serverMs = Math.floor(parsed / 1000) * 1000;
+  if (!clockLB || serverMs >= clockLB.serverMs + (localMs - clockLB.localMs)) {
+    clockLB = { localMs, serverMs };
+  }
+  return parsed;
+}
+
+function serverNowLowerBound() {
+  return clockLB ? clockLB.serverMs + (Date.now() - clockLB.localMs) : null;
+}
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
 async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) {
@@ -258,6 +314,10 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
   if (useEtag && etags.has(k)) headers['If-None-Match'] = etags.get(k);
   if (body) headers['Content-Type'] = 'application/json';
 
+  const startedAt = Date.now();
+  requestTimes.push(startedAt);
+  pruneRequestTimes(startedAt);
+
   let res;
   try {
     res = await fetch(url, {
@@ -276,6 +336,8 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
     const et = res.headers.get('etag');
     if (et) etags.set(k, et);
   }
+  const dateMs = noteServerDate(res.headers.get('date'));
+  const link = res.headers.get('link');
 
   let data = null;
   const text = await res.text().catch(() => '');
@@ -312,14 +374,20 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
       data,
       rateLimited: true,
       retryAt: backoffUntil,
+      dateMs,
     };
   }
-  if (res.status === 304) return { status: 304, data: null };
-  return { status: res.status, data };
+  if (res.status === 304) return { status: 304, data: null, dateMs };
+  return { status: res.status, data, dateMs, link };
 }
 
 // ── discovery: inspect the repository's most recently updated open issues ────
 async function discoverTick() {
+  if (budgetExhausted(0.8)) {
+    logBudgetThrottle('discovery');
+    setTimeout(discoverTick, Math.max(DISCOVERY_INTERVAL_MS, THROTTLED_INTERVAL_MS));
+    return;
+  }
   const q =
     `/repos/${REPO}/issues?state=open&sort=updated&direction=desc&per_page=50`;
   const { status, data } = await gh(q, { useEtag: true, key: 'discover' });
@@ -365,8 +433,9 @@ async function discoverTick() {
         const proposal = cloudProposals.get(n);
         const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
         const after = Number.isFinite(armedAt) ? armedAt : START;
-        if (await getRecentLabelEvent(n, TRIGGER, after, issue.updated_at)) {
-          void fire(n, issue, 'direct-hw-event');
+        const hwEventMs = await getRecentLabelEvent(n, TRIGGER, after, issue.updated_at);
+        if (hwEventMs) {
+          void fire(n, issue, 'direct-hw-event', { hwEventMs });
         }
       }
     }
@@ -434,7 +503,16 @@ async function tick(n) {
   // poll run at (GitHub RTT + 80 ms). We still never overlap requests.
   const tickStartedAt = Date.now();
 
-  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/labels`, {
+  if (budgetExhausted()) {
+    // Skip this poll rather than spend into a secondary-rate-limit 403; the
+    // fire POST itself is never budget-gated.
+    logBudgetThrottle(`#${n} label poll`);
+    if (!survivesTightExpiry(n, st)) return;
+    setTimeout(() => void tick(n), THROTTLED_INTERVAL_MS);
+    return;
+  }
+
+  const { status, data, dateMs } = await gh(`/repos/${REPO}/issues/${n}/labels`, {
     useEtag: true,
     key: `labels-${n}`,
   });
@@ -445,36 +523,62 @@ async function tick(n) {
   if (status === 200 && Array.isArray(data)) {
     const names = labelNames(data);
     if (names.includes(TRIGGER)) {
-      void fire(n, st.issue, st.mode === 'tight' ? 'tight-poll' : 'slow-poll');
+      void fire(n, st.issue, st.mode === 'tight' ? 'tight-poll' : 'slow-poll', {
+        detectDateMs: dateMs,
+        detectLocalMs: Date.now(),
+      });
       return;
     }
     if (names.includes(LOCK) && st.mode !== 'tight') upgradeToTight(n, st);
   }
 
-  if (st.mode === 'tight' && Date.now() > st.tightUntil) {
-    if (st.source === 'cloud') {
-      // Return cloud proposals to the shared repo detector instead of giving
-      // every armed row its own permanent polling loop.
-      tracked.delete(n);
-      log(`#${n} tight window elapsed → back to shared detector`);
-      return;
-    } else if (st.isWatch) {
-      st.mode = 'slow'; // watched issue — drop back to slow and keep waiting
-      log(`#${n} tight window elapsed → back to slow watch`);
-    } else {
-      tracked.delete(n); // discovered candidate that never reached HW — drop it
-      log(`⌛ #${n} dropped (no "${TRIGGER_NAME}" within tight window)`);
-      return;
-    }
-  }
+  if (!survivesTightExpiry(n, st)) return;
 
   const interval = st.mode === 'tight' ? TIGHT_INTERVAL_MS : DISCOVERY_INTERVAL_MS;
   const elapsed = Date.now() - tickStartedAt;
   setTimeout(() => void tick(n), Math.max(0, interval - elapsed));
 }
 
+function survivesTightExpiry(n, st) {
+  if (st.mode !== 'tight' || Date.now() <= st.tightUntil) return true;
+  if (st.source === 'cloud') {
+    // Return cloud proposals to the shared repo detector instead of giving
+    // every armed row its own permanent polling loop.
+    tracked.delete(n);
+    log(`#${n} tight window elapsed → back to shared detector`);
+    return false;
+  }
+  if (st.isWatch) {
+    st.mode = 'slow'; // watched issue — drop back to slow and keep waiting
+    log(`#${n} tight window elapsed → back to slow watch`);
+    return true;
+  }
+  tracked.delete(n); // discovered candidate that never reached HW — drop it
+  log(`⌛ #${n} dropped (no "${TRIGGER_NAME}" within tight window)`);
+  return false;
+}
+
 // ── fire: post the staged proposal ────────────────────────────────────────────
-async function fire(n, issue, via) {
+// The comment must be CREATED in a later GitHub second than the Help Wanted
+// event: created_at is truncated to whole seconds, and a same-second comment
+// can render above the label (looks posted-before-HW to a reviewer). Wait
+// exactly until the boundary after the HW second plus a small margin — firing
+// immediately when that boundary has already passed.
+function computePostDelay(ctx) {
+  if (!ctx) return 0;
+  const hwMs = Number.isFinite(ctx.hwEventMs) ? ctx.hwEventMs : ctx.detectDateMs;
+  if (Number.isFinite(hwMs)) {
+    const target = (Math.floor(hwMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS;
+    const serverNow = serverNowLowerBound();
+    if (serverNow !== null) return clamp(target - serverNow, 0, MAX_POST_DELAY_MS);
+  }
+  // No usable server clock sample — conservatively sleep one full second past
+  // the local detection time.
+  const base = Number.isFinite(ctx.detectLocalMs) ? ctx.detectLocalMs : Date.now();
+  return clamp(base + 1000 + POST_BOUNDARY_MARGIN_MS - Date.now(), 0, MAX_POST_DELAY_MS);
+}
+
+async function fire(n, issue, via, ctx) {
   if (posted.has(n)) return;
   const fireStartedAt = performance.now();
   posted.add(n);
@@ -484,38 +588,47 @@ async function fire(n, issue, via) {
   const title = issue?.title ? ` — ${issue.title}` : '';
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
 
+  const delayMs = computePostDelay(ctx);
+
   if (DRY_RUN) {
-    log(`🧪 DRY_RUN: would POST proposal to #${n} (via ${via}, ${body.length} chars)${title}`);
+    log(
+      `🧪 DRY_RUN: would wait ${delayMs}ms for the second boundary, then POST proposal to #${n} ` +
+        `(via ${via}, ${body.length} chars)${title}`,
+    );
     await notify(`🧪 [dry-run] would snipe #${n}${title}\n${issueUrl}`);
     return;
   }
+
+  // The boundary wait and the atomic Supabase claim run concurrently — a slow
+  // claim no longer pushes the POST past the target boundary.
+  const waitPromise =
+    delayMs > 0 ? new Promise((resolve) => setTimeout(resolve, delayMs)) : Promise.resolve();
 
   const cloudProposal = cloudProposals.get(n);
   let claimMs = 0;
   if (cloudProposal) {
     inFlightCloud.add(n);
+    let claimed;
     try {
       const claimStartedAt = performance.now();
-      const claimed = await claimCloudProposal(cloudProposal);
-      claimMs = performance.now() - claimStartedAt;
-      if (!claimed) {
-        inFlightCloud.delete(n);
-        log(`#${n} skipped — proposal was already claimed or disarmed`);
-        return;
-      }
+      const claimPromise = claimCloudProposal(cloudProposal).then((row) => {
+        claimMs = performance.now() - claimStartedAt;
+        return row;
+      });
+      [claimed] = await Promise.all([claimPromise, waitPromise]);
     } catch (e) {
       inFlightCloud.delete(n);
       posted.delete(n);
       log(`❌ claim #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-  }
-
-  // Body resolution and the atomic Supabase claim count toward the safety
-  // buffer, preserving as much of the latency budget as possible.
-  const safetyRemainingMs = POST_SAFETY_DELAY_MS - (performance.now() - fireStartedAt);
-  if (safetyRemainingMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, safetyRemainingMs));
+    if (!claimed) {
+      inFlightCloud.delete(n);
+      log(`#${n} skipped — proposal was already claimed or disarmed`);
+      return;
+    }
+  } else {
+    await waitPromise;
   }
 
   const postStartedAt = performance.now();
@@ -529,8 +642,11 @@ async function fire(n, issue, via) {
   if (status === 201 && data?.html_url) {
     log(
         `✅ sniped #${n} via ${via} → ${data.html_url} ` +
-        `[claim=${claimMs.toFixed(1)}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms]`,
+        `[claim=${claimMs.toFixed(1)}ms wait=${delayMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms]`,
     );
+    if (POST_MORTEM_DELAY_MS > 0) {
+      setTimeout(() => void racePostMortem(n, data.id), POST_MORTEM_DELAY_MS);
+    }
     if (cloudProposal) {
       try {
         await updateCloudProposal(cloudProposal.id, {
@@ -597,6 +713,77 @@ async function fire(n, issue, via) {
   }
 }
 
+// ── post-snipe race report ────────────────────────────────────────────────────
+// Runs well off the hot path. Answers the two questions fixed buffers can't:
+// did the comment land in a later second than Help Wanted (guaranteed to render
+// below the label), and how many rivals posted between the label and us?
+function parseLinkHeader(link) {
+  const rels = {};
+  for (const part of (link || '').split(',')) {
+    const m = part.match(/<([^>]+)>\s*;\s*rel="([^"]+)"/);
+    if (m) rels[m[2]] = m[1];
+  }
+  return rels;
+}
+
+async function racePostMortem(n, commentId) {
+  try {
+    const first = await gh(`/repos/${REPO}/issues/${n}/timeline?per_page=100`);
+    if (first.status !== 200 || !Array.isArray(first.data)) {
+      log(`🔬 #${n} race report unavailable (timeline HTTP ${first.status})`);
+      return;
+    }
+    // The race happens at the END of the timeline; follow the Link header to
+    // the last page, pulling one page back when it is nearly empty.
+    let items = first.data;
+    const lastUrl = parseLinkHeader(first.link).last;
+    if (lastUrl) {
+      const last = await gh(lastUrl);
+      if (last.status === 200 && Array.isArray(last.data)) {
+        items = last.data;
+        const prevUrl = parseLinkHeader(last.link).prev;
+        if (items.length < 40 && prevUrl) {
+          const prev = await gh(prevUrl);
+          if (prev.status === 200 && Array.isArray(prev.data)) items = [...prev.data, ...items];
+        }
+      }
+    }
+
+    const hw = items
+      .filter((e) => e?.event === 'labeled' && e.label?.name?.toLowerCase() === TRIGGER)
+      .at(-1);
+    const comments = items.filter((e) => e?.event === 'commented');
+    const ours = comments.find((c) => c.id === commentId);
+    if (!hw || !ours) {
+      log(
+        `🔬 #${n} race report: ${hw ? 'own comment' : `"${TRIGGER_NAME}" event`} not within the fetched timeline window`,
+      );
+      return;
+    }
+
+    const hwMs = Date.parse(hw.created_at);
+    const ourMs = Date.parse(ours.created_at);
+    const postHw = comments.filter((c) => c.id !== commentId && Date.parse(c.created_at) >= hwMs);
+    const ahead = postHw.filter((c) => {
+      const ms = Date.parse(c.created_at);
+      return ms < ourMs || (ms === ourMs && c.id < ours.id);
+    });
+    const sameSecond = Math.floor(ourMs / 1000) === Math.floor(hwMs / 1000);
+    const aheadList = ahead
+      .map((c) => `${c.user?.login || '?'} +${Math.round((Date.parse(c.created_at) - hwMs) / 1000)}s`)
+      .join(', ');
+    const report =
+      `🔬 #${n} race: "${TRIGGER_NAME}" @ ${hw.created_at} → own comment +${Math.round((ourMs - hwMs) / 1000)}s, ` +
+      `position ${ahead.length + 1}/${postHw.length + 1} post-HW` +
+      (sameSecond ? ' ⚠️ same second as the label — may render above it' : '') +
+      (ahead.length ? ` — ahead: ${aheadList}` : '');
+    log(report);
+    await notify(report);
+  } catch (e) {
+    log(`race report #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // ── proposal body resolution ──────────────────────────────────────────────────
 async function bodyFor(n) {
   return prepareBody(n);
@@ -641,6 +828,9 @@ async function notify(text) {
 function labelNames(labels) {
   return (labels || []).map((l) => (typeof l === 'string' ? l : l.name).toLowerCase());
 }
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
 function required(k) {
   const v = process.env[k];
   if (!v) {
@@ -673,12 +863,19 @@ function main() {
     console.error('Nothing to do — configure Supabase mode, WATCH=<issue#,...>, and/or DISCOVER=true');
     process.exit(1);
   }
+  if (process.env.POST_SAFETY_DELAY_MS) {
+    log(
+      '⚠️  POST_SAFETY_DELAY_MS is no longer used — the worker now waits for the GitHub ' +
+        'second boundary after Help Wanted. Tune POST_BOUNDARY_MARGIN_MS instead.',
+    );
+  }
   log(
     `sniper up — repo=${REPO} ` +
       `${DISCOVER ? 'discover=on ' : ''}` +
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
-      `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms safety=${POST_SAFETY_DELAY_MS}ms`
+      `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
+      `budget=${REQUEST_BUDGET_PER_MIN}/min`
   );
   if (DISCOVER && !DRY_RUN) {
     log(

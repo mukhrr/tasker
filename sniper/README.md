@@ -1,8 +1,9 @@
 # Tasker proposal sniper
 
 Always-on, server-side. Races the Expensify `Help Wanted` label and posts a
-pre-staged proposal within ~100–300ms of the label landing — fast enough to
-**lead the pack** instead of trailing it.
+pre-staged proposal in the **first instant of the second after** the label
+lands — guaranteed to render below it, ahead of rivals who either gamble on a
+same-second post (which can render *above* the label) or detect more slowly.
 
 ## Why this beats the browser extension
 
@@ -19,13 +20,27 @@ line. Melvin applies `External` **2–3s before** `Help Wanted`, which is the
 opening we exploit:
 
 1. **Lock** onto an issue the instant it gets `External`.
-2. **Tight-poll** its labels on an ~80ms start-to-start cadence (ETag-conditional
+2. **Tight-poll** its labels on an ~50ms start-to-start cadence (ETag-conditional
    responses minimize payload size).
-3. **Fire** the staged proposal the moment `Help Wanted` appears.
+3. **Fire** the staged proposal the moment `Help Wanted` appears — aligned to
+   the **next GitHub second boundary**, not a fixed buffer.
 
-Live posts include a configurable `POST_SAFETY_DELAY_MS=100` buffer after
-detection. Proposal loading and the Supabase claim happen inside that buffer,
-so only the unused portion is slept before the GitHub comment request.
+### Why boundary alignment, not a fixed delay
+
+GitHub truncates `created_at` to whole seconds and, within the same second, the
+issue UI can render a comment **above** the label event it followed — which
+looks posted-before-Help-Wanted to a reviewer. A fixed buffer can't win both
+ways: too short risks the same-second tie, too long hands positions to faster
+rivals. The worker instead tracks GitHub's clock from response `Date` headers
+(tight polling observes a second rollover every second, pinning the boundary to
+within one poll interval) and sleeps **exactly until the second after the Help
+Wanted second, plus `POST_BOUNDARY_MARGIN_MS`** — firing immediately when that
+boundary has already passed. The Supabase claim runs concurrently with the wait,
+so a slow claim never delays the POST.
+
+After each live snipe the worker fetches the issue timeline (~10s later) and
+logs/notifies a race report: your position among post-HW comments, who beat you
+and by how much, and whether you landed in the same second as the label.
 
 The proposal body is loaded and cached when the issue is first tracked, so the
 trigger path does no disk I/O. Poll requests never overlap; if a GitHub response
@@ -36,14 +51,20 @@ is added directly; armed proposals do not each create a permanent polling loop.
 
 ### Latency reality
 
-`TIGHT_INTERVAL_MS=80` means up to roughly one poll interval of detection delay,
-plus GitHub API propagation and the comment POST round trip. It does **not** mean
-an 80ms end-to-end guarantee. A true `<50ms` label-to-created-comment guarantee
-is not available through GitHub's public REST API: network RTT alone can consume
-most of that budget. Deploying a continuously hot process in US East is the
-largest reliable improvement. Do not reduce the interval until GitHub starts
-secondary-rate-limiting the token; conditional requests still count toward API
-limits even when they return `304`.
+`TIGHT_INTERVAL_MS=50` means up to roughly one poll interval of detection delay,
+plus GitHub API propagation and the comment POST round trip. The boundary wait
+then adds whatever remains of the Help Wanted second (0–1s, unavoidable — a
+same-second comment can render above the label). Deploying a continuously hot
+process in US East remains the largest reliable improvement.
+
+Conditional requests still count toward API limits even when they return `304`
+(this bit us on a live issue), so **every** GitHub request is counted against
+`REQUEST_BUDGET_PER_MIN=500` — comfortably under GitHub's ~900 points/min
+secondary limit. At the cap, discovery yields first (80% threshold), tight polls
+degrade to `THROTTLED_INTERVAL_MS`, and the comment POST is never gated. A full
+15s tight window at 50ms is ~300 requests, so one race plus discovery fits with
+headroom; don't lower the interval below ~40ms or two overlapping races will
+spend the budget.
 
 ## Setup
 
@@ -133,5 +154,13 @@ Three latency tips that decide close races:
 
 ## Tuning
 
-Defaults are tuned for Expensify's 2–3s External→HW gap. If you ever see `⏸️
-rate-limited`, raise `TIGHT_INTERVAL_MS` (e.g. 120) and/or `DISCOVERY_INTERVAL_MS`.
+Defaults are tuned for Expensify's 2–3s External→HW gap. The request-budget
+guard should keep you clear of secondary limits, but if you ever see `⏸️
+rate-limited`, lower `REQUEST_BUDGET_PER_MIN` and/or raise `TIGHT_INTERVAL_MS`
+(e.g. 80) and `DISCOVERY_INTERVAL_MS`. Frequent `🐢 request budget` lines mean
+polling is self-throttling — raise the budget only if you are far from GitHub's
+~900 points/min secondary limit.
+
+Use the `🔬 race:` reports to tune `POST_BOUNDARY_MARGIN_MS`: if reports show
+rivals consistently landing between Help Wanted and you, lower the margin
+toward ~100; if you ever see the same-second warning, raise it.
