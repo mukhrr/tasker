@@ -79,6 +79,23 @@ const TG_API = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').repl
 // low-latency replacement for the extension's chrome.alarms poller (>=30s).
 const ALERT_NEW_TRIGGER = bool('ALERT_NEW_TRIGGER', true);
 const ALERT_FRESH_MS = int('ALERT_FRESH_MS', 600000); // ignore label events older than this
+
+// Auto-draft: queue label-matched issues into Supabase for the drafter worker.
+// Groups are '+'-joined labels (AND within a group) separated by '|' (OR across
+// groups) — the exact semantics the extension uses. Matching runs on the
+// discovery page we already fetch, so it costs no extra GitHub requests.
+const AUTO_DRAFT = bool('AUTO_DRAFT', false);
+const WATCH_GROUPS = (process.env.WATCH_GROUPS || '')
+  .split('|')
+  .map((g) => g.split('+').map((l) => l.trim().toLowerCase()).filter(Boolean))
+  .filter((g) => g.length > 0);
+const EXCLUDE_LABELS = new Set(
+  (process.env.EXCLUDE_LABELS || '')
+    .split(',')
+    .map((l) => l.trim().toLowerCase())
+    .filter(Boolean),
+);
+
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
@@ -109,6 +126,8 @@ let budgetThrottleLoggedAt = 0;
 const alerted = new Set(); // issue numbers already Telegram-alerted for the trigger label
 const alertEventChecks = new Map(); // alert-path memo — MUST stay separate from checkedLabelUpdates
 let alertSeeded = false; // first discovery scan only records existing trigger issues
+const queued = new Set(); // issue numbers already enqueued for the drafter this process
+let queueSeeded = false; // first discovery scan only records existing matches, never queues them
 
 // ── request budget + GitHub clock tracking ───────────────────────────────────
 // Secondary rate limits count 304s too (learned the hard way on #95956), so
@@ -395,6 +414,54 @@ async function releasePreClaim(n) {
   }
 }
 
+// ── auto-draft: queue label-matched issues for the drafter worker ─────────────
+function autoDraftEnabled() {
+  return AUTO_DRAFT && CLOUD_MODE && WATCH_GROUPS.length > 0;
+}
+
+// Extension-identical matching: AND within a group, OR across groups, and drop
+// the issue if it carries ANY excluded label. Runs against the labels already
+// present on the discovery page (no extra request).
+function matchesWatchGroups(labelSet) {
+  if (EXCLUDE_LABELS.size && [...labelSet].some((l) => EXCLUDE_LABELS.has(l))) return false;
+  return WATCH_GROUPS.some((group) => group.every((label) => labelSet.has(label)));
+}
+
+async function enqueueForDrafting(issue) {
+  const n = issue.number;
+  if (queued.has(n)) return;
+  queued.add(n); // optimistic; a failed insert clears it below for a later retry
+  const [owner, repo] = REPO.split('/');
+  const title = issue.title ? ` — ${issue.title}` : '';
+  try {
+    // ignore-duplicates makes this idempotent against the unique
+    // (user_id, repo_owner, repo_name, issue_number) constraint — a manual row
+    // or a prior queue entry is never overwritten.
+    const rows = await supabaseRequest('proposals', {
+      method: 'POST',
+      body: {
+        user_id: SUPABASE_USER_ID,
+        repo_owner: owner,
+        repo_name: repo,
+        issue_number: n,
+        state: 'queued',
+        origin: 'auto',
+      },
+      prefer: 'resolution=ignore-duplicates,return=representation',
+    });
+    const inserted = Array.isArray(rows) && rows.length > 0;
+    if (inserted) {
+      log(`🧠 #${n} queued for drafting${title}`);
+      await notify(`🧠 Queued for drafting ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`);
+    } else {
+      log(`#${n} already has a proposal row — not re-queued`);
+    }
+  } catch (e) {
+    queued.delete(n); // transient failure: allow a later scan to retry
+    log(`enqueue #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // ── GitHub fetch (conditional + rate-limit aware) ─────────────────────────────
 async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
   if (Date.now() < backoffUntil) {
@@ -490,6 +557,7 @@ async function discoverTick() {
   const { status, data } = await gh(q, { useEtag: true, key: 'discover' });
   if (status === 200 && Array.isArray(data)) {
     const alertCandidates = [];
+    const queueCandidates = [];
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
@@ -503,6 +571,15 @@ async function discoverTick() {
       if (alertingEnabled() && issueLabels.includes(TRIGGER) && !cloudProposals.has(n)) {
         if (!alertSeeded) alerted.add(n);
         else if (!alerted.has(n)) alertCandidates.push(issue);
+      }
+
+      // Queue label-matched issues for the drafter. Seed on the first scan so a
+      // fresh worker doesn't enqueue the entire existing page; enqueue only
+      // matches seen after that. Idempotent at the DB layer, so this set is just
+      // an in-process fast path.
+      if (autoDraftEnabled() && matchesWatchGroups(new Set(issueLabels)) && !cloudProposals.has(n)) {
+        if (!queueSeeded) queued.add(n);
+        else if (!queued.has(n)) queueCandidates.push(issue);
       }
 
       // Cloud mode is deliberately selective: the shared recent-issue detector
@@ -550,9 +627,15 @@ async function discoverTick() {
       }
     }
     alertSeeded = true;
+    queueSeeded = true;
     if (alertCandidates.length) void alertNewTriggerIssues(alertCandidates);
+    if (queueCandidates.length) void enqueueCandidates(queueCandidates);
   }
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
+}
+
+async function enqueueCandidates(issues) {
+  for (const issue of issues) await enqueueForDrafting(issue);
 }
 
 // ── instant Telegram alert for issues that newly gain the trigger label ───────
@@ -1059,10 +1142,16 @@ function main() {
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
       `budget=${REQUEST_BUDGET_PER_MIN}/min telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} ` +
-      `alerts=${alertingEnabled() ? 'on' : 'off'}`
+      `alerts=${alertingEnabled() ? 'on' : 'off'} autoDraft=${autoDraftEnabled() ? 'on' : 'off'}`
   );
   if (ALERT_NEW_TRIGGER && !(TG_TOKEN && TG_CHAT)) {
     log(`ℹ️  instant "${TRIGGER_NAME}" alerts are idle — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable`);
+  }
+  if (AUTO_DRAFT && !autoDraftEnabled()) {
+    const why = !CLOUD_MODE ? 'Supabase is not configured' : 'WATCH_GROUPS is empty';
+    log(`ℹ️  auto-draft is idle — ${why}`);
+  } else if (autoDraftEnabled()) {
+    log(`🧠 auto-draft queueing on — groups=[${WATCH_GROUPS.map((g) => g.join('+')).join('|')}] excl=[${[...EXCLUDE_LABELS].join(',')}]`);
   }
   if (DISCOVER && !DRY_RUN) {
     log(
