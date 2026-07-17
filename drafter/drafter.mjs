@@ -264,7 +264,10 @@ async function latestCodexSession() {
 
 async function runCodex(prompt, { threadName } = {}) {
   const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
-  const args = ['exec', '-a', 'never', '-C', REPO_DIR, '--skip-git-repo-check', '--output-last-message', outFile];
+  // `codex exec` is non-interactive by design and does not accept the `-a`
+  // approval flag (that lives on the top-level `codex` command). Sandbox mode
+  // controls what model-generated commands may do; no approval flag is needed.
+  const args = ['exec', '-C', REPO_DIR, '--skip-git-repo-check', '--output-last-message', outFile];
   if (CODEX_UNSAFE_SANDBOX) {
     args.push('--dangerously-bypass-approvals-and-sandbox');
   } else {

@@ -27,6 +27,11 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } fr
 import path from 'node:path';
 const dir = process.env.FAKE_CODEX_DIR;
 const argv = process.argv.slice(2);
+// Regression guard: real \`codex exec\` (v0.144) rejects the \`-a\` approval flag.
+if (argv.includes('-a')) {
+  console.error("error: unexpected argument '-a' found");
+  process.exit(2);
+}
 const oi = argv.indexOf('--output-last-message');
 const out = oi >= 0 ? argv[oi + 1] : null;
 if (existsSync(path.join(dir, 'usage_limit'))) {
