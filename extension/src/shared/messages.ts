@@ -181,6 +181,17 @@ export interface SetAutoPostRequest {
   enabled: boolean;
 }
 
+// Auto-pilot master switch — controls the server-side drafter (auto-drafting),
+// mirrored to user_settings.autopilot_enabled. Independent of auto-post.
+export interface GetAutoPilotRequest {
+  type: 'GET_AUTOPILOT';
+}
+
+export interface SetAutoPilotRequest {
+  type: 'SET_AUTOPILOT';
+  enabled: boolean;
+}
+
 // Verify that a 'posted' proposal's comment still exists on GitHub.
 // If GitHub returns 404 (comment deleted), the row is reverted to 'draft'
 // so the user can re-edit and repost. Body is preserved.
@@ -217,6 +228,8 @@ export type MessageRequest =
   | PostProposalNowRequest
   | GetAutoPostRequest
   | SetAutoPostRequest
+  | GetAutoPilotRequest
+  | SetAutoPilotRequest
   | VerifyPostedCommentRequest;
 
 // ── Response types ──

@@ -491,7 +491,7 @@ async function buildDraftPrompt(issue, comments) {
     .replace('<<<ISSUE>>>', issueBlock);
 }
 
-async function draftOne(row) {
+async function draftOne(row, settings = { autoPost: true }) {
   const n = row.issue_number;
   // In DRY_RUN the row is returned to `queued` after drafting (it never arms),
   // so without this guard it would be re-drafted every poll — an endless loop
@@ -565,8 +565,10 @@ async function draftOne(row) {
 
   // Fast path: if Help Wanted is already on the issue, the sniper intentionally
   // ignores the stale label event, so post directly.
+  // Direct-post is POSTING, so it obeys the "Auto-post on Help Wanted" toggle —
+  // even though drafting itself is gated by the separate "Auto-pilot" toggle.
   const hasHW = labelNames(issue.labels).includes(TRIGGER);
-  if (DIRECT_POST && hasHW) {
+  if (DIRECT_POST && hasHW && settings.autoPost) {
     await directPost(armed, issue, body);
   }
 
@@ -743,21 +745,29 @@ async function recoverStaleDrafting() {
 }
 
 // ── main loop ────────────────────────────────────────────────────────────────
-async function autoPostEnabled() {
+// Both toggles in one read: `autopilot_enabled` (the "Auto-pilot" checkbox) gates
+// DRAFTING; `proposal_auto_post` (the "Auto-post on Help Wanted" checkbox + the
+// sniper) gates POSTING. Absent row/field defaults to on.
+async function fetchSettings() {
   const query = new URLSearchParams({
-    select: 'proposal_auto_post',
+    select: 'proposal_auto_post,autopilot_enabled',
     id: `eq.${SUPABASE_USER_ID}`,
     limit: '1',
   });
   const rows = await supabaseRequest(`user_settings?${query}`);
-  return !Array.isArray(rows) || rows[0]?.proposal_auto_post !== false;
+  const s = Array.isArray(rows) ? rows[0] : null;
+  return {
+    autoPost: !s || s.proposal_auto_post !== false,
+    autoPilot: !s || s.autopilot_enabled !== false,
+  };
 }
 
 async function tick() {
   if (!AUTOPILOT_ENABLED) return; // Railway master switch — idle when off
   if (Date.now() < backoffUntil) return;
   await recoverStaleDrafting();
-  if (!(await autoPostEnabled())) return; // Supabase kill-switch honored too
+  const settings = await fetchSettings();
+  if (!settings.autoPilot) return; // "Auto-pilot" checkbox off — draft nothing
 
   const query = new URLSearchParams({
     // Only the columns draftOne needs — the drafter writes the body, it never
@@ -773,7 +783,7 @@ async function tick() {
   });
   const rows = await supabaseRequest(`proposals?${query}`);
   if (!Array.isArray(rows) || rows.length === 0) return;
-  await draftOne(rows[0]);
+  await draftOne(rows[0], settings);
 }
 
 async function loop() {

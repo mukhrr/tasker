@@ -495,7 +495,31 @@ if (autopostToggle) {
   });
 }
 
+// ── Auto-pilot toggle (server-side drafter) ──
+
+const autopilotToggle = $('#autopilot-toggle') as HTMLInputElement | null;
+
+async function loadAutoPilotState(): Promise<void> {
+  if (!autopilotToggle) return;
+  const res = await chrome.runtime.sendMessage({ type: 'GET_AUTOPILOT' }) as
+    MessageResponse<{ enabled: boolean }>;
+  autopilotToggle.checked = res.ok && res.data ? res.data.enabled : true;
+}
+
+if (autopilotToggle) {
+  autopilotToggle.addEventListener('change', async () => {
+    const enabled = autopilotToggle.checked;
+    const res = await chrome.runtime.sendMessage({ type: 'SET_AUTOPILOT', enabled }) as
+      MessageResponse<{ enabled: boolean }>;
+    if (!res.ok) {
+      autopilotToggle.checked = !enabled;
+      showStatus(res.error ?? 'Failed to update', 'error');
+    }
+  });
+}
+
 fetchStarCount();
 init();
 void loadSettingsIntoForm();
 void loadAutoPostState();
+void loadAutoPilotState();

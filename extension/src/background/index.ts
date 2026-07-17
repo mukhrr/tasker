@@ -100,6 +100,10 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleGetAutoPost();
     case 'SET_AUTOPOST':
       return handleSetAutoPost(msg.enabled);
+    case 'GET_AUTOPILOT':
+      return handleGetAutoPilot();
+    case 'SET_AUTOPILOT':
+      return handleSetAutoPilot(msg.enabled);
     case 'VERIFY_POSTED_COMMENT':
       return handleVerifyPostedComment(msg.proposalId);
     default:
@@ -854,6 +858,39 @@ async function handleSetAutoPost(enabled: boolean): Promise<MessageResponse<{ en
     }
   } catch (e) {
     console.warn('[tasker] mirror autopost to server failed', e);
+  }
+
+  return { ok: true, data: { enabled } };
+}
+
+// ── Auto-pilot toggle: controls the server-side drafter (auto-drafting), separate
+// from auto-post (which controls posting). Mirrored to user_settings.autopilot_enabled
+// so the Railway drafter honors it. ──
+const AUTOPILOT_KEY = 'proposalAutoPilot';
+
+async function isAutoPilotAllowedLocally(): Promise<boolean> {
+  const stored = await chrome.storage.local.get(AUTOPILOT_KEY);
+  return stored[AUTOPILOT_KEY] !== false; // default true
+}
+
+async function handleGetAutoPilot(): Promise<MessageResponse<{ enabled: boolean }>> {
+  return { ok: true, data: { enabled: await isAutoPilotAllowedLocally() } };
+}
+
+async function handleSetAutoPilot(enabled: boolean): Promise<MessageResponse<{ enabled: boolean }>> {
+  await chrome.storage.local.set({ [AUTOPILOT_KEY]: enabled });
+
+  try {
+    const supabase = getSupabaseClient();
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session.session?.user?.id;
+    if (userId) {
+      await supabase
+        .from('user_settings')
+        .upsert({ id: userId, autopilot_enabled: enabled }, { onConflict: 'id' });
+    }
+  } catch (e) {
+    console.warn('[tasker] mirror autopilot to server failed', e);
   }
 
   return { ok: true, data: { enabled } };
