@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -42,6 +42,8 @@ let pick = n;
 while (pick > 1 && !existsSync(path.join(dir, pick + '.md'))) pick -= 1;
 const body = readFileSync(path.join(dir, pick + '.md'), 'utf8');
 if (out) writeFileSync(out, body);
+// Capture the prompt (last positional arg) so tests can assert its wiring.
+writeFileSync(path.join(dir, 'last_prompt.txt'), argv[argv.length - 1] || '');
 console.log('done');
 `;
 
@@ -200,7 +202,7 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run })
   };
 
   try {
-    await run(state, { deadline, wait, output });
+    await run(state, { deadline, wait, output, codexDir });
     console.log(`PASS ${name}`);
   } finally {
     worker.kill('SIGTERM');
@@ -241,11 +243,17 @@ await runScenario({
   seedRows: [
     { id: 'r1', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90001, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
   ],
-  run: async (state, { deadline }) => {
+  run: async (state, { deadline, codexDir }) => {
     await deadline(() => state.rows.get('r1')?.state === 'armed', 5000, 'row never armed');
     const r = state.rows.get('r1');
     assert.ok(r.body.includes('root cause'), 'armed body missing proposal content');
     assert.equal(state.commentPosts.length, 0, 'no direct post expected (no Help Wanted)');
+    // The draft prompt must reference the bundled skill and carry the issue.
+    const prompt = readFileSync(path.join(codexDir, 'last_prompt.txt'), 'utf8');
+    assert.match(prompt, /expensify-proposal-writer\/SKILL\.md/, 'draft prompt did not reference the skill');
+    assert.match(prompt, /proposal-rubric\.md/, 'draft prompt did not reference the rubric');
+    assert.match(prompt, /Amount input crashes when blurred empty/, 'draft prompt missing the issue title');
+    assert.doesNotMatch(prompt, /<<<(SKILL_DIR|ISSUE)>>>/, 'prompt placeholders not substituted');
   },
 });
 

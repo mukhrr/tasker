@@ -1,0 +1,4 @@
+interface:
+  display_name: "Expensify Proposal Writer"
+  short_description: "Draft measurable Expensify issue proposals"
+  default_prompt: "Use $expensify-proposal-writer to draft a concise proposal for this Expensify issue."

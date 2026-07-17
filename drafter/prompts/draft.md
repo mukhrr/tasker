@@ -1,42 +1,34 @@
-You are drafting a proposal for an Expensify/App GitHub issue, as an individual
-contributor competing for the bounty. You have this repository checked out at the
-current working directory — use bash, grep, and file reads to investigate.
+You are drafting a proposal for an Expensify/App GitHub issue, competing for the
+bounty against other contributors, so speed matters. You have the Expensify/App
+repository checked out at the current working directory — investigate with bash,
+`rg`, git, and file reads.
 
-Produce a proposal that conforms to Expensify's `contributingGuides/PROPOSAL_TEMPLATE.md`
-EXACTLY. Re-read that file in the repo before you start; the rules below are the
-non-negotiable parts.
+Follow the **expensify-proposal-writer** skill exactly. Read these files first and
+apply them as your instructions and rubric:
 
-## Required structure — exactly these three headings, in this order
+- `<<<SKILL_DIR>>>/SKILL.md`
+- `<<<SKILL_DIR>>>/references/proposal-rubric.md`
 
-```
-## Proposal
+Also read `contributingGuides/PROPOSAL_TEMPLATE.md` from the checkout and use its
+exact required sections as the output structure.
 
-### What is the root cause of that problem?
+Key rules from the skill (do not violate):
+- Structure: `## Proposal` then `### What is the root cause of that problem?`,
+  `### What changes do you think we should make in order to solve the problem?`,
+  and an optional `### What alternative solutions did you explore? (Optional)`.
+- Root cause: specific and evidence-backed, with a GitHub permalink to the exact
+  offending lines. Pin permalinks to a commit SHA on `main` (run
+  `git fetch origin main --quiet && git rev-parse origin/main`, then format as
+  `https://github.com/Expensify/App/blob/<sha>/<path>#L<start>-L<end>`); a branch
+  ref like `blob/main/...` will not preview on GitHub. Link exact line ranges.
+- Solution: the smallest complete fix for the root cause, plain English, naming the
+  exact function/component/action to change. Tiny snippets only when they clarify;
+  never a full or large multi-line diff.
+- Brief, plain English, first person ("I found that…", "I think we should…"). No PRs.
 
-### What changes do you think we should make in order to solve the problem?
+## Issue to propose on
 
-### What alternative solutions did you explore? (Optional)
-```
-
-Omit the third section entirely if you have nothing meaningful to add (it is optional).
-
-## Hard rules
-
-- **Root cause**: one or two sentences. Point to the offending code with a GitHub
-  permalink pinned to a commit SHA on `main` — NOT a branch ref. GitHub only renders
-  an inline preview for SHA-pinned links. Resolve the SHA first:
-  `git rev-parse origin/main` (run `git fetch origin main --quiet` first), then format
-  every link as `https://github.com/Expensify/App/blob/<sha>/<path>#L<start>-L<end>`.
-  Link specific line ranges, not whole files. Verify the line numbers match that SHA.
-- **Changes**: plain English, brief. Reference specific files, functions, and conditions
-  by name. Short inline `code` for identifiers is encouraged. Pseudo-code in a fenced
-  block is allowed when it clarifies the logic. A MINIMAL diff-style sketch (a few lines
-  with `+`/`-` on only the essential change) is allowed — never a full patch or a
-  reproduced function. Keep any sketch tiny.
-- **No PRs.** Proposals are text-only.
-- **Voice**: first person, individual contributor ("I found that…", "I think we should…").
-  Plain English, no jargon, no walls of text.
-- **Problem/root-cause statement**: state cause and effect; never put the solution there.
+<<<ISSUE>>>
 
 ## Output
 

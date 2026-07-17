@@ -18,7 +18,7 @@
  * the row to state='draft' for a human to rescue (with a Telegram ping).
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,11 @@ const CODEX_UNSAFE_SANDBOX = bool('CODEX_UNSAFE_SANDBOX', false); // Landlock fa
 const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 600_000); // 10 min per pass
 const REPO_URL = process.env.REPO_URL || `https://github.com/${REPO}`;
 const REPO_DIR = process.env.REPO_DIR || path.join(DATA_DIR, REPO_NAME || 'App');
+// The expensify-proposal-writer skill (bundled under drafter/skills) is installed
+// into CODEX_HOME so Codex discovers it, and the draft prompt reads it by path.
+const BUNDLED_SKILLS_DIR = process.env.BUNDLED_SKILLS_DIR || path.join(HERE, 'skills');
+const SKILL_NAME = process.env.SKILL_NAME || 'expensify-proposal-writer';
+const SKILL_DIR = path.join(CODEX_HOME, 'skills', SKILL_NAME);
 
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 3000);
 const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
@@ -196,6 +201,21 @@ async function ensureCodexAuth() {
   log(`🔑 seeded ${authPath} from CODEX_AUTH_JSON`);
 }
 
+async function installSkills() {
+  // Copy the bundled skill onto the volume so Codex can discover it and the
+  // draft prompt can read it by absolute path. Overwrite each boot to pick up
+  // edits shipped with a redeploy.
+  if (!existsSync(BUNDLED_SKILLS_DIR)) return;
+  const dest = path.join(CODEX_HOME, 'skills');
+  await mkdir(dest, { recursive: true });
+  try {
+    await cp(BUNDLED_SKILLS_DIR, dest, { recursive: true });
+    log(`📚 installed skills → ${dest}`);
+  } catch (e) {
+    log(`skill install failed (continuing): ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function ensureRepo() {
   if (!existsSync(path.join(REPO_DIR, '.git'))) {
     await mkdir(path.dirname(REPO_DIR), { recursive: true });
@@ -315,11 +335,12 @@ async function buildDraftPrompt(issue, comments) {
     .slice(0, 20)
     .map((c) => `--- comment by ${c.user?.login || '?'} ---\n${c.body || ''}`)
     .join('\n\n');
-  return (
-    `${template}\n\n` +
-    `## Issue #${issue.number}: ${issue.title}\n\n${issue.body || '(no description)'}\n\n` +
-    (commentText ? `## Existing comments\n\n${commentText}\n` : '')
-  );
+  const issueBlock =
+    `Issue #${issue.number}: ${issue.title}\n\n${issue.body || '(no description)'}\n` +
+    (commentText ? `\n### Existing comments\n\n${commentText}\n` : '');
+  return template
+    .replaceAll('<<<SKILL_DIR>>>', SKILL_DIR)
+    .replace('<<<ISSUE>>>', issueBlock);
 }
 
 async function draftOne(row) {
@@ -588,9 +609,10 @@ async function main() {
     process.exit(1);
   }
   await ensureCodexAuth();
+  await installSkills();
   await ensureRepo();
   log(
-    `drafter up — repo=${REPO} dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
+    `drafter up — repo=${REPO} skill=${SKILL_NAME} dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
       `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
       `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
   );

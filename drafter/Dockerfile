@@ -14,6 +14,7 @@ WORKDIR /app
 COPY package.json ./
 COPY drafter.mjs ./
 COPY prompts ./prompts
+COPY skills ./skills
 
 # Persisted volume holds the repo clone and CODEX_HOME (auth.json is refreshed
 # in place, so it must survive redeploys). Mount a Railway volume at /data.

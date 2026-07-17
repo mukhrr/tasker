@@ -32,7 +32,11 @@ keeps going while your laptop sleeps — the only manual step is a one-time
 1. **Claim** `queued → drafting` (atomic, state-filtered — a concurrent worker or
    a manual disarm loses the race).
 2. **Draft**: `git fetch/reset` the local Expensify/App checkout, fetch the issue +
-   comments, and run `codex exec` with the template prompt (`prompts/draft.md`).
+   comments, and run `codex exec` driving your **expensify-proposal-writer** skill.
+   The skill (`skills/expensify-proposal-writer/`, copied verbatim from
+   `~/.codex/skills/`) is installed into `CODEX_HOME/skills` on boot; the draft
+   prompt (`prompts/draft.md`) points Codex at its `SKILL.md` + rubric so the first
+   proposal is written exactly as it would be on your machine.
 3. **Validate** (mechanical, no LLM): the two required headings are present, no
    placeholder/stub text, length is sane, and every `Expensify/App` permalink both
    points at a file that exists in the clone **and** resolves on GitHub. One retry
@@ -41,10 +45,10 @@ keeps going while your laptop sleeps — the only manual step is a one-time
 4. **Arm** `drafting → armed`. The sniper takes it from here.
 5. **Direct post** if the issue already carries Help Wanted (the sniper deliberately
    ignores stale HW events).
-6. **Enrich** (optional): a second, deeper `codex exec` pass — stronger root cause via
-   similar cases and git history, verified permalinks, a minimal diff sketch, regression
-   notes. If still armed it updates the body; if already posted it edits the live GitHub
-   comment.
+6. **Enrich** (optional): a second `codex exec` pass driven by your exact second-pass
+   instruction (`prompts/enrich.md`) — stronger RCA via similar cases and git history,
+   verified permalinks, regression safety, small code diffs. If still armed it updates
+   the body; if already posted it edits the live GitHub comment.
 
 ## Safety
 
