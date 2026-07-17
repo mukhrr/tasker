@@ -70,7 +70,7 @@ const BUNDLED_SKILLS_DIR = process.env.BUNDLED_SKILLS_DIR || path.join(HERE, 'sk
 const SKILL_NAME = process.env.SKILL_NAME || 'expensify-proposal-writer';
 const SKILL_DIR = path.join(CODEX_HOME, 'skills', SKILL_NAME);
 
-const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 3000);
+const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 12000); // 12s — the drafter isn't latency-critical; keeps Supabase egress low
 const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
 const STALE_SWEEP_MS = int('STALE_SWEEP_MS', 60_000);
 const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
@@ -760,7 +760,9 @@ async function tick() {
   if (!(await autoPostEnabled())) return; // Supabase kill-switch honored too
 
   const query = new URLSearchParams({
-    select: '*',
+    // Only the columns draftOne needs — the drafter writes the body, it never
+    // reads the existing one, so don't pull it across the wire on every poll.
+    select: 'id,issue_number,draft_attempts,state,origin,created_at',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${REPO_OWNER}`,
     repo_name: `ilike.${REPO_NAME}`,

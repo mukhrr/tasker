@@ -120,6 +120,7 @@ const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
 const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
+const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
@@ -208,6 +209,19 @@ async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) 
   return data;
 }
 
+// Fetch just the body for one proposal id — used when the armed sync sees a new
+// or edited row (the sync itself no longer pulls bodies).
+async function fetchProposalBody(id) {
+  const q = new URLSearchParams({
+    select: 'body',
+    id: `eq.${id}`,
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    limit: '1',
+  });
+  const rows = await supabaseRequest(`proposals?${q}`);
+  return Array.isArray(rows) && typeof rows[0]?.body === 'string' ? rows[0].body.trim() : '';
+}
+
 async function syncArmedProposals() {
   const [owner, repo] = REPO.split('/');
 
@@ -246,7 +260,11 @@ async function syncArmedProposals() {
   applyWatchConfig(Array.isArray(settingsRows) ? settingsRows[0] : null);
 
   const query = new URLSearchParams({
-    select: 'id,user_id,repo_owner,repo_name,issue_number,body,state,updated_at',
+    // No `body` here — it's multi-KB per row and rarely changes. Re-downloading
+    // every armed body on this 1s tick was the dominant Supabase egress cost.
+    // The body is fetched lazily below only when a row is new or its updated_at
+    // (trigger-maintained) changes.
+    select: 'id,user_id,repo_owner,repo_name,issue_number,state,updated_at',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${owner}`,
     repo_name: `ilike.${repo}`,
@@ -259,8 +277,20 @@ async function syncArmedProposals() {
   const queriedProposalIds = new Set(rows.map((proposal) => proposal.id));
   for (const proposal of rows) {
     const n = Number(proposal.issue_number);
-    const body = typeof proposal.body === 'string' ? proposal.body.trim() : '';
-    if (!Number.isInteger(n) || n <= 0 || !body) continue;
+    if (!Number.isInteger(n) || n <= 0) continue;
+    // Fetch the body only when the row is new or its updated_at changed; reuse
+    // the cached body otherwise. This keeps 1s arm-detection responsiveness while
+    // pulling each body across the wire once per arm/edit, not once per second.
+    const cachedBody = armedBodyCache.get(proposal.id);
+    let body;
+    if (cachedBody && cachedBody.updatedAt === proposal.updated_at) {
+      body = cachedBody.body;
+    } else {
+      body = await fetchProposalBody(proposal.id);
+      armedBodyCache.set(proposal.id, { updatedAt: proposal.updated_at, body });
+    }
+    if (!body) continue;
+    proposal.body = body; // downstream (claim, fire) reads it off the cached row
 
     if (!validatedCloudProposalIds.has(proposal.id)) {
       const retry = cloudValidationBackoff.get(proposal.id);
@@ -326,6 +356,9 @@ async function syncArmedProposals() {
   }
   for (const id of cloudValidationBackoff.keys()) {
     if (!queriedProposalIds.has(id)) cloudValidationBackoff.delete(id);
+  }
+  for (const id of armedBodyCache.keys()) {
+    if (!queriedProposalIds.has(id)) armedBodyCache.delete(id);
   }
 }
 
