@@ -1,0 +1,611 @@
+#!/usr/bin/env node
+/**
+ * Tasker proposal drafter — always-on, server-side.
+ *
+ * The sniper enqueues label-matched Expensify issues into Supabase as
+ * state='queued', origin='auto'. This worker picks them up and, using the
+ * Codex CLI (authenticated with the user's ChatGPT plan), writes a proposal
+ * that conforms to Expensify's PROPOSAL_TEMPLATE, validates it mechanically,
+ * and arms it so the sniper posts it the instant Help Wanted lands. Issues
+ * that already carry Help Wanted are posted directly.
+ *
+ * Pipeline per issue:
+ *   queued → (claim) drafting → codex draft → validate → armed → [enrich]
+ *   armed + issue already has Help Wanted → posting → posted (direct post)
+ *
+ * Safety: DRY_RUN=true logs the drafted proposal and never mutates Supabase or
+ * posts to GitHub. The validator gates every arm, and validation failures drop
+ * the row to state='draft' for a human to rescue (with a Telegram ping).
+ */
+
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// ── config ──────────────────────────────────────────────────────────────────
+const REPO = process.env.REPO || 'Expensify/App';
+const [REPO_OWNER, REPO_NAME] = REPO.split('/');
+const TRIGGER = (process.env.LABEL_TRIGGER || 'Help Wanted').toLowerCase();
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
+
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''; // classic PAT, public_repo
+const GITHUB_API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
+const TG_API = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/$/, '');
+
+const DRY_RUN = bool('DRY_RUN', true);
+const ENRICH = bool('ENRICH', false); // second, deeper pass after arming
+const DIRECT_POST = bool('DIRECT_POST', true); // post immediately if HW already present
+
+const DATA_DIR = process.env.DATA_DIR || '/data';
+const CODEX_HOME = process.env.CODEX_HOME || path.join(DATA_DIR, 'codex');
+const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON || ''; // seed for auth.json
+const CODEX_BIN = process.env.CODEX_BIN || 'codex';
+const CODEX_MODEL = process.env.CODEX_MODEL || ''; // '' → account default
+const CODEX_UNSAFE_SANDBOX = bool('CODEX_UNSAFE_SANDBOX', false); // Landlock fallback
+const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 600_000); // 10 min per pass
+const REPO_URL = process.env.REPO_URL || `https://github.com/${REPO}`;
+const REPO_DIR = process.env.REPO_DIR || path.join(DATA_DIR, REPO_NAME || 'App');
+
+const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 3000);
+const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
+const STALE_SWEEP_MS = int('STALE_SWEEP_MS', 60_000);
+const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
+
+const DRAFT_PROMPT_FILE = process.env.DRAFT_PROMPT_FILE || path.join(HERE, 'prompts', 'draft.md');
+const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'prompts', 'enrich.md');
+
+// ── state ───────────────────────────────────────────────────────────────────
+let backoffUntil = 0; // Codex usage-limit backoff
+let lastStaleSweepAt = 0;
+
+// ── logging + telegram ────────────────────────────────────────────────────────
+function log(...a) {
+  console.log(new Date().toISOString(), ...a);
+}
+
+async function notify(text) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    const res = await fetch(`${TG_API}/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: TG_CHAT, text, disable_web_page_preview: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) log(`telegram err: ${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}`);
+  } catch (e) {
+    log(`telegram err: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// ── Supabase REST ─────────────────────────────────────────────────────────────
+async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) {
+  const headers = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (prefer) headers.Prefer = prefer;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${pathname}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text().catch(() => '');
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  if (!res.ok) {
+    const detail = typeof data === 'string' ? data : JSON.stringify(data);
+    throw new Error(`Supabase ${res.status}: ${detail.slice(0, 300)}`);
+  }
+  return data;
+}
+
+// ── GitHub REST ────────────────────────────────────────────────────────────────
+async function gh(pathname, { method = 'GET', body } = {}) {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'tasker-drafter',
+  };
+  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  if (body) headers['Content-Type'] = 'application/json';
+  const url = pathname.startsWith('http') ? pathname : GITHUB_API + pathname;
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text().catch(() => '');
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  return { status: res.status, data };
+}
+
+function labelNames(labels) {
+  return (labels || []).map((l) => (typeof l === 'string' ? l : l.name).toLowerCase());
+}
+
+// ── shell helper ───────────────────────────────────────────────────────────────
+function run(cmd, args, { cwd, env, timeoutMs, input } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGKILL');
+        }, timeoutMs)
+      : null;
+    child.stdout.on('data', (c) => (stdout += c.toString()));
+    child.stderr.on('data', (c) => (stderr += c.toString()));
+    child.on('error', (e) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: stderr + `\n${e.message}`, timedOut });
+    });
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr, timedOut });
+    });
+    if (input != null) {
+      child.stdin.write(input);
+      child.stdin.end();
+    }
+  });
+}
+
+// ── boot: seed Codex auth + clone the repo ────────────────────────────────────
+async function ensureCodexAuth() {
+  await mkdir(CODEX_HOME, { recursive: true });
+  const authPath = path.join(CODEX_HOME, 'auth.json');
+  if (existsSync(authPath)) return; // already seeded; Codex refreshes it in place
+  if (!CODEX_AUTH_JSON) {
+    log('⚠️  no CODEX_HOME/auth.json and no CODEX_AUTH_JSON — Codex is unauthenticated');
+    return;
+  }
+  await writeFile(authPath, CODEX_AUTH_JSON, { mode: 0o600 });
+  log(`🔑 seeded ${authPath} from CODEX_AUTH_JSON`);
+}
+
+async function ensureRepo() {
+  if (!existsSync(path.join(REPO_DIR, '.git'))) {
+    await mkdir(path.dirname(REPO_DIR), { recursive: true });
+    log(`⏬ cloning ${REPO_URL} → ${REPO_DIR} (blobless)`);
+    const res = await run('git', ['clone', '--filter=blob:none', REPO_URL, REPO_DIR], {
+      timeoutMs: 600_000,
+    });
+    if (res.code !== 0) throw new Error(`git clone failed: ${res.stderr.slice(0, 300)}`);
+  }
+}
+
+async function refreshRepo() {
+  const fetchRes = await run('git', ['fetch', 'origin', 'main', '--quiet'], {
+    cwd: REPO_DIR,
+    timeoutMs: 120_000,
+  });
+  if (fetchRes.code !== 0) {
+    log(`git fetch failed (continuing on stale checkout): ${fetchRes.stderr.slice(0, 200)}`);
+    return;
+  }
+  await run('git', ['reset', '--hard', 'origin/main', '--quiet'], { cwd: REPO_DIR, timeoutMs: 60_000 });
+}
+
+// ── Codex ─────────────────────────────────────────────────────────────────────
+async function runCodex(prompt) {
+  const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
+  const args = ['exec', '-a', 'never', '-C', REPO_DIR, '--skip-git-repo-check', '--output-last-message', outFile];
+  if (CODEX_UNSAFE_SANDBOX) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  } else {
+    args.push('--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true');
+  }
+  if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
+  args.push(prompt);
+
+  const res = await run(CODEX_BIN, args, {
+    env: { CODEX_HOME },
+    timeoutMs: CODEX_TIMEOUT_MS,
+  });
+
+  if (res.timedOut) return { ok: false, error: `codex timed out after ${CODEX_TIMEOUT_MS}ms` };
+  // Usage-limit detection: Codex surfaces plan exhaustion in its output.
+  const blob = `${res.stdout}\n${res.stderr}`;
+  if (/usage limit|rate limit|too many requests|quota/i.test(blob)) {
+    return { ok: false, error: 'codex usage limit', usageLimited: true };
+  }
+  if (res.code !== 0) return { ok: false, error: `codex exited ${res.code}: ${res.stderr.slice(0, 300)}` };
+
+  let body = '';
+  try {
+    body = (await readFile(outFile, 'utf8')).trim();
+  } catch {
+    body = res.stdout.trim(); // fall back to stdout if the file wasn't written
+  }
+  if (!body) return { ok: false, error: 'codex produced an empty proposal' };
+  return { ok: true, body };
+}
+
+// ── validator ──────────────────────────────────────────────────────────────────
+const REQUIRED_HEADINGS = [
+  '### What is the root cause of that problem?',
+  '### What changes do you think we should make in order to solve the problem?',
+];
+const PLACEHOLDER_RE = /(_investigating|_detailed proposal|placeholder|reviewing this issue|proposal is on the way|TODO|FIXME|lorem ipsum)/i;
+
+async function validateProposal(body) {
+  const problems = [];
+  if (!body || body.length < 200) problems.push('proposal is too short (<200 chars)');
+  if (body.length > 20_000) problems.push('proposal is too long (>20000 chars)');
+  for (const h of REQUIRED_HEADINGS) {
+    if (!body.includes(h)) problems.push(`missing required heading: "${h}"`);
+  }
+  if (PLACEHOLDER_RE.test(body)) problems.push('contains placeholder / stub text');
+
+  // Every Expensify blob permalink must resolve, and its cited path must exist
+  // in the local clone (a hallucinated file is the most common failure mode).
+  const linkRe = /https:\/\/github\.com\/Expensify\/App\/blob\/([0-9a-f]{7,40})\/([^\s#)]+)(#L\d+(?:-L\d+)?)?/gi;
+  const links = [...body.matchAll(linkRe)];
+  for (const m of links) {
+    const filePath = decodeURIComponent(m[2]);
+    if (!existsSync(path.join(REPO_DIR, filePath))) {
+      problems.push(`cited file does not exist in the repo: ${filePath}`);
+      continue;
+    }
+    // Confirm the link resolves on GitHub (SHA + path). A 404 means a bad SHA
+    // or a path that isn't on main.
+    try {
+      const res = await fetch(m[0].split('#')[0], { method: 'HEAD', signal: AbortSignal.timeout(8000) });
+      if (res.status >= 400) problems.push(`permalink does not resolve (${res.status}): ${m[0].slice(0, 80)}`);
+    } catch {
+      problems.push(`permalink unreachable: ${m[0].slice(0, 80)}`);
+    }
+  }
+  return problems;
+}
+
+// ── proposal lifecycle ─────────────────────────────────────────────────────────
+async function updateProposal(id, values, { requireState } = {}) {
+  const query = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}` });
+  if (requireState) query.set('state', `eq.${requireState}`);
+  const rows = await supabaseRequest(`proposals?${query}`, {
+    method: 'PATCH',
+    body: values,
+    prefer: 'return=representation',
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function claimQueued(row) {
+  // Atomic queued → drafting; a concurrent worker or a manual disarm loses the race.
+  return updateProposal(row.id, { state: 'drafting' }, { requireState: 'queued' });
+}
+
+async function buildDraftPrompt(issue, comments) {
+  const template = await readFile(DRAFT_PROMPT_FILE, 'utf8');
+  const commentText = (comments || [])
+    .slice(0, 20)
+    .map((c) => `--- comment by ${c.user?.login || '?'} ---\n${c.body || ''}`)
+    .join('\n\n');
+  return (
+    `${template}\n\n` +
+    `## Issue #${issue.number}: ${issue.title}\n\n${issue.body || '(no description)'}\n\n` +
+    (commentText ? `## Existing comments\n\n${commentText}\n` : '')
+  );
+}
+
+async function draftOne(row) {
+  const n = row.issue_number;
+  const claimed = await claimQueued(row);
+  if (!claimed) {
+    log(`#${n} claim skipped — no longer queued`);
+    return;
+  }
+  log(`✍️  #${n} drafting (attempt ${(claimed.draft_attempts || 0) + 1})`);
+
+  await refreshRepo();
+  const { status, data: issue } = await gh(`/repos/${REPO}/issues/${n}`);
+  if (status !== 200 || !issue || typeof issue !== 'object') {
+    await failDraft(claimed, `could not fetch issue (${status})`);
+    return;
+  }
+  if (issue.state !== 'open') {
+    await updateProposal(claimed.id, {
+      state: 'draft',
+      last_error: 'Auto-disarmed: issue is closed.',
+    });
+    log(`🚫 #${n} closed — dropped to draft`);
+    return;
+  }
+  const { data: comments } = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=30`);
+
+  const prompt = await buildDraftPrompt(issue, Array.isArray(comments) ? comments : []);
+  const result = await draftWithValidation(prompt, claimed);
+  if (!result) return; // failure paths handled inside
+
+  const body = result;
+
+  if (DRY_RUN) {
+    log(`🧪 DRY_RUN #${n}: would arm this proposal (${body.length} chars):\n${body.slice(0, 400)}…`);
+    // Return the row to queued so a real run can pick it up later.
+    await updateProposal(claimed.id, { state: 'queued' });
+    return;
+  }
+
+  // Arm: drafting → armed. The sniper stages it and posts on Help Wanted.
+  const armed = await updateProposal(
+    claimed.id,
+    { state: 'armed', body, last_error: null, draft_attempts: (claimed.draft_attempts || 0) + 1 },
+    { requireState: 'drafting' },
+  );
+  if (!armed) {
+    log(`#${n} arm skipped — row changed under us (manual edit?)`);
+    return;
+  }
+  const issueUrl = `https://github.com/${REPO}/issues/${n}`;
+  log(`📝 #${n} armed`);
+  await notify(`📝 Auto-armed ${REPO}#${n} — ${issue.title}\n${issueUrl}`);
+
+  // Fast path: if Help Wanted is already on the issue, the sniper intentionally
+  // ignores the stale label event, so post directly.
+  const hasHW = labelNames(issue.labels).includes(TRIGGER);
+  if (DIRECT_POST && hasHW) {
+    await directPost(armed, issue, body);
+  }
+
+  if (ENRICH) {
+    await enrichOne(armed.id, n, body);
+  }
+}
+
+// Draft, validate, and retry once with validator feedback. Returns the final
+// body on success, or null after handling the failure path.
+async function draftWithValidation(prompt, row) {
+  const n = row.issue_number;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const draft = await runCodex(attempt === 1 ? prompt : `${prompt}\n\n## Fix these problems from your last attempt\n${row._lastProblems}`);
+    if (!draft.ok) {
+      if (draft.usageLimited) {
+        backoffUntil = Date.now() + 15 * 60_000;
+        await updateProposal(row.id, { state: 'queued', last_error: 'Codex usage limit; will retry.' });
+        log(`⏸️  #${n} Codex usage-limited — re-queued, backing off 15m`);
+        await notify(`⏸️ Codex usage limit hit while drafting ${REPO}#${n}; re-queued.`);
+        return null;
+      }
+      await failDraft(row, draft.error);
+      return null;
+    }
+    const problems = await validateProposal(draft.body);
+    if (problems.length === 0) return draft.body;
+    log(`⚠️  #${n} validation failed (attempt ${attempt}): ${problems.join('; ')}`);
+    row._lastProblems = problems.map((p) => `- ${p}`).join('\n');
+    if (attempt === 2) {
+      await updateProposal(row.id, {
+        state: 'draft',
+        body: draft.body, // keep the best attempt for a human to rescue
+        last_error: `Auto-draft failed validation: ${problems.join('; ')}`.slice(0, 300),
+      });
+      await notify(`⚠️ Auto-draft for ${REPO}#${n} failed validation — needs a human.\nhttps://github.com/${REPO}/issues/${n}`);
+      return null;
+    }
+  }
+  return null;
+}
+
+async function failDraft(row, error) {
+  const n = row.issue_number;
+  const attempts = (row.draft_attempts || 0) + 1;
+  if (attempts >= MAX_DRAFT_ATTEMPTS) {
+    await updateProposal(row.id, {
+      state: 'draft',
+      last_error: `Auto-draft failed ${attempts}×: ${error}`.slice(0, 300),
+      draft_attempts: attempts,
+    });
+    log(`❌ #${n} gave up after ${attempts} attempts: ${error}`);
+    await notify(`❌ Auto-draft for ${REPO}#${n} failed ${attempts}×; dropped to draft.`);
+  } else {
+    await updateProposal(row.id, {
+      state: 'queued',
+      last_error: error.slice(0, 300),
+      draft_attempts: attempts,
+    });
+    log(`↻ #${n} draft error (attempt ${attempts}), re-queued: ${error}`);
+  }
+}
+
+async function directPost(row, issue, body) {
+  const n = row.issue_number;
+  const claimed = await updateProposal(row.id, { state: 'posting' }, { requireState: 'armed' });
+  if (!claimed) {
+    log(`#${n} direct-post skipped — not armed`);
+    return;
+  }
+  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
+    method: 'POST',
+    body: { body },
+  });
+  if (status === 201 && data?.html_url) {
+    await updateProposal(row.id, {
+      state: 'posted',
+      github_comment_id: data.id,
+      posted_at: new Date().toISOString(),
+      last_error: null,
+    });
+    log(`✅ #${n} direct-posted → ${data.html_url}`);
+    await notify(`✅ Direct-posted ${REPO}#${n} (already Help Wanted)\n${data.html_url}`);
+  } else {
+    const detail = typeof data === 'string' ? data.slice(0, 200) : JSON.stringify(data ?? null).slice(0, 200);
+    await updateProposal(row.id, { state: 'armed', last_error: `Direct post failed: ${status} ${detail}`.slice(0, 300) });
+    log(`❌ #${n} direct-post failed: ${status} ${detail}`);
+  }
+}
+
+// ── enrichment (Phase C) ─────────────────────────────────────────────────────
+async function enrichOne(id, n, currentBody) {
+  const template = await readFile(ENRICH_PROMPT_FILE, 'utf8');
+  const prompt = template.replace('<<<CURRENT_PROPOSAL>>>', currentBody);
+  await refreshRepo();
+  const draft = await runCodex(prompt);
+  if (!draft.ok) {
+    log(`enrich #${n} skipped: ${draft.error}`);
+    return;
+  }
+  const problems = await validateProposal(draft.body);
+  if (problems.length) {
+    log(`enrich #${n} discarded — validation failed: ${problems.join('; ')}`);
+    return;
+  }
+  if (DRY_RUN) {
+    log(`🧪 DRY_RUN #${n}: would enrich (${draft.body.length} chars)`);
+    return;
+  }
+
+  // Re-read current state: if still armed, patch the body; if already posted,
+  // edit the live GitHub comment. State-filtered so we never clobber a post.
+  const current = await supabaseRequest(
+    `proposals?${new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}`, select: '*' })}`,
+  );
+  const row = Array.isArray(current) ? current[0] : null;
+  if (!row) return;
+
+  if (row.state === 'armed') {
+    const updated = await updateProposal(id, { state: 'armed', body: draft.body, enriched_at: new Date().toISOString() }, { requireState: 'armed' });
+    if (updated) {
+      log(`🧬 #${n} enriched (armed body updated)`);
+      await notify(`🧬 Enriched ${REPO}#${n} — stronger RCA + permalinks.`);
+    }
+  } else if (row.state === 'posted' && row.github_comment_id) {
+    const { status } = await gh(`/repos/${REPO}/issues/comments/${row.github_comment_id}`, {
+      method: 'PATCH',
+      body: { body: draft.body },
+    });
+    if (status === 200) {
+      await updateProposal(id, { enriched_at: new Date().toISOString() });
+      log(`🧬 #${n} enriched (posted comment edited)`);
+      await notify(`🧬 Enriched posted comment on ${REPO}#${n}.`);
+    } else {
+      log(`enrich #${n}: comment edit failed (${status})`);
+    }
+  }
+}
+
+// ── stale recovery ───────────────────────────────────────────────────────────
+async function recoverStaleDrafting() {
+  if (Date.now() - lastStaleSweepAt < STALE_SWEEP_MS) return;
+  lastStaleSweepAt = Date.now();
+  const cutoff = new Date(Date.now() - STALE_DRAFTING_MS).toISOString();
+  const query = new URLSearchParams({
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    state: 'eq.drafting',
+    updated_at: `lt.${cutoff}`,
+    select: 'issue_number',
+  });
+  try {
+    const rows = await supabaseRequest(`proposals?${query}`, {
+      method: 'PATCH',
+      body: { state: 'queued', last_error: 'Recovered stale drafting claim after a worker restart.' },
+      prefer: 'return=representation',
+    });
+    if (Array.isArray(rows) && rows.length) {
+      log(`♻️  re-queued ${rows.length} stale drafting row(s): ${rows.map((r) => `#${r.issue_number}`).join(', ')}`);
+    }
+  } catch (e) {
+    log(`stale sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// ── main loop ────────────────────────────────────────────────────────────────
+async function autoPostEnabled() {
+  const query = new URLSearchParams({
+    select: 'proposal_auto_post',
+    id: `eq.${SUPABASE_USER_ID}`,
+    limit: '1',
+  });
+  const rows = await supabaseRequest(`user_settings?${query}`);
+  return !Array.isArray(rows) || rows[0]?.proposal_auto_post !== false;
+}
+
+async function tick() {
+  if (Date.now() < backoffUntil) return;
+  await recoverStaleDrafting();
+  if (!(await autoPostEnabled())) return; // master kill-switch honored
+
+  const query = new URLSearchParams({
+    select: '*',
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    repo_owner: `ilike.${REPO_OWNER}`,
+    repo_name: `ilike.${REPO_NAME}`,
+    state: 'eq.queued',
+    origin: 'eq.auto',
+    order: 'created_at.asc',
+    limit: '1',
+  });
+  const rows = await supabaseRequest(`proposals?${query}`);
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  await draftOne(rows[0]);
+}
+
+async function loop() {
+  try {
+    await tick();
+  } catch (e) {
+    log(`tick failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  setTimeout(() => void loop(), POLL_INTERVAL_MS);
+}
+
+async function main() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_USER_ID) {
+    console.error('drafter requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_USER_ID');
+    process.exit(1);
+  }
+  await ensureCodexAuth();
+  await ensureRepo();
+  log(
+    `drafter up — repo=${REPO} dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
+      `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
+      `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
+  );
+  void loop();
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+function int(k, d) {
+  const v = process.env[k];
+  return v ? parseInt(v, 10) : d;
+}
+function bool(k, d) {
+  const v = process.env[k];
+  if (v == null) return d;
+  return /^(1|true|yes|on)$/i.test(v);
+}
+
+main();
