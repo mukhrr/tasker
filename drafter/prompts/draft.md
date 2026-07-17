@@ -32,7 +32,8 @@ the investigation using the local checkout:
   a prior PR try to fix something related, is there a regression? Search for
   **similar cases** (`rg` for the same pattern / function / component elsewhere)
   and note whether they share or avoid the bug. Attach a SHA-pinned **permalink**
-  for each piece of evidence.
+  for each piece of evidence — as a **bare URL on its own line** (see Permalink
+  formatting below) so GitHub renders the code-snippet preview.
 - **Solution:** name the exact function/component/action to change and give the
   smallest complete fix. Include a **small illustrative code diff** (a few lines
   of before/after — never a full patch or a reproduced function) so the reviewer
@@ -64,6 +65,19 @@ Key rules from the skill (do not violate):
   The `<path>` MUST be a file you have opened in this checkout and that exists on
   `main` right now — every permalink is checked against the local repo and a
   missing path fails the whole proposal.
+- **Permalink formatting (important):** write every permalink as a **bare URL on
+  its own line** — nothing else on that line, with a blank line before and after.
+  Do NOT wrap it in a `[label](url)` markdown link and do NOT bury it inline inside
+  a sentence. GitHub only expands a permalink into the rich code-snippet PREVIEW
+  when the URL stands alone on its own line. End your sentence, then put the bare
+  URL on the next line. For example, write it like this:
+
+  `` It only considers `IOU` actions whose type is `PAY`: ``
+  (blank line)
+  `https://github.com/Expensify/App/blob/<sha>/src/libs/ReportSecondaryActionUtils.ts#L419-L432`
+  (blank line, then continue the next sentence)
+
+  — NOT inline as `([filter](https://github.com/.../L419-L432))`.
 - Solution: the smallest complete fix for the root cause, plain English, naming the
   exact function/component/action to change. Include a small, illustrative code diff
   (a few lines showing the change) and state why it avoids regressions. Keep diffs
