@@ -24,18 +24,19 @@ async function readBody(req) {
   return body ? JSON.parse(body) : null;
 }
 
-async function runScenario({ name, env, issues, run }) {
+async function runScenario({ name, env, issues, run, settings }) {
   const state = {
     issues, // [{ number, labels: [{name}], updated_at }]
     inserts: [], // POST /rest/v1/proposals bodies that were accepted
     existingKeys: new Set(), // "owner/repo#number" that already have a row
+    settings, // extra user_settings columns (watched_label_groups, excluded_labels)
   };
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
 
     if (url.pathname === '/rest/v1/user_settings') {
-      return json(res, 200, [{ proposal_auto_post: true }]);
+      return json(res, 200, [{ proposal_auto_post: true, ...(state.settings || {}) }]);
     }
     // The sniper's armed-proposal sync (cloud mode) queries armed rows.
     if (url.pathname === '/rest/v1/proposals' && req.method === 'GET') {
@@ -145,21 +146,69 @@ await runScenario({
 // ── scenario 2: exclusion + idempotency across re-scans ──────────────────────
 await runScenario({
   name: 'exclude-and-idempotent',
-  env: { WATCH_GROUPS: 'Help Wanted', EXCLUDE_LABELS: 'reviewing,DeployBlocker' },
-  issues: [{ number: 6001, title: 'seed', labels: L('Help Wanted'), updated_at: iso }],
+  env: { WATCH_GROUPS: 'Bug', EXCLUDE_LABELS: 'reviewing,DeployBlocker' },
+  issues: [{ number: 6001, title: 'seed', labels: L('Bug'), updated_at: iso }],
   run: async (state, { deadline, wait }) => {
     await wait(200); // seed
 
-    // Matches Help Wanted but also carries an excluded label → must be skipped.
-    state.issues.push({ number: 6002, title: 'excluded', labels: L('Help Wanted', 'reviewing'), updated_at: iso });
+    // Matches Bug but also carries an excluded label → must be skipped.
+    state.issues.push({ number: 6002, title: 'excluded', labels: L('Bug', 'reviewing'), updated_at: iso });
     // Clean match.
-    state.issues.push({ number: 6003, title: 'clean', labels: L('Help Wanted'), updated_at: iso });
+    state.issues.push({ number: 6003, title: 'clean', labels: L('Bug'), updated_at: iso });
 
     await deadline(() => state.inserts.some((r) => r.issue_number === 6003), 2000, '#6003 not queued');
     await wait(400); // several more discovery ticks
     assert.ok(!state.inserts.some((r) => r.issue_number === 6002), 'excluded #6002 was queued');
     const count6003 = state.inserts.filter((r) => r.issue_number === 6003).length;
     assert.equal(count6003, 1, `#6003 queued ${count6003} times (should be exactly 1)`);
+  },
+});
+
+// ── scenario 3: extension-synced config overrides the env defaults ───────────
+await runScenario({
+  name: 'extension-config-overrides-env',
+  // Env says watch "Bug"; the extension has synced "Performance" + exclude "reviewing".
+  env: { WATCH_GROUPS: 'Bug', EXCLUDE_LABELS: '' },
+  settings: { watched_label_groups: [['Performance']], excluded_labels: ['reviewing'] },
+  issues: [{ number: 7001, title: 'seed', labels: L('Performance'), updated_at: iso }],
+  run: async (state, { deadline, wait, output }) => {
+    // Startup uses env until the first settings sync adopts the extension config.
+    await deadline(() => output.join('').includes('watch config from extension'), 2000, 'never adopted extension config');
+    await wait(200); // let it re-seed under the new rules
+
+    // A new Performance issue (extension group) must queue; a Bug issue (old env
+    // group, now overridden) must NOT.
+    state.issues.push({ number: 7002, title: 'perf', labels: L('Performance'), updated_at: iso });
+    state.issues.push({ number: 7003, title: 'bug-old-env', labels: L('Bug'), updated_at: iso });
+    // And an excluded one must be skipped.
+    state.issues.push({ number: 7004, title: 'excluded', labels: L('Performance', 'reviewing'), updated_at: iso });
+
+    await deadline(() => state.inserts.some((r) => r.issue_number === 7002), 2000, '#7002 (Performance) not queued');
+    await wait(300);
+    assert.ok(!state.inserts.some((r) => r.issue_number === 7003), '#7003 (Bug, env-only) wrongly queued');
+    assert.ok(!state.inserts.some((r) => r.issue_number === 7004), 'excluded #7004 was queued');
+  },
+});
+
+// ── scenario 4: skip issues that already have Help Wanted / External ─────────
+await runScenario({
+  name: 'skip-help-wanted-and-external',
+  env: { WATCH_GROUPS: 'Bug+daily', EXCLUDE_LABELS: '' },
+  issues: [{ number: 8001, title: 'seed', labels: L('Bug', 'Daily'), updated_at: iso }],
+  run: async (state, { deadline, wait }) => {
+    await wait(200); // seed
+
+    // Matches Bug+daily but already has Help Wanted → too late, must be skipped.
+    state.issues.push({ number: 8002, title: 'already HW', labels: L('Bug', 'Daily', 'Help Wanted'), updated_at: iso });
+    // Matches but already has External → skipped.
+    state.issues.push({ number: 8003, title: 'already External', labels: L('Bug', 'Daily', 'External'), updated_at: iso });
+    // Clean pre-HW match → queued.
+    state.issues.push({ number: 8004, title: 'pre-HW', labels: L('Bug', 'Daily'), updated_at: iso });
+
+    await deadline(() => state.inserts.some((r) => r.issue_number === 8004), 2000, '#8004 (pre-HW) not queued');
+    await wait(300);
+    assert.ok(!state.inserts.some((r) => r.issue_number === 8002), '#8002 (has Help Wanted) wrongly queued');
+    assert.ok(!state.inserts.some((r) => r.issue_number === 8003), '#8003 (has External) wrongly queued');
   },
 });
 

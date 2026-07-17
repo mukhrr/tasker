@@ -154,6 +154,14 @@ export interface PostProposalNowRequest {
   force?: boolean;
 }
 
+// Sync the extension's watched label groups + excluded labels to Supabase so the
+// server-side sniper queues auto-drafts by the same config the user edits here.
+export interface SyncLabelConfigRequest {
+  type: 'SYNC_LABEL_CONFIG';
+  watchedLabelGroups: string[][];
+  excludedLabels: string[];
+}
+
 export interface GetAutoPostRequest {
   type: 'GET_AUTOPOST';
 }
@@ -194,6 +202,7 @@ export type MessageRequest =
   | DisarmProposalRequest
   | EnqueueAutoDraftRequest
   | CancelAutoDraftRequest
+  | SyncLabelConfigRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
   | SetAutoPostRequest

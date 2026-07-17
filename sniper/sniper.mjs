@@ -85,16 +85,23 @@ const ALERT_FRESH_MS = int('ALERT_FRESH_MS', 600000); // ignore label events old
 // groups) — the exact semantics the extension uses. Matching runs on the
 // discovery page we already fetch, so it costs no extra GitHub requests.
 const AUTO_DRAFT = bool('AUTO_DRAFT', false);
-const WATCH_GROUPS = (process.env.WATCH_GROUPS || '')
+// Env-provided defaults. The extension can override these by syncing its own
+// watched groups / excluded labels to Supabase (see activeWatchGroups below).
+const ENV_WATCH_GROUPS = (process.env.WATCH_GROUPS || '')
   .split('|')
   .map((g) => g.split('+').map((l) => l.trim().toLowerCase()).filter(Boolean))
   .filter((g) => g.length > 0);
-const EXCLUDE_LABELS = new Set(
+const ENV_EXCLUDE_LABELS = new Set(
   (process.env.EXCLUDE_LABELS || '')
     .split(',')
     .map((l) => l.trim().toLowerCase())
     .filter(Boolean),
 );
+// Live config used for matching. Replaced by the extension's synced config when
+// present in user_settings; otherwise the env defaults above.
+let activeWatchGroups = ENV_WATCH_GROUPS;
+let activeExcludeLabels = ENV_EXCLUDE_LABELS;
+let watchConfigSource = ENV_WATCH_GROUPS.length ? 'env' : 'none';
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -228,12 +235,15 @@ async function syncArmedProposals() {
   }
 
   const settingsQuery = new URLSearchParams({
-    select: 'proposal_auto_post',
+    select: 'proposal_auto_post,watched_label_groups,excluded_labels',
     id: `eq.${SUPABASE_USER_ID}`,
     limit: '1',
   });
   const settingsRows = await supabaseRequest(`user_settings?${settingsQuery}`);
   const autoPostEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.proposal_auto_post !== false;
+  // Follow the extension's watched groups / excluded labels when it has synced
+  // them; otherwise stay on the env defaults.
+  applyWatchConfig(Array.isArray(settingsRows) ? settingsRows[0] : null);
 
   const query = new URLSearchParams({
     select: 'id,user_id,repo_owner,repo_name,issue_number,body,state,updated_at',
@@ -416,15 +426,60 @@ async function releasePreClaim(n) {
 
 // ── auto-draft: queue label-matched issues for the drafter worker ─────────────
 function autoDraftEnabled() {
-  return AUTO_DRAFT && CLOUD_MODE && WATCH_GROUPS.length > 0;
+  return AUTO_DRAFT && CLOUD_MODE && activeWatchGroups.length > 0;
 }
 
 // Extension-identical matching: AND within a group, OR across groups, and drop
 // the issue if it carries ANY excluded label. Runs against the labels already
 // present on the discovery page (no extra request).
 function matchesWatchGroups(labelSet) {
-  if (EXCLUDE_LABELS.size && [...labelSet].some((l) => EXCLUDE_LABELS.has(l))) return false;
-  return WATCH_GROUPS.some((group) => group.every((label) => labelSet.has(label)));
+  // Draft only in the PRE-Help-Wanted window. An issue that already carries
+  // Help Wanted or External is past the point where a pre-armed draft helps the
+  // race — the sniper's job there is to post, not to start drafting. (The manual
+  // "Run Auto-pilot" button bypasses this and can still draft such issues.)
+  if (labelSet.has(TRIGGER) || labelSet.has(LOCK)) return false;
+  if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
+  return activeWatchGroups.some((group) => group.every((label) => labelSet.has(label)));
+}
+
+// Adopt the extension's synced watch config from a user_settings row, falling
+// back to the env defaults when it hasn't synced anything. Called each settings
+// fetch so edits in the extension take effect within ~1 poll.
+function applyWatchConfig(row) {
+  const rawGroups = row?.watched_label_groups;
+  const rawExcluded = row?.excluded_labels;
+  if (Array.isArray(rawGroups) && rawGroups.length > 0) {
+    const groups = rawGroups
+      .map((g) => (Array.isArray(g) ? g.map((l) => String(l).trim().toLowerCase()).filter(Boolean) : []))
+      .filter((g) => g.length > 0);
+    if (groups.length > 0) {
+      const excluded = new Set(
+        (Array.isArray(rawExcluded) ? rawExcluded : []).map((l) => String(l).trim().toLowerCase()).filter(Boolean),
+      );
+      const changed =
+        watchConfigSource !== 'extension' ||
+        JSON.stringify(groups) !== JSON.stringify(activeWatchGroups) ||
+        JSON.stringify([...excluded]) !== JSON.stringify([...activeExcludeLabels]);
+      activeWatchGroups = groups;
+      activeExcludeLabels = excluded;
+      watchConfigSource = 'extension';
+      if (changed) {
+        queued.clear(); // re-evaluate the page against the new rules
+        queueSeeded = false;
+        log(`🧩 watch config from extension — groups=[${groups.map((g) => g.join('+')).join('|')}] excl=[${[...excluded].join(',')}]`);
+      }
+      return;
+    }
+  }
+  // No synced config — revert to env defaults if we had adopted the extension's.
+  if (watchConfigSource === 'extension') {
+    activeWatchGroups = ENV_WATCH_GROUPS;
+    activeExcludeLabels = ENV_EXCLUDE_LABELS;
+    watchConfigSource = ENV_WATCH_GROUPS.length ? 'env' : 'none';
+    queued.clear();
+    queueSeeded = false;
+    log('🧩 watch config reverted to env defaults (extension synced none)');
+  }
 }
 
 async function enqueueForDrafting(issue) {
@@ -1148,10 +1203,13 @@ function main() {
     log(`ℹ️  instant "${TRIGGER_NAME}" alerts are idle — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable`);
   }
   if (AUTO_DRAFT && !autoDraftEnabled()) {
-    const why = !CLOUD_MODE ? 'Supabase is not configured' : 'WATCH_GROUPS is empty';
+    const why = !CLOUD_MODE ? 'Supabase is not configured' : 'no watched groups yet (env empty; awaiting extension sync)';
     log(`ℹ️  auto-draft is idle — ${why}`);
   } else if (autoDraftEnabled()) {
-    log(`🧠 auto-draft queueing on — groups=[${WATCH_GROUPS.map((g) => g.join('+')).join('|')}] excl=[${[...EXCLUDE_LABELS].join(',')}]`);
+    log(
+      `🧠 auto-draft queueing on (${watchConfigSource}) — ` +
+        `groups=[${activeWatchGroups.map((g) => g.join('+')).join('|')}] excl=[${[...activeExcludeLabels].join(',')}]`,
+    );
   }
   if (DISCOVER && !DRY_RUN) {
     log(

@@ -90,6 +90,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleEnqueueAutoDraft(msg.owner, msg.repo, msg.number);
     case 'CANCEL_AUTO_DRAFT':
       return handleCancelAutoDraft(msg.owner, msg.repo, msg.number);
+    case 'SYNC_LABEL_CONFIG':
+      return handleSyncLabelConfig(msg.watchedLabelGroups, msg.excludedLabels);
     case 'POST_PROPOSAL_NOW':
       return handlePostProposalNow(msg.proposalId, msg.force === true);
     case 'GET_AUTOPOST':
@@ -815,6 +817,33 @@ async function handleSetAutoPost(enabled: boolean): Promise<MessageResponse<{ en
   }
 
   return { ok: true, data: { enabled } };
+}
+
+// Mirror the watched groups / excluded labels to user_settings so the sniper's
+// auto-draft queueing follows the extension config (single source of truth).
+async function handleSyncLabelConfig(
+  watchedLabelGroups: string[][],
+  excludedLabels: string[],
+): Promise<MessageResponse<void>> {
+  if (!Array.isArray(watchedLabelGroups) || !Array.isArray(excludedLabels)) {
+    return { ok: false, error: 'Invalid label config' };
+  }
+  try {
+    const supabase = getSupabaseClient();
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session.session?.user?.id;
+    if (!userId) return { ok: false, error: 'Not authenticated' };
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert(
+        { id: userId, watched_label_groups: watchedLabelGroups, excluded_labels: excludedLabels },
+        { onConflict: 'id' },
+      );
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Sync failed' };
+  }
 }
 
 async function handlePostProposalNow(proposalId: string, force = false): Promise<MessageResponse<Proposal>> {

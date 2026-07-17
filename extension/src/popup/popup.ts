@@ -457,6 +457,14 @@ $('#settings-save-btn').addEventListener('click', async () => {
     const msg: ReschedulePollerRequest = { type: 'RESCHEDULE_POLLER' };
     void chrome.runtime.sendMessage(msg);
 
+    // Push the watched groups / excluded labels to Supabase so the server-side
+    // auto-draft queueing follows the same config (single source of truth).
+    void chrome.runtime.sendMessage({
+      type: 'SYNC_LABEL_CONFIG',
+      watchedLabelGroups: watchedLabelGroups.filter((g) => g.length > 0),
+      excludedLabels,
+    });
+
     showStatus('Settings saved', 'ok');
   } catch (err) {
     showStatus((err as Error).message ?? 'Failed to save', 'error');
