@@ -12,7 +12,10 @@ export interface DashboardStats {
   monthlyActivity: { month: string; created: number; completed: number }[];
 }
 
-export function useDashboardStats(tasks: Task[]): DashboardStats {
+// Accepts any row shape carrying the stats fields (full Task or DashboardTask)
+export function useDashboardStats(
+  tasks: Pick<Task, 'status_group' | 'amount' | 'payment_date' | 'created_at'>[]
+): DashboardStats {
   return useMemo(() => {
     const completeTasks = tasks.filter((t) => t.status_group === 'complete');
     const inProgressTasks = tasks.filter(

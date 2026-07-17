@@ -7,35 +7,58 @@ import type { Task, TaskStatus } from '@/types/database';
 
 const supabase = createClient();
 
-export function useTasks(userId: string) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+// Minimal row shape the hook needs: realtime merge (id) + repo/issue dedup keys.
+type TaskListItem = Pick<
+  Task,
+  'id' | 'issue_url' | 'repo_owner' | 'repo_name' | 'issue_number' | 'created_at'
+>;
+
+// Deduplicate by repo+issue number (keep the first — most recent by created_at)
+export function dedupeTasks<T extends TaskListItem>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((t) => {
+    const key = t.repo_owner && t.repo_name && t.issue_number
+      ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
+      : t.issue_url.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function useTasks<T extends TaskListItem = Task>(
+  userId: string,
+  options?: { initialTasks?: T[]; columns?: string }
+) {
+  const [tasks, setTasks] = useState<T[]>(() =>
+    options?.initialTasks ? dedupeTasks(options.initialTasks) : []
+  );
+  const [loading, setLoading] = useState(!options?.initialTasks);
   const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
   const channelId = useRef(`tasks-realtime-${crypto.randomUUID()}`);
+  const seeded = useRef(!!options?.initialTasks);
+  const columns = options?.columns ?? '*';
 
   const fetchTasks = useCallback(async () => {
     const { data } = await supabase
       .from('tasks')
-      .select('*')
+      .select(columns)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    // Deduplicate by repo+issue number (keep the first — most recent by created_at)
-    const seen = new Set<string>();
-    const unique = ((data as Task[]) ?? []).filter((t) => {
-      const key = t.repo_owner && t.repo_name && t.issue_number
-        ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
-        : t.issue_url.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    setTasks(unique);
+    // Rows match T because `columns` covers it (or is '*'); the client is untyped
+    setTasks(dedupeTasks(((data as unknown as T[]) ?? [])));
     setLoading(false);
-  }, [userId]);
+  }, [userId, columns]);
 
   useEffect(() => {
-    fetchTasks();
+    // Server-seeded data is fresh (RSC payload refetches per navigation);
+    // skip the duplicate mount fetch but refetch if userId ever changes.
+    if (seeded.current) {
+      seeded.current = false;
+    } else {
+      fetchTasks();
+    }
 
     const channel = supabase
       .channel(channelId.current)
@@ -49,15 +72,16 @@ export function useTasks(userId: string) {
         },
         (payload) => {
           const { eventType } = payload;
+          // Realtime payloads always carry the full row — a superset of T
           if (eventType === 'INSERT') {
-            const newTask = payload.new as Task;
+            const newTask = payload.new as unknown as T;
             setTasks((prev) => {
               // Skip if already present (e.g. from optimistic add)
               if (prev.some((t) => t.id === newTask.id)) return prev;
               return [newTask, ...prev];
             });
           } else if (eventType === 'UPDATE') {
-            const updated = payload.new as Task;
+            const updated = payload.new as unknown as T;
             setTasks((prev) =>
               prev.map((t) => (t.id === updated.id ? updated : t))
             );
@@ -146,7 +170,8 @@ export function useTasks(userId: string) {
       updated_at: new Date().toISOString(),
     };
 
-    setTasks((prev) => [optimistic, ...prev]);
+    // CRUD paths only run from the task table, where T = Task
+    setTasks((prev) => [optimistic as unknown as T, ...prev]);
     setSyncingTaskIds((prev) => new Set(prev).add(tempId));
 
     const { data, error } = await supabase
@@ -166,7 +191,7 @@ export function useTasks(userId: string) {
     }
 
     // Replace optimistic with real task
-    const realTask = data as Task;
+    const realTask = data as unknown as T & { id: string };
     setTasks((prev) => prev.map((t) => (t.id === tempId ? realTask : t)));
 
     // Transfer syncing state from temp to real ID
@@ -189,7 +214,7 @@ export function useTasks(userId: string) {
 
     // Optimistic update
     setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+      prev.map((t) => (t.id === id ? ({ ...t, ...updates } as T) : t))
     );
 
     const { error } = await supabase.from('tasks').update(updates).eq('id', id);
@@ -211,7 +236,7 @@ export function useTasks(userId: string) {
 
   const archiveTask = async (id: string, archived: boolean) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, archived } : t))
+      prev.map((t) => (t.id === id ? ({ ...t, archived } as T) : t))
     );
 
     const { error } = await supabase

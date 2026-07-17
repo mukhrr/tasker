@@ -40,6 +40,25 @@ export interface Task {
   updated_at: string;
 }
 
+// Narrow slice of Task fetched for the dashboard: the stats fields plus the
+// keys needed for realtime merge and repo+issue dedup. Keep the column list
+// below in sync with this type.
+export type DashboardTask = Pick<
+  Task,
+  | 'id'
+  | 'issue_url'
+  | 'repo_owner'
+  | 'repo_name'
+  | 'issue_number'
+  | 'status_group'
+  | 'amount'
+  | 'payment_date'
+  | 'created_at'
+>;
+
+export const DASHBOARD_TASK_COLUMNS =
+  'id, issue_url, repo_owner, repo_name, issue_number, status_group, amount, payment_date, created_at';
+
 export interface CustomColumn {
   id: string;
   user_id: string;

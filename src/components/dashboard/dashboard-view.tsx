@@ -1,15 +1,34 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useTasks } from '@/hooks/use-tasks';
 import { useDashboardStats } from '@/hooks/use-dashboard-stats';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard } from './stat-card';
-import { EarningsChart } from './earnings-chart';
 import { StatusChart } from './status-chart';
-import { ActivityChart } from './activity-chart';
+import { DASHBOARD_TASK_COLUMNS, type DashboardTask } from '@/types/database';
 
-export function DashboardView({ userId }: { userId: string }) {
-  const { tasks, loading } = useTasks(userId);
+// Lazy-load the recharts-based charts so recharts stays out of the initial bundle
+const EarningsChart = dynamic(
+  () => import('./earnings-chart').then((m) => m.EarningsChart),
+  { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
+);
+const ActivityChart = dynamic(
+  () => import('./activity-chart').then((m) => m.ActivityChart),
+  { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
+);
+
+export function DashboardView({
+  userId,
+  initialTasks,
+}: {
+  userId: string;
+  initialTasks?: DashboardTask[];
+}) {
+  const { tasks, loading } = useTasks<DashboardTask>(userId, {
+    initialTasks,
+    columns: DASHBOARD_TASK_COLUMNS,
+  });
   const stats = useDashboardStats(tasks);
 
   if (loading) {

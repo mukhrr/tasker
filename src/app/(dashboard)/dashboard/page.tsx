@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
-import { getUser } from '@/lib/supabase/server';
+import { createClient, getUser } from '@/lib/supabase/server';
 import { DashboardView } from '@/components/dashboard/dashboard-view';
+import { DASHBOARD_TASK_COLUMNS, type DashboardTask } from '@/types/database';
 
 export default async function DashboardPage() {
   const user = await getUser();
@@ -8,6 +9,13 @@ export default async function DashboardPage() {
   if (!user) {
     redirect('/auth/login');
   }
+
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('tasks')
+    .select(DASHBOARD_TASK_COLUMNS)
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
 
   return (
     <div>
@@ -17,7 +25,11 @@ export default async function DashboardPage() {
           Overview of your bounty earnings and task activity
         </p>
       </div>
-      <DashboardView userId={user.id} />
+      {/* undefined (query error) falls back to the client-side fetch */}
+      <DashboardView
+        userId={user.id}
+        initialTasks={(data as DashboardTask[] | null) ?? undefined}
+      />
     </div>
   );
 }
