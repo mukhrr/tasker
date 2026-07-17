@@ -57,7 +57,7 @@ const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON || ''; // seed for auth.json
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 const CODEX_MODEL = process.env.CODEX_MODEL || ''; // '' → account default
 const CODEX_UNSAFE_SANDBOX = bool('CODEX_UNSAFE_SANDBOX', false); // Landlock fallback
-const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 600_000); // 10 min per pass
+const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 900_000); // 15 min — quality drafts investigate deeply
 const REPO_URL = process.env.REPO_URL || `https://github.com/${REPO}`;
 const REPO_DIR = process.env.REPO_DIR || path.join(DATA_DIR, REPO_NAME || 'App');
 // The expensify-proposal-writer skill (bundled under drafter/skills) is installed
@@ -494,7 +494,11 @@ async function draftWithValidation(prompt, row) {
         await notify(`⏸️ Codex usage limit hit while drafting ${REPO}#${n}; re-queued.`);
         return null;
       }
-      await failDraft(row, draft.error);
+      // A timeout won't get better on retry — it'll just burn another full
+      // CODEX_TIMEOUT_MS. Treat it as terminal (drop to draft) rather than
+      // re-queueing for up to MAX_DRAFT_ATTEMPTS.
+      const isTimeout = /timed out/i.test(draft.error);
+      await failDraft(row, draft.error, { terminal: isTimeout });
       return null;
     }
     const problems = await validateProposal(draft.body);
@@ -514,17 +518,17 @@ async function draftWithValidation(prompt, row) {
   return null;
 }
 
-async function failDraft(row, error) {
+async function failDraft(row, error, { terminal = false } = {}) {
   const n = row.issue_number;
   const attempts = (row.draft_attempts || 0) + 1;
-  if (attempts >= MAX_DRAFT_ATTEMPTS) {
+  if (terminal || attempts >= MAX_DRAFT_ATTEMPTS) {
     await updateProposal(row.id, {
       state: 'draft',
-      last_error: `Auto-draft failed ${attempts}×: ${error}`.slice(0, 300),
+      last_error: `${terminal ? 'Auto-draft stopped' : `Auto-draft failed ${attempts}×`}: ${error}`.slice(0, 300),
       draft_attempts: attempts,
     });
-    log(`❌ #${n} gave up after ${attempts} attempts: ${error}`);
-    await notify(`❌ Auto-draft for ${REPO}#${n} failed ${attempts}×; dropped to draft.`);
+    log(`❌ #${n} ${terminal ? 'terminal error' : `gave up after ${attempts} attempts`}: ${error}`);
+    await notify(`❌ Auto-draft for ${REPO}#${n} stopped (${error.slice(0, 80)}); dropped to draft.`);
   } else {
     await updateProposal(row.id, {
       state: 'queued',

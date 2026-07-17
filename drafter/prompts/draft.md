@@ -3,6 +3,12 @@ bounty against other contributors, so speed matters. You have the Expensify/App
 repository checked out at the current working directory — investigate with bash,
 `rg`, git, and file reads.
 
+Work fast — aim to finish in a few minutes, not many. Follow the skill's speed
+bias: find ONE credible root cause and ONE focused solution. Include a small
+number of permalinks (1–3) for the key offending lines — do not exhaustively
+trace every call site or resolve a permalink for every reference. A clear,
+correct, well-structured proposal beats an exhaustive one, and being early matters.
+
 Follow the **expensify-proposal-writer** skill exactly. Read these files first and
 apply them as your instructions and rubric:
 
