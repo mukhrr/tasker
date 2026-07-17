@@ -90,6 +90,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleEnqueueAutoDraft(msg.owner, msg.repo, msg.number);
     case 'CANCEL_AUTO_DRAFT':
       return handleCancelAutoDraft(msg.owner, msg.repo, msg.number);
+    case 'CLEAR_PROPOSAL':
+      return handleClearProposal(msg.owner, msg.repo, msg.number);
     case 'SYNC_LABEL_CONFIG':
       return handleSyncLabelConfig(msg.watchedLabelGroups, msg.excludedLabels);
     case 'POST_PROPOSAL_NOW':
@@ -783,6 +785,44 @@ async function handleCancelAutoDraft(
     .single();
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: data as Proposal };
+}
+
+// Clear a proposal: delete the row entirely so the widget returns to its empty
+// "no proposal yet" state. Refused while the server worker owns the row mid-flight
+// (drafting/posting) so we don't delete a row out from under an in-progress write;
+// the user should Cancel an auto-draft first. Deleting a 'posted' row only removes
+// the Tasker record — the GitHub comment itself is untouched.
+async function handleClearProposal(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<void>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data: existing, error: readErr } = await supabase
+    .from('proposals')
+    .select('id, state')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!existing) return { ok: true }; // already clear — idempotent success
+
+  const s = existing.state as ProposalState;
+  if (s === 'drafting' || s === 'posting') {
+    return { ok: false, error: `Proposal is ${s} — cancel it first, then clear` };
+  }
+
+  const { error } = await supabase.from('proposals').delete().eq('id', existing.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 // ── Proposal controls shared by the popup, manual post, and Railway worker ──

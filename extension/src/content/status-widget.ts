@@ -604,6 +604,17 @@ export class StatusWidget {
           </div>
         </div>
       `;
+      // Clear only removes the Tasker record — the posted GitHub comment stays.
+      const clearRow = document.createElement('div');
+      clearRow.className = 'proposal-actions';
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'proposal-btn';
+      clearBtn.textContent = this.proposalBusy ? 'Clearing…' : 'Clear from Tasker';
+      clearBtn.disabled = this.proposalBusy;
+      clearBtn.title = 'Remove this record from Tasker. The posted GitHub comment is not deleted.';
+      clearBtn.addEventListener('click', () => void this.clearProposal());
+      clearRow.appendChild(clearBtn);
+      body.appendChild(clearRow);
       section.appendChild(body);
       this.root.appendChild(section);
       return;
@@ -726,6 +737,21 @@ export class StatusWidget {
       postRow.appendChild(postNowBtn);
       body.appendChild(postRow);
       postNowBtnRef = postNowBtn;
+    }
+
+    // Clear draft — delete the saved row so the panel returns to its empty state.
+    // Shown only when something is actually persisted (there is a row to clear).
+    if (this.proposal) {
+      const clearRow = document.createElement('div');
+      clearRow.className = 'proposal-actions';
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'proposal-btn';
+      clearBtn.textContent = this.proposalBusy ? 'Clearing…' : 'Clear draft';
+      clearBtn.disabled = this.proposalBusy;
+      clearBtn.title = 'Delete this saved proposal from Tasker and start over.';
+      clearBtn.addEventListener('click', () => void this.clearProposal());
+      clearRow.appendChild(clearBtn);
+      body.appendChild(clearRow);
     }
 
     // Update button enable-state live as the user types — without re-rendering
@@ -865,6 +891,32 @@ export class StatusWidget {
       this.stopProposalPoll();
     } else {
       this.error = res.error ?? 'Could not cancel';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  // Clear draft: delete the proposals row from the DB and reset the panel to its
+  // empty state. Refused server-side while a draft/post is in flight.
+  private async clearProposal(): Promise<void> {
+    if (this.proposalBusy) return;
+    if (!confirm('Clear this proposal? This deletes the saved draft from Tasker.')) return;
+    this.proposalBusy = true;
+    this.render();
+    const res = await sendMessage<MessageResponse<void>>({
+      type: 'CLEAR_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.proposalBusy = false;
+    if (res.ok) {
+      this.proposal = null;
+      this.proposalDraftBody = '';
+      this.proposalNotice = null;
+      this.stopProposalPoll();
+    } else {
+      this.error = res.error ?? 'Could not clear';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();

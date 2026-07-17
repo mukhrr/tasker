@@ -145,6 +145,16 @@ export interface CancelAutoDraftRequest {
   number: number;
 }
 
+// "Clear draft" deletes the proposals row from the DB so the widget returns to
+// its empty state. Refused while the server is mid-flight (drafting/posting) to
+// avoid racing the worker; cancel an auto-draft first.
+export interface ClearProposalRequest {
+  type: 'CLEAR_PROPOSAL';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 // Manual "Post now" asks the background to claim the proposal and post it.
 export interface PostProposalNowRequest {
   type: 'POST_PROPOSAL_NOW';
@@ -202,6 +212,7 @@ export type MessageRequest =
   | DisarmProposalRequest
   | EnqueueAutoDraftRequest
   | CancelAutoDraftRequest
+  | ClearProposalRequest
   | SyncLabelConfigRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
