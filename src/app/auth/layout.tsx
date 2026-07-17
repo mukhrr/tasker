@@ -1,6 +1,13 @@
 import Image from 'next/image';
 import Link from 'next/link';
 
+// Render the auth pages on-demand instead of statically prerendering them. They
+// create a Supabase browser client during render, so build-time prerendering
+// instantiates it with build-time env — a rare unreadable-env hiccup there fails
+// the whole build. Rendering per request (env always present) avoids that, and
+// these session-dependent pages don't benefit from static prerendering anyway.
+export const dynamic = 'force-dynamic';
+
 export default function AuthLayout({
   children,
 }: {
