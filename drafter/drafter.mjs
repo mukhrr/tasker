@@ -272,6 +272,30 @@ async function latestCodexSession() {
   return null;
 }
 
+// The environment handed to the Codex subprocess. Codex runs model-authored
+// shell commands (and, when the container's bubblewrap sandbox is unavailable,
+// runs them un-sandboxed), while the issue text it works from is untrusted. So
+// Tasker's own secrets must never be reachable from that process's environment —
+// a prompt injection in an issue must not be able to read the Supabase
+// service-role key, GitHub token, or Telegram token. Codex authenticates from
+// CODEX_HOME/auth.json on disk, not from the environment, so stripping these is
+// safe. (auth.json itself still lives on the volume; this reduces, not
+// eliminates, the un-sandboxed blast radius — hence keep the container isolated.)
+const CODEX_ENV_DENYLIST = [
+  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_URL',
+  'SUPABASE_USER_ID',
+  'GITHUB_TOKEN',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'CODEX_AUTH_JSON',
+];
+function codexSubprocessEnv() {
+  const env = { ...process.env, CODEX_HOME };
+  for (const k of CODEX_ENV_DENYLIST) delete env[k];
+  return env;
+}
+
 async function runCodex(prompt, { threadName } = {}) {
   const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
   // `codex exec` is non-interactive by design and does not accept the `-a`
@@ -291,7 +315,7 @@ async function runCodex(prompt, { threadName } = {}) {
   args.push(prompt);
 
   const res = await runCodexProcess(CODEX_BIN, args, {
-    env: { CODEX_HOME },
+    env: codexSubprocessEnv(),
     timeoutMs: CODEX_TIMEOUT_MS,
     outFile,
   });
@@ -333,7 +357,9 @@ async function runCodex(prompt, { threadName } = {}) {
 function runCodexProcess(cmd, args, { env, timeoutMs, outFile } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
-      env: { ...process.env, ...env },
+      // env is a complete, pre-scrubbed environment (see codexSubprocessEnv) — do
+      // NOT merge process.env back in, or the secrets we removed would return.
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
