@@ -308,6 +308,16 @@ function resumeHint(sessionId) {
   return `\nResume the Codex session:\nCODEX_HOME=${CODEX_HOME} codex exec resume ${sessionId} "<your follow-up>"`;
 }
 
+// A short, phone-readable excerpt of the drafted proposal for the "ready" ping.
+// Strips the boilerplate headings so the preview leads with actual content.
+function proposalPreview(body, max = 700) {
+  const text = (body || '')
+    .replace(/^##\s*Proposal\s*/i, '')
+    .replace(/^###\s+/gm, '▸ ')
+    .trim();
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
 // ── validator ──────────────────────────────────────────────────────────────────
 const REQUIRED_HEADINGS = [
   '### What is the root cause of that problem?',
@@ -436,7 +446,10 @@ async function draftOne(row) {
   }
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
   log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
-  await notify(`📝 Auto-armed ${REPO}#${n} — ${issue.title}\n${issueUrl}${resumeHint(sessionId)}`);
+  await notify(
+    `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}\n\n` +
+      `${proposalPreview(body)}${resumeHint(sessionId)}`,
+  );
 
   // Fast path: if Help Wanted is already on the issue, the sniper intentionally
   // ignores the stale label event, so post directly.
