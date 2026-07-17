@@ -604,17 +604,41 @@ export class StatusWidget {
           </div>
         </div>
       `;
+      const postedActions = document.createElement('div');
+      postedActions.className = 'proposal-actions';
+      // Copy the posted proposal body — handy for reusing it on similar issues
+      // or pasting into an edit of the live comment.
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'proposal-btn';
+      copyBtn.textContent = 'Copy proposal';
+      copyBtn.disabled = !this.proposal?.body;
+      copyBtn.title = 'Copy the posted proposal text to the clipboard.';
+      copyBtn.addEventListener('click', () => {
+        const text = this.proposal?.body ?? '';
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            copyBtn.textContent = 'Copied ✓';
+          })
+          .catch(() => {
+            copyBtn.textContent = 'Copy failed';
+          })
+          .finally(() => {
+            setTimeout(() => {
+              copyBtn.textContent = 'Copy proposal';
+            }, 1500);
+          });
+      });
+      postedActions.appendChild(copyBtn);
       // Clear only removes the Tasker record — the posted GitHub comment stays.
-      const clearRow = document.createElement('div');
-      clearRow.className = 'proposal-actions';
       const clearBtn = document.createElement('button');
       clearBtn.className = 'proposal-btn';
       clearBtn.textContent = this.proposalBusy ? 'Clearing…' : 'Clear from Tasker';
       clearBtn.disabled = this.proposalBusy;
       clearBtn.title = 'Remove this record from Tasker. The posted GitHub comment is not deleted.';
       clearBtn.addEventListener('click', () => void this.clearProposal());
-      clearRow.appendChild(clearBtn);
-      body.appendChild(clearRow);
+      postedActions.appendChild(clearBtn);
+      body.appendChild(postedActions);
       section.appendChild(body);
       this.root.appendChild(section);
       return;
