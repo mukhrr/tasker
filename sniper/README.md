@@ -35,12 +35,26 @@ rivals. The worker instead tracks GitHub's clock from response `Date` headers
 (tight polling observes a second rollover every second, pinning the boundary to
 within one poll interval) and sleeps **exactly until the second after the Help
 Wanted second, plus `POST_BOUNDARY_MARGIN_MS`** — firing immediately when that
-boundary has already passed. The Supabase claim runs concurrently with the wait,
-so a slow claim never delays the POST.
+boundary has already passed. The armed→posting Supabase claim happens when the
+tight window **opens** (pre-claim, using the External head start), so no
+database round-trip remains between Help Wanted and the comment POST. A window
+that expires without Help Wanted releases the claim, and claims orphaned by a
+crash or redeploy self-heal back to `armed` within ~3 minutes.
 
 After each live snipe the worker fetches the issue timeline (~10s later) and
 logs/notifies a race report: your position among post-HW comments, who beat you
 and by how much, and whether you landed in the same second as the label.
+
+### Instant Help Wanted alerts
+
+With `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` set, the discovery loop also
+Telegram-alerts every issue that **newly gains** the trigger label (~1–2s after
+it lands) — so you can rush in and arm a proposal. The browser extension's
+notifier is limited by Chrome's 30s alarm floor plus service-worker cold
+starts; the server-side alert replaces it. Alerts verify the actual label
+event (a comment bumping an old Help Wanted issue never alerts), fire at most
+once per issue, skip issues you already have armed (those get the snipe ping),
+and never delay the lock/fire hot path. Disable with `ALERT_NEW_TRIGGER=false`.
 
 The proposal body is loaded and cached when the issue is first tracked, so the
 trigger path does no disk I/O. Poll requests never overlap; if a GitHub response
@@ -161,6 +175,8 @@ rate-limited`, lower `REQUEST_BUDGET_PER_MIN` and/or raise `TIGHT_INTERVAL_MS`
 polling is self-throttling — raise the budget only if you are far from GitHub's
 ~900 points/min secondary limit.
 
-Use the `🔬 race:` reports to tune `POST_BOUNDARY_MARGIN_MS`: if reports show
-rivals consistently landing between Help Wanted and you, lower the margin
-toward ~100; if you ever see the same-second warning, raise it.
+Tune `POST_BOUNDARY_MARGIN_MS` (default 75) with two data sources: the
+`stamp=` value in `✅ sniped` logs (`0s` = stamped in the target second,
+`-1s` = same second as the label → raise the margin, `+1s` = a second late →
+lower it or chase the post latency) and the `🔬 race:` reports showing who
+landed between Help Wanted and you.

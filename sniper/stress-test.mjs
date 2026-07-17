@@ -25,6 +25,7 @@ let labelPolls = 0;
 let commentPosts = 0;
 let firstPostAt = 0;
 let successfulPostAt = 0;
+let postingClaimedAt = 0;
 
 function json(res, status, data, headers = {}) {
   res.writeHead(status, { 'content-type': 'application/json', ...headers });
@@ -50,7 +51,14 @@ const server = createServer(async (req, res) => {
     if (url.searchParams.get('state') === 'eq.armed' && proposal.state !== 'armed') {
       return json(res, 200, []);
     }
-    Object.assign(proposal, await readBody(req));
+    // stale-claim recovery / pre-claim release target `posting` rows; the mock
+    // has no stale rows, and a live pre-claim must not be reverted mid-test
+    if (url.searchParams.get('state') === 'eq.posting') {
+      return json(res, 200, []);
+    }
+    const body = await readBody(req);
+    if (body?.state === 'posting' && postingClaimedAt === 0) postingClaimedAt = Date.now();
+    Object.assign(proposal, body);
     return json(res, 200, req.headers.prefer === 'return=representation' ? [proposal] : null);
   }
 
@@ -136,6 +144,9 @@ try {
   updatedAt = externalAt;
   events = [{ event: 'labeled', label: { name: 'External' }, created_at: externalAt }];
   await deadline(() => labelPolls > 0, 1000, 'External event did not open tight polling');
+  // The armed→posting claim must happen when the tight window opens, so no
+  // Supabase round-trip remains on the hot path after Help Wanted lands.
+  await deadline(() => postingClaimedAt > 0, 1000, 'lock did not pre-claim the proposal');
 
   const helpWantedAt = Date.now();
   labels = [{ name: 'External' }, { name: 'Help Wanted' }];
@@ -148,6 +159,8 @@ try {
   const hwBoundary = (Math.floor(helpWantedAt / 1000) + 1) * 1000;
   assert.ok(firstPostAt >= hwBoundary, `posted ${hwBoundary - firstPostAt}ms before the post-HW second boundary`);
   assert.ok(firstPostAt - helpWantedAt < 1600, `boundary wait took ${firstPostAt - helpWantedAt}ms`);
+  assert.ok(postingClaimedAt < helpWantedAt, 'claim was not completed before Help Wanted landed');
+  assert.ok(output.join('').includes('pre-claimed for posting'), 'lock-time pre-claim log missing');
   await deadline(() => commentPosts === 2 && proposal.state === 'posted', 4000, '403 was not retried');
 
   assert.equal(commentPosts, 2, 'worker posted more than the initial attempt and one retry');

@@ -55,7 +55,7 @@ const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 50); // poll once External is
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
-const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 150); // past the second boundary after HW
+const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 75); // past the second boundary after HW
 const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 const REQUEST_BUDGET_PER_MIN = int('REQUEST_BUDGET_PER_MIN', 500); // all GitHub requests, 304s included
 const THROTTLED_INTERVAL_MS = int('THROTTLED_INTERVAL_MS', 250); // poll cadence while over budget
@@ -74,6 +74,11 @@ const PROPOSAL_DIR = process.env.PROPOSAL_DIR || path.join(HERE, 'proposals');
 const DEFAULT_BODY_FILE = process.env.PROPOSAL_FILE || path.join(HERE, 'proposal.md');
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
+const TG_API = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/$/, '');
+// Telegram-alert every issue that newly gains the trigger label. This is the
+// low-latency replacement for the extension's chrome.alarms poller (>=30s).
+const ALERT_NEW_TRIGGER = bool('ALERT_NEW_TRIGGER', true);
+const ALERT_FRESH_MS = int('ALERT_FRESH_MS', 600000); // ignore label events older than this
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
@@ -94,10 +99,16 @@ const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt 
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
+const preClaimed = new Set(); // issues whose armed→posting claim already happened at lock time
+const preClaimPromises = new Map(); // issue -> in-flight pre-claim; fire() awaits instead of racing it
+let lastStaleRecoveryAt = 0;
 let backoffUntil = 0;
 const requestTimes = []; // GitHub request timestamps within the last 60s (budget window)
 let clockLB = null; // { localMs, serverMs } — lower bound on GitHub's clock
 let budgetThrottleLoggedAt = 0;
+const alerted = new Set(); // issue numbers already Telegram-alerted for the trigger label
+const alertEventChecks = new Map(); // alert-path memo — MUST stay separate from checkedLabelUpdates
+let alertSeeded = false; // first discovery scan only records existing trigger issues
 
 // ── request budget + GitHub clock tracking ───────────────────────────────────
 // Secondary rate limits count 304s too (learned the hard way on #95956), so
@@ -173,6 +184,30 @@ async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) 
 
 async function syncArmedProposals() {
   const [owner, repo] = REPO.split('/');
+
+  // Self-heal claims orphaned by a crash or redeploy: a `posting` row with no
+  // comment id that hasn't moved in >2 minutes can never complete. updated_at
+  // is trigger-maintained (005_proposals.sql), so a live pre-claim — at most
+  // TIGHT_WINDOW_MS old — is never touched.
+  if (Date.now() - lastStaleRecoveryAt > 60_000) {
+    lastStaleRecoveryAt = Date.now();
+    const recoveryQuery = new URLSearchParams({
+      user_id: `eq.${SUPABASE_USER_ID}`,
+      state: 'eq.posting',
+      github_comment_id: 'is.null',
+      updated_at: `lt.${new Date(Date.now() - 120_000).toISOString()}`,
+      select: 'issue_number',
+    });
+    const recovered = await supabaseRequest(`proposals?${recoveryQuery}`, {
+      method: 'PATCH',
+      body: { state: 'armed', last_error: 'Recovered stale posting claim after a worker restart.' },
+      prefer: 'return=representation',
+    });
+    if (Array.isArray(recovered) && recovered.length > 0) {
+      log(`♻️  re-armed ${recovered.length} stale posting claim(s): ${recovered.map((r) => `#${r.issue_number}`).join(', ')}`);
+    }
+  }
+
   const settingsQuery = new URLSearchParams({
     select: 'proposal_auto_post',
     id: `eq.${SUPABASE_USER_ID}`,
@@ -298,6 +333,68 @@ async function updateCloudProposal(id, values) {
   });
 }
 
+// Claim armed → posting the moment the tight window OPENS. External gives a
+// 1-3s head start, and burning the Supabase round-trip there instead of after
+// Help Wanted keeps the claim off the hot path entirely (a real race on
+// #96332 lost ~460ms to a 674ms claim that outlived the boundary wait).
+function preClaimCloudProposal(n) {
+  if (DRY_RUN) return Promise.resolve(); // dry runs must never mutate Supabase state
+  const existing = preClaimPromises.get(n);
+  if (existing) return existing;
+  const pending = doPreClaim(n);
+  preClaimPromises.set(n, pending);
+  return pending;
+}
+
+async function doPreClaim(n) {
+  const proposal = cloudProposals.get(n);
+  if (!proposal || preClaimed.has(n) || inFlightCloud.has(n) || posted.has(n)) return;
+  inFlightCloud.add(n);
+  try {
+    const claimed = await claimCloudProposal(proposal);
+    if (claimed) {
+      preClaimed.add(n);
+      log(`🔏 #${n} pre-claimed for posting`);
+    } else {
+      inFlightCloud.delete(n);
+      log(`#${n} pre-claim skipped — proposal was already claimed or disarmed`);
+    }
+  } catch (e) {
+    // Not fatal: fire() falls back to claiming on the hot path.
+    inFlightCloud.delete(n);
+    log(`pre-claim #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// Hand the claim back when a tight window ends without Help Wanted. The PATCH
+// is state-filtered so a manual disarm/draft during the window is never
+// overwritten; a failed release self-heals via the stale-claim recovery.
+async function releasePreClaim(n) {
+  preClaimPromises.delete(n); // allow a later re-lock to pre-claim again
+  if (!preClaimed.has(n)) return;
+  preClaimed.delete(n);
+  const proposal = cloudProposals.get(n);
+  try {
+    if (proposal) {
+      const query = new URLSearchParams({
+        id: `eq.${proposal.id}`,
+        user_id: `eq.${SUPABASE_USER_ID}`,
+        state: 'eq.posting',
+      });
+      await supabaseRequest(`proposals?${query}`, {
+        method: 'PATCH',
+        body: { state: 'armed', last_error: null },
+        prefer: 'return=minimal',
+      });
+      log(`🔓 #${n} pre-claim released`);
+    }
+  } catch (e) {
+    log(`release pre-claim #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    inFlightCloud.delete(n);
+  }
+}
+
 // ── GitHub fetch (conditional + rate-limit aware) ─────────────────────────────
 async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
   if (Date.now() < backoffUntil) {
@@ -392,14 +489,27 @@ async function discoverTick() {
     `/repos/${REPO}/issues?state=open&sort=updated&direction=desc&per_page=50`;
   const { status, data } = await gh(q, { useEtag: true, key: 'discover' });
   if (status === 200 && Array.isArray(data)) {
+    const alertCandidates = [];
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
+      const issueLabels = labelNames(issue.labels);
+
+      // Collect trigger-label alert candidates for EVERY issue (armed or not)
+      // without awaiting — verification happens after the loop so alerting can
+      // never delay a lock or a fire. Armed issues are excluded: they get the
+      // snipe notification instead, and their label-event memo must never be
+      // consumed by the alert path.
+      if (alertingEnabled() && issueLabels.includes(TRIGGER) && !cloudProposals.has(n)) {
+        if (!alertSeeded) alerted.add(n);
+        else if (!alerted.has(n)) alertCandidates.push(issue);
+      }
+
       // Cloud mode is deliberately selective: the shared recent-issue detector
       // ignores everything except proposals explicitly armed in the extension.
       if (!DISCOVER && !cloudProposals.has(n)) continue;
       if (posted.has(n) || tracked.has(n)) continue;
-      const names = labelNames(issue.labels);
+      const names = issueLabels;
       const hasLock = names.includes(LOCK);
       const hasHW = names.includes(TRIGGER);
       const updatedAgo = Date.now() - Date.parse(issue.updated_at);
@@ -439,17 +549,50 @@ async function discoverTick() {
         }
       }
     }
+    alertSeeded = true;
+    if (alertCandidates.length) void alertNewTriggerIssues(alertCandidates);
   }
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
 }
 
-async function getRecentLabelEvent(n, label, after, issueUpdatedAt) {
+// ── instant Telegram alert for issues that newly gain the trigger label ───────
+function alertingEnabled() {
+  return ALERT_NEW_TRIGGER && Boolean(TG_TOKEN && TG_CHAT);
+}
+
+async function alertNewTriggerIssues(issues) {
+  for (const issue of issues) {
+    const n = issue.number;
+    if (alerted.has(n)) continue;
+    // `updated_at` also changes for unrelated activity (comments bump old
+    // trigger-labeled issues back into the recent page). Only alert when the
+    // label event itself is fresh — using the alert-path memo, never the fire
+    // path's, so this check can't swallow a pending direct-HW fire.
+    const eventAt = await getRecentLabelEvent(
+      n,
+      TRIGGER,
+      Date.now() - ALERT_FRESH_MS,
+      issue.updated_at,
+      alertEventChecks,
+    );
+    if (!eventAt) continue;
+    alerted.add(n);
+    const title = issue.title ? ` — ${issue.title}` : '';
+    log(`🔔 new "${TRIGGER_NAME}" issue #${n}${title}`);
+    void notify(
+      `🆕 "${TRIGGER_NAME}" on ${REPO}#${n}${title}\n` +
+        `https://github.com/${REPO}/issues/${n}`,
+    );
+  }
+}
+
+async function getRecentLabelEvent(n, label, after, issueUpdatedAt, memo = checkedLabelUpdates) {
   const checkKey = `${n}:${label}`;
-  if (checkedLabelUpdates.get(checkKey) === issueUpdatedAt) return null;
-  checkedLabelUpdates.set(checkKey, issueUpdatedAt);
+  if (memo.get(checkKey) === issueUpdatedAt) return null;
+  memo.set(checkKey, issueUpdatedAt);
   const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=30`);
   if (status !== 200 || !Array.isArray(data)) {
-    checkedLabelUpdates.delete(checkKey); // transient failure: allow a later retry
+    memo.delete(checkKey); // transient failure: allow a later retry
     return null;
   }
   let latest = null;
@@ -485,6 +628,7 @@ function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'loca
   };
   tracked.set(n, st);
   log(mode === 'tight' ? `🔒 #${n} locked (tight) via discovery` : `👁  #${n} watching`);
+  if (mode === 'tight' && source === 'cloud') void preClaimCloudProposal(n);
   void tick(n);
 }
 
@@ -492,6 +636,7 @@ function upgradeToTight(n, st) {
   st.mode = 'tight';
   st.tightUntil = Date.now() + TIGHT_WINDOW_MS;
   log(`⚡ #${n} "${LOCK_NAME}" seen → tight-polling for "${TRIGGER_NAME}"`);
+  if (st.source === 'cloud') void preClaimCloudProposal(n);
 }
 
 async function tick(n) {
@@ -545,6 +690,7 @@ function survivesTightExpiry(n, st) {
     // Return cloud proposals to the shared repo detector instead of giving
     // every armed row its own permanent polling loop.
     tracked.delete(n);
+    void releasePreClaim(n);
     log(`#${n} tight window elapsed → back to shared detector`);
     return false;
   }
@@ -605,8 +751,22 @@ async function fire(n, issue, via, ctx) {
     delayMs > 0 ? new Promise((resolve) => setTimeout(resolve, delayMs)) : Promise.resolve();
 
   const cloudProposal = cloudProposals.get(n);
+  // If Help Wanted lands while the lock-time pre-claim is still in flight,
+  // wait for it (the boundary-wait timer is already running) rather than
+  // racing it with a live claim that would see `posting` and skip the snipe.
+  const pendingPreClaim = preClaimPromises.get(n);
+  if (pendingPreClaim) {
+    await pendingPreClaim;
+    preClaimPromises.delete(n);
+  }
   let claimMs = 0;
-  if (cloudProposal) {
+  let claimLabel = 'none';
+  if (cloudProposal && preClaimed.has(n)) {
+    // Claimed back when the tight window opened — nothing left on the hot path.
+    preClaimed.delete(n);
+    claimLabel = 'pre';
+    await waitPromise;
+  } else if (cloudProposal) {
     inFlightCloud.add(n);
     let claimed;
     try {
@@ -627,6 +787,7 @@ async function fire(n, issue, via, ctx) {
       log(`#${n} skipped — proposal was already claimed or disarmed`);
       return;
     }
+    claimLabel = `${claimMs.toFixed(1)}ms`;
   } else {
     await waitPromise;
   }
@@ -640,13 +801,34 @@ async function fire(n, issue, via, ctx) {
   const hotPathMs = performance.now() - fireStartedAt;
 
   if (status === 201 && data?.html_url) {
+    // Calibration: which second did GitHub stamp the comment in, relative to
+    // the target (the second after Help Wanted)? 0s = perfect, -1s = same
+    // second as the label (renders above it — raise the margin), +1s = a full
+    // second late (lower the margin or chase the claim/post latency).
+    const hwGuessMs = ctx
+      ? Number.isFinite(ctx.hwEventMs) ? ctx.hwEventMs : ctx.detectDateMs
+      : NaN;
+    const stampMs = Date.parse(data.created_at || '');
+    let stampInfo = '';
+    if (Number.isFinite(hwGuessMs) && Number.isFinite(stampMs)) {
+      const deltaS = (stampMs - (Math.floor(hwGuessMs / 1000) + 1) * 1000) / 1000;
+      stampInfo = ` stamp=${deltaS >= 0 ? '+' : ''}${deltaS}s-vs-target`;
+    }
     log(
         `✅ sniped #${n} via ${via} → ${data.html_url} ` +
-        `[claim=${claimMs.toFixed(1)}ms wait=${delayMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms]`,
+        `[claim=${claimLabel} wait=${delayMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms${stampInfo}]`,
     );
     if (POST_MORTEM_DELAY_MS > 0) {
       setTimeout(() => void racePostMortem(n, data.id), POST_MORTEM_DELAY_MS);
     }
+    // The Telegram ping races the Supabase bookkeeping instead of waiting
+    // behind it — the user rushing in to edit the placeholder gets the URL
+    // one round-trip sooner.
+    const notified = notify(
+      `✅ Sniped #${n} in ${hotPathMs.toFixed(0)}ms ` +
+        `(claim ${claimLabel} / post ${postMs.toFixed(0)}ms)${title}\n` +
+        `Go edit your proposal:\n${data.html_url}`,
+    );
     if (cloudProposal) {
       try {
         await updateCloudProposal(cloudProposal.id, {
@@ -661,11 +843,7 @@ async function fire(n, issue, via, ctx) {
         inFlightCloud.delete(n);
       }
     }
-    await notify(
-      `✅ Sniped #${n} in ${hotPathMs.toFixed(0)}ms ` +
-        `(claim ${claimMs.toFixed(0)} / post ${postMs.toFixed(0)})${title}\n` +
-        `Go edit your proposal:\n${data.html_url}`,
-    );
+    await notified;
   } else {
     const detail = typeof data === 'string'
       ? data.slice(0, 200)
@@ -814,11 +992,16 @@ async function loadBody(n) {
 async function notify(text) {
   if (!TG_TOKEN || !TG_CHAT) return;
   try {
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+    const res = await fetch(`${TG_API}/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT, text }),
+      body: JSON.stringify({ chat_id: TG_CHAT, text, disable_web_page_preview: true }),
+      signal: AbortSignal.timeout(10_000), // a hung Telegram call must never wedge a caller
     });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      log(`telegram err: ${res.status} ${body.slice(0, 120)}`);
+    }
   } catch (e) {
     log(`telegram err: ${e.message}`);
   }
@@ -875,8 +1058,12 @@ function main() {
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
-      `budget=${REQUEST_BUDGET_PER_MIN}/min`
+      `budget=${REQUEST_BUDGET_PER_MIN}/min telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} ` +
+      `alerts=${alertingEnabled() ? 'on' : 'off'}`
   );
+  if (ALERT_NEW_TRIGGER && !(TG_TOKEN && TG_CHAT)) {
+    log(`ℹ️  instant "${TRIGGER_NAME}" alerts are idle — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable`);
+  }
   if (DISCOVER && !DRY_RUN) {
     log(
       '⚠️  DISCOVER + live posting: only run this if you genuinely intend to ' +

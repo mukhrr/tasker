@@ -6,7 +6,7 @@ on:
       boundary_margin_ms:
         description: Margin past the second boundary after Help Wanted before the comment POST
         required: true
-        default: '150'
+        default: '75'
 
 permissions:
   contents: read
