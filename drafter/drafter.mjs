@@ -88,7 +88,11 @@ function log(...a) {
   console.log(new Date().toISOString(), ...a);
 }
 
-async function notify(text) {
+// 'essential' messages (posts, failures, usage limits) always send; 'verbose'
+// ones (per-issue "draft armed" chatter) send only when TELEGRAM_VERBOSE is on.
+const TELEGRAM_VERBOSE = bool('TELEGRAM_VERBOSE', false);
+async function notify(text, { level = 'essential' } = {}) {
+  if (level === 'verbose' && !TELEGRAM_VERBOSE) return;
   if (!TG_TOKEN || !TG_CHAT) return;
   try {
     const res = await fetch(`${TG_API}/bot${TG_TOKEN}/sendMessage`, {
@@ -561,6 +565,7 @@ async function draftOne(row, settings = { autoPost: true }) {
   await notify(
     `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
       `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
+    { level: 'verbose' },
   );
 
   // Fast path: if Help Wanted is already on the issue, the sniper intentionally

@@ -540,7 +540,7 @@ async function enqueueForDrafting(issue) {
     const inserted = Array.isArray(rows) && rows.length > 0;
     if (inserted) {
       log(`🧠 #${n} queued for drafting${title}`);
-      await notify(`🧠 Queued for drafting ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`);
+      await notify(`🧠 Queued for drafting ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`, { level: 'verbose' });
     } else {
       log(`#${n} already has a proposal row — not re-queued`);
     }
@@ -753,6 +753,7 @@ async function alertNewTriggerIssues(issues) {
     void notify(
       `🆕 "${TRIGGER_NAME}" on ${REPO}#${n}${title}\n` +
         `https://github.com/${REPO}/issues/${n}`,
+      { level: 'verbose' },
     );
   }
 }
@@ -1041,7 +1042,7 @@ async function fire(n, issue, via, ctx) {
           void fire(n, issue, 'rate-limit-retry');
         }
       }, retryDelayMs);
-      await notify(`⏸️ #${n} rate-limited; automatic retry scheduled`);
+      await notify(`⏸️ #${n} rate-limited; automatic retry scheduled`, { level: 'verbose' });
       return;
     }
     if (cloudProposal) {
@@ -1160,7 +1161,12 @@ async function loadBody(n) {
 }
 
 // ── telegram notify (optional) ────────────────────────────────────────────────
-async function notify(text) {
+// Telegram noise control: 'essential' messages (snipes, failures, race reports)
+// always send; 'verbose' ones (per-issue queue/HW/rate-limit chatter) send only
+// when TELEGRAM_VERBOSE is on.
+const TELEGRAM_VERBOSE = bool('TELEGRAM_VERBOSE', false);
+async function notify(text, { level = 'essential' } = {}) {
+  if (level === 'verbose' && !TELEGRAM_VERBOSE) return;
   if (!TG_TOKEN || !TG_CHAT) return;
   try {
     const res = await fetch(`${TG_API}/bot${TG_TOKEN}/sendMessage`, {
