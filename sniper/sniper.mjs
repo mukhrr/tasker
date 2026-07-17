@@ -57,6 +57,10 @@ const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated t
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
 const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 75); // past the second boundary after HW
 const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
+// Before posting, look up the real Help Wanted event time so a boundary-crossing
+// detection doesn't anchor the post a full second late. Bounded so a slow lookup
+// falls back to the detection time instead of stalling the fire.
+const HW_ANCHOR_TIMEOUT_MS = int('HW_ANCHOR_TIMEOUT_MS', 500);
 const REQUEST_BUDGET_PER_MIN = int('REQUEST_BUDGET_PER_MIN', 500); // all GitHub requests, 304s included
 const THROTTLED_INTERVAL_MS = int('THROTTLED_INTERVAL_MS', 250); // poll cadence while over budget
 const POST_MORTEM_DELAY_MS = int('POST_MORTEM_DELAY_MS', 10000); // 0 disables the race report
@@ -122,6 +126,7 @@ const validatedCloudProposalIds = new Set(); // GitHub-open check, once per arme
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
+const fireEventChecks = new Map(); // fire-path memo for the real HW event lookup (kept separate so it never false-negatives)
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
 const preClaimed = new Set(); // issues whose armed→posting claim already happened at lock time
@@ -905,6 +910,27 @@ async function fire(n, issue, via, ctx) {
   const body = await bodyFor(n);
   const title = issue?.title ? ` — ${issue.title}` : '';
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
+
+  // Anchor the boundary on the ACTUAL Help Wanted event time. The tight/slow poll
+  // paths pass only detectDateMs — the whole second we *saw* the label — so a
+  // detection that crossed a server-second boundary targets a full second late
+  // (issue #96380: HW at :55, detected at :56, posted at :57). Look up the real
+  // labeled-event time now; it overlaps the boundary wait in the common case and
+  // rescues the boundary-crossing case. Falls back to detectDateMs if the lookup
+  // is missing or slower than HW_ANCHOR_TIMEOUT_MS, so it's never worse than before.
+  if (!Number.isFinite(ctx?.hwEventMs)) {
+    const evAt = await Promise.race([
+      getRecentLabelEvent(n, TRIGGER, START, issue?.updated_at, fireEventChecks).catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), HW_ANCHOR_TIMEOUT_MS)),
+    ]);
+    if (Number.isFinite(evAt)) {
+      const detectSec = Number.isFinite(ctx?.detectDateMs) ? Math.floor(ctx.detectDateMs / 1000) * 1000 : null;
+      if (detectSec !== null && evAt < detectSec) {
+        log(`⏱️  #${n} re-anchored to real HW event ${new Date(evAt).toISOString()} (${detectSec - evAt}ms before our detected second)`);
+      }
+      ctx = { ...ctx, hwEventMs: evAt };
+    }
+  }
 
   const delayMs = computePostDelay(ctx);
 
