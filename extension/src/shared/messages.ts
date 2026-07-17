@@ -135,6 +135,16 @@ export interface EnqueueAutoDraftRequest {
   number: number;
 }
 
+// Cancel an in-flight auto-draft: returns a queued/drafting row to a plain
+// manual 'draft' so the drafter stops working on it (its arm is state-filtered,
+// so a mid-flight cancel is honored).
+export interface CancelAutoDraftRequest {
+  type: 'CANCEL_AUTO_DRAFT';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 // Manual "Post now" asks the background to claim the proposal and post it.
 export interface PostProposalNowRequest {
   type: 'POST_PROPOSAL_NOW';
@@ -183,6 +193,7 @@ export type MessageRequest =
   | ArmProposalRequest
   | DisarmProposalRequest
   | EnqueueAutoDraftRequest
+  | CancelAutoDraftRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
   | SetAutoPostRequest

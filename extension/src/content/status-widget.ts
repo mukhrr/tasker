@@ -564,15 +564,28 @@ export class StatusWidget {
       // the body. Show a read-only status; never expose the editable draft UI,
       // which would let a Save clobber the in-flight server state.
       const label = state === 'queued' ? 'Queued for auto-drafting…' : 'Auto-drafting proposal…';
-      body.innerHTML = `
-        <div class="proposal-status">
-          <span class="check">🤖</span>
-          <div>
-            <div class="proposal-status-line">${this.escapeHtml(label)}</div>
-            <div class="proposal-status-sub">A proposal is being written and will arm automatically.</div>
-          </div>
+      const statusEl = document.createElement('div');
+      statusEl.className = 'proposal-status';
+      statusEl.innerHTML = `
+        <span class="check">🤖</span>
+        <div>
+          <div class="proposal-status-line">${this.escapeHtml(label)}</div>
+          <div class="proposal-status-sub">A proposal is being written and will arm automatically.</div>
         </div>
       `;
+      body.appendChild(statusEl);
+
+      const cancelRow = document.createElement('div');
+      cancelRow.className = 'proposal-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'proposal-btn';
+      cancelBtn.textContent = this.proposalBusy ? 'Cancelling…' : 'Cancel';
+      cancelBtn.disabled = this.proposalBusy;
+      cancelBtn.title = 'Stop auto-drafting and keep this as an editable draft.';
+      cancelBtn.addEventListener('click', () => void this.cancelAutoDraft());
+      cancelRow.appendChild(cancelBtn);
+      body.appendChild(cancelRow);
+
       section.appendChild(body);
       this.root.appendChild(section);
       return;
@@ -828,6 +841,30 @@ export class StatusWidget {
       this.startProposalPoll();
     } else {
       this.error = res.error ?? 'Could not start Auto-pilot';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  // Cancel an in-flight auto-draft: the row becomes an editable manual draft and
+  // the drafter stops. Poll stops; the panel re-renders as the normal editor.
+  private async cancelAutoDraft(): Promise<void> {
+    if (this.proposalBusy) return;
+    this.proposalBusy = true;
+    this.render();
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: 'CANCEL_AUTO_DRAFT',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.proposalBusy = false;
+    if (res.ok && res.data) {
+      this.proposal = res.data;
+      this.proposalDraftBody = res.data.body ?? '';
+      this.stopProposalPoll();
+    } else {
+      this.error = res.error ?? 'Could not cancel';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();

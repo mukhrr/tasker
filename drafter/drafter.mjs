@@ -46,6 +46,10 @@ const TG_API = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').repl
 const DRY_RUN = bool('DRY_RUN', true);
 const ENRICH = bool('ENRICH', false); // second, deeper pass after arming
 const DIRECT_POST = bool('DIRECT_POST', true); // post immediately if HW already present
+// Master on/off for the drafter. When false, it idles (claims/drafts nothing),
+// leaving queued rows untouched until re-enabled. Flip this Railway variable to
+// pause auto-pilot without redeploying anything else.
+const AUTOPILOT_ENABLED = bool('AUTOPILOT_ENABLED', true);
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const CODEX_HOME = process.env.CODEX_HOME || path.join(DATA_DIR, 'codex');
@@ -73,6 +77,7 @@ const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'pr
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
+const dryRunSeen = new Set(); // issues already dry-drafted this process (no re-loop)
 
 // ── logging + telegram ────────────────────────────────────────────────────────
 function log(...a) {
@@ -392,6 +397,10 @@ async function buildDraftPrompt(issue, comments) {
 
 async function draftOne(row) {
   const n = row.issue_number;
+  // In DRY_RUN the row is returned to `queued` after drafting (it never arms),
+  // so without this guard it would be re-drafted every poll — an endless loop
+  // that burns Codex quota. Draft each queued issue at most once per process.
+  if (DRY_RUN && dryRunSeen.has(n)) return;
   const claimed = await claimQueued(row);
   if (!claimed) {
     log(`#${n} claim skipped — no longer queued`);
@@ -426,8 +435,10 @@ async function draftOne(row) {
       `🧪 DRY_RUN #${n}: would arm this proposal (${body.length} chars):\n${body.slice(0, 400)}…` +
         resumeHint(sessionId),
     );
-    // Return the row to queued so a real run can pick it up later.
-    await updateProposal(claimed.id, { state: 'queued', codex_session_id: sessionId });
+    dryRunSeen.add(n); // don't re-draft this issue while it stays queued
+    // Return the row to queued so a real run can pick it up later. State-filtered
+    // so a user Cancel (drafting → draft) mid-flight is not overwritten.
+    await updateProposal(claimed.id, { state: 'queued', codex_session_id: sessionId }, { requireState: 'drafting' });
     return;
   }
 
@@ -641,9 +652,10 @@ async function autoPostEnabled() {
 }
 
 async function tick() {
+  if (!AUTOPILOT_ENABLED) return; // Railway master switch — idle when off
   if (Date.now() < backoffUntil) return;
   await recoverStaleDrafting();
-  if (!(await autoPostEnabled())) return; // master kill-switch honored
+  if (!(await autoPostEnabled())) return; // Supabase kill-switch honored too
 
   const query = new URLSearchParams({
     select: '*',
@@ -678,7 +690,8 @@ async function main() {
   await installSkills();
   await ensureRepo();
   log(
-    `drafter up — repo=${REPO} skill=${SKILL_NAME} dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
+    `drafter up — repo=${REPO} skill=${SKILL_NAME} autopilot=${AUTOPILOT_ENABLED ? 'on' : 'OFF'} ` +
+      `dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
       `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
       `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
   );

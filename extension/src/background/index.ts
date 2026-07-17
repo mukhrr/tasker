@@ -88,6 +88,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleSetProposalState(msg.owner, msg.repo, msg.number, 'draft');
     case 'ENQUEUE_AUTO_DRAFT':
       return handleEnqueueAutoDraft(msg.owner, msg.repo, msg.number);
+    case 'CANCEL_AUTO_DRAFT':
+      return handleCancelAutoDraft(msg.owner, msg.repo, msg.number);
     case 'POST_PROPOSAL_NOW':
       return handlePostProposalNow(msg.proposalId, msg.force === true);
     case 'GET_AUTOPOST':
@@ -737,6 +739,46 @@ async function handleEnqueueAutoDraft(
     .select()
     .single();
 
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: data as Proposal };
+}
+
+// Cancel an in-flight auto-draft. Moves a queued/drafting row to a plain manual
+// 'draft' (origin='manual') so the drafter stops and won't re-queue it. The
+// drafter's arm is state-filtered on 'drafting', so a cancel mid-generation is
+// honored — the finished draft simply isn't armed.
+async function handleCancelAutoDraft(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<Proposal>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data: existing, error: readErr } = await supabase
+    .from('proposals')
+    .select('id, state')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!existing) return { ok: false, error: 'Nothing to cancel' };
+  if (existing.state !== 'queued' && existing.state !== 'drafting') {
+    return { ok: false, error: `Proposal is ${existing.state} — nothing to cancel` };
+  }
+
+  const { data, error } = await supabase
+    .from('proposals')
+    .update({ state: 'draft', origin: 'manual', last_error: null })
+    .eq('id', existing.id)
+    .select()
+    .single();
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: data as Proposal };
 }
