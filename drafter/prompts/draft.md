@@ -22,11 +22,26 @@ Web search is only for external context (platform docs, RFCs) — never for
 finding or confirming code that lives in this repository. Reach for the local
 files first, every time.
 
-Work fast — aim to finish in a few minutes, not many. Follow the skill's speed
-bias: find ONE credible root cause and ONE focused solution. Include a small
-number of permalinks (1–3) for the key offending lines — do not exhaustively
-trace every call site or resolve a permalink for every reference. A clear,
-correct, well-structured proposal beats an exhaustive one, and being early matters.
+## Make the proposal deep and defensible — this is the one and only pass
+
+Do not settle for the first idea. This single pass must be thorough, so invest in
+the investigation using the local checkout:
+- **Root cause:** find WHY the code is wrong and how it got that way. Read the
+  offending code, then use `git log` / `git blame` / `git show` on those exact
+  lines to check the **history** — was the bug introduced by a recent change, did
+  a prior PR try to fix something related, is there a regression? Search for
+  **similar cases** (`rg` for the same pattern / function / component elsewhere)
+  and note whether they share or avoid the bug. Attach a SHA-pinned **permalink**
+  for each piece of evidence.
+- **Solution:** name the exact function/component/action to change and give the
+  smallest complete fix. Include a **small illustrative code diff** (a few lines
+  of before/after — never a full patch or a reproduced function) so the reviewer
+  sees the change concretely. Explicitly explain why it does **not cause a
+  regression**: which existing callers/behaviors stay correct, and whether the
+  similar cases you found are unaffected or also need the fix.
+
+Take the time to get this right rather than racing — but stay grounded in files
+you have actually read. A wrong-but-fast proposal loses the bounty anyway.
 
 Follow the **expensify-proposal-writer** skill exactly. Read these files first and
 apply them as your instructions and rubric:
@@ -50,8 +65,9 @@ Key rules from the skill (do not violate):
   `main` right now — every permalink is checked against the local repo and a
   missing path fails the whole proposal.
 - Solution: the smallest complete fix for the root cause, plain English, naming the
-  exact function/component/action to change. Tiny snippets only when they clarify;
-  never a full or large multi-line diff.
+  exact function/component/action to change. Include a small, illustrative code diff
+  (a few lines showing the change) and state why it avoids regressions. Keep diffs
+  small and explanatory — never a full patch or a reproduced function.
 - Brief, plain English, first person ("I found that…", "I think we should…"). No PRs.
 
 ## Issue to propose on

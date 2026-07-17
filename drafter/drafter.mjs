@@ -57,9 +57,11 @@ const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON || ''; // seed for auth.json
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 const CODEX_MODEL = process.env.CODEX_MODEL || ''; // '' → account default
 const CODEX_UNSAFE_SANDBOX = bool('CODEX_UNSAFE_SANDBOX', false); // Landlock fallback
-// Backstop only: runCodexProcess returns the instant Codex writes its proposal
-// (~1–2 min typically), so this fires solely when Codex produces NO output at all.
-const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 420_000); // 7 min hard cap for a stuck process
+// Backstop only: runCodexProcess returns the instant Codex writes its proposal,
+// so this fires solely when Codex produces NO output at all. Generous because the
+// single deep pass (git history + similar cases + diffs) can legitimately run
+// several minutes before the proposal lands.
+const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 900_000); // 15 min hard cap for a stuck process
 const REPO_URL = process.env.REPO_URL || `https://github.com/${REPO}`;
 const REPO_DIR = process.env.REPO_DIR || path.join(DATA_DIR, REPO_NAME || 'App');
 // The expensify-proposal-writer skill (bundled under drafter/skills) is installed
@@ -420,16 +422,6 @@ function resumeHint(sessionId) {
   return `\nResume the Codex session:\nCODEX_HOME=${CODEX_HOME} codex exec resume ${sessionId} "<your follow-up>"`;
 }
 
-// A short, phone-readable excerpt of the drafted proposal for the "ready" ping.
-// Strips the boilerplate headings so the preview leads with actual content.
-function proposalPreview(body, max = 700) {
-  const text = (body || '')
-    .replace(/^##\s*Proposal\s*/i, '')
-    .replace(/^###\s+/gm, '▸ ')
-    .trim();
-  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
-}
-
 // ── validator ──────────────────────────────────────────────────────────────────
 const REQUIRED_HEADINGS = [
   '### What is the root cause of that problem?',
@@ -564,9 +556,11 @@ async function draftOne(row) {
   }
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
   log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
+  // Keep the ping short — no full proposal in Telegram. Just the issue, a size
+  // hint, and the resume command to open it in the extension/terminal.
   await notify(
-    `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}\n\n` +
-      `${proposalPreview(body)}${resumeHint(sessionId)}`,
+    `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
+      `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
   );
 
   // Fast path: if Help Wanted is already on the issue, the sniper intentionally
