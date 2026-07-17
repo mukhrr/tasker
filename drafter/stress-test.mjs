@@ -58,7 +58,14 @@ if (home) {
     JSON.stringify({ id: 'sess-' + n, thread_name: String(90000 + n), updated_at: '2026-07-17T00:00:00Z' }) + '\\n',
   );
 }
-console.log('done');
+if (existsSync(path.join(dir, 'hang'))) {
+  // Simulate the real bug: the task is done and the proposal is written, but the
+  // process never exits (a lingering web-search socket, etc.). The drafter's
+  // output-file watcher must notice the finished proposal and kill this process.
+  setInterval(() => {}, 1000);
+} else {
+  console.log('done');
+}
 `;
 
 const GOOD_PROPOSAL = `## Proposal
@@ -93,7 +100,7 @@ async function readBody(req) {
   return body ? JSON.parse(body) : null;
 }
 
-async function runScenario({ name, env, seedRows, issue, cannedProposals, run }) {
+async function runScenario({ name, env, seedRows, issue, cannedProposals, run, codexHang }) {
   // Repo dir must be a git repo so ensureRepo skips cloning and refreshRepo's
   // fetch fails soft (no 'origin' remote in this throwaway repo).
   const repoDir = mkdtempSync(path.join(tmpdir(), 'drafter-repo-'));
@@ -101,6 +108,7 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run })
 
   const codexDir = mkdtempSync(path.join(tmpdir(), 'drafter-codex-'));
   cannedProposals.forEach((p, i) => writeFileSync(path.join(codexDir, `${i + 1}.md`), p));
+  if (codexHang) writeFileSync(path.join(codexDir, 'hang'), '1');
 
   const state = {
     rows: new Map(seedRows.map((r) => [r.id, { ...r }])),
@@ -269,6 +277,27 @@ await runScenario({
     assert.match(prompt, /proposal-rubric\.md/, 'draft prompt did not reference the rubric');
     assert.match(prompt, /Amount input crashes when blurred empty/, 'draft prompt missing the issue title');
     assert.doesNotMatch(prompt, /<<<(SKILL_DIR|ISSUE)>>>/, 'prompt placeholders not substituted');
+  },
+});
+
+// ── scenario 1b: codex writes output then lingers → watcher salvages & arms ───
+await runScenario({
+  name: 'linger-still-arms',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT },
+  issue: baseIssue({ number: 90009 }),
+  cannedProposals: [GOOD_PROPOSAL],
+  codexHang: true,
+  seedRows: [
+    { id: 'r1b', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90009, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline, output }) => {
+    // The fake codex writes its proposal then never exits (the real bug). The
+    // drafter's output-file watcher must kill it and arm the salvaged proposal
+    // quickly — not sit until the 7-minute hard timeout and discard the draft.
+    await deadline(() => state.rows.get('r1b')?.state === 'armed', 8000, 'lingering-codex row never armed');
+    const r = state.rows.get('r1b');
+    assert.ok(r.body.includes('root cause'), 'armed body missing proposal content');
+    assert.doesNotMatch(output.join(''), /timed out/i, 'drafter reported a timeout despite a completed proposal');
   },
 });
 

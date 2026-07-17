@@ -19,7 +19,7 @@
  */
 
 import { readFile, writeFile, mkdir, cp } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -57,7 +57,9 @@ const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON || ''; // seed for auth.json
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 const CODEX_MODEL = process.env.CODEX_MODEL || ''; // '' → account default
 const CODEX_UNSAFE_SANDBOX = bool('CODEX_UNSAFE_SANDBOX', false); // Landlock fallback
-const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 900_000); // 15 min — quality drafts investigate deeply
+// Backstop only: runCodexProcess returns the instant Codex writes its proposal
+// (~1–2 min typically), so this fires solely when Codex produces NO output at all.
+const CODEX_TIMEOUT_MS = int('CODEX_TIMEOUT_MS', 420_000); // 7 min hard cap for a stuck process
 const REPO_URL = process.env.REPO_URL || `https://github.com/${REPO}`;
 const REPO_DIR = process.env.REPO_DIR || path.join(DATA_DIR, REPO_NAME || 'App');
 // The expensify-proposal-writer skill (bundled under drafter/skills) is installed
@@ -165,7 +167,10 @@ function run(cmd, args, { cwd, env, timeoutMs, input } = {}) {
     const child = spawn(cmd, args, {
       cwd,
       env: { ...process.env, ...env },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      // No input → give the child /dev/null for stdin so it sees EOF immediately.
+      // A dangling open stdin pipe makes some CLIs (codex exec) linger after the
+      // task is done, waiting on input that never comes.
+      stdio: [input != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
@@ -285,28 +290,101 @@ async function runCodex(prompt, { threadName } = {}) {
   if (threadName) args.push('-c', `thread_name=${JSON.stringify(threadName)}`);
   args.push(prompt);
 
-  const res = await run(CODEX_BIN, args, {
+  const res = await runCodexProcess(CODEX_BIN, args, {
     env: { CODEX_HOME },
     timeoutMs: CODEX_TIMEOUT_MS,
+    outFile,
   });
 
-  if (res.timedOut) return { ok: false, error: `codex timed out after ${CODEX_TIMEOUT_MS}ms` };
-  // Usage-limit detection: Codex surfaces plan exhaustion in its output.
-  const blob = `${res.stdout}\n${res.stderr}`;
-  if (/usage limit|rate limit|too many requests|quota/i.test(blob)) {
-    return { ok: false, error: 'codex usage limit', usageLimited: true };
-  }
-  if (res.code !== 0) return { ok: false, error: `codex exited ${res.code}: ${res.stderr.slice(0, 300)}` };
-
+  // Prefer the proposal Codex wrote to --output-last-message. Codex finishes the
+  // task fast (~1–2 min) but the process often lingers afterward (a still-open
+  // web-search socket, telemetry flush, etc.); runCodexProcess kills it the moment
+  // the file lands, and we salvage that file here even when the process had to be
+  // killed by the watcher or the hard timeout. Only when NO output was produced do
+  // we surface a timeout / usage / exit error, so a completed draft is never lost.
   let body = '';
   try {
     body = (await readFile(outFile, 'utf8')).trim();
   } catch {
-    body = res.stdout.trim(); // fall back to stdout if the file wasn't written
+    body = '';
+  }
+  if (!body) {
+    const blob = `${res.stdout}\n${res.stderr}`;
+    if (/usage limit|rate limit|too many requests|quota/i.test(blob)) {
+      return { ok: false, error: 'codex usage limit', usageLimited: true };
+    }
+    if (res.timedOut) return { ok: false, error: `codex timed out after ${CODEX_TIMEOUT_MS}ms` };
+    if (res.code != null && res.code !== 0) {
+      return { ok: false, error: `codex exited ${res.code}: ${res.stderr.slice(0, 300)}` };
+    }
+    body = res.stdout.trim(); // last-resort fallback
   }
   if (!body) return { ok: false, error: 'codex produced an empty proposal' };
   const session = await latestCodexSession();
   return { ok: true, body, sessionId: session?.id || null };
+}
+
+// Run `codex exec`, but stop waiting the moment it writes its final proposal to
+// --output-last-message. Codex often completes the task in ~1–2 min yet the
+// process keeps running (lingering web-search / telemetry handles); without this
+// it would sit until CODEX_TIMEOUT_MS, get SIGKILLed, and the finished draft would
+// be discarded as a "timeout". Once the output file is non-empty we let it flush
+// briefly, then kill the process and resolve — the caller reads the file.
+function runCodexProcess(cmd, args, { env, timeoutMs, outFile } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let settled = false;
+    let killing = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (watch) clearInterval(watch);
+      resolve(r);
+    };
+    const timer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* already exited */
+          }
+        }, timeoutMs)
+      : null;
+    // Poll for the completed proposal; kill Codex as soon as it lands so a
+    // lingering process doesn't stall the draft for the full timeout window.
+    const watch = setInterval(() => {
+      if (killing) return;
+      let size = 0;
+      try {
+        size = statSync(outFile).size;
+      } catch {
+        /* file not written yet */
+      }
+      if (size > 0) {
+        killing = true;
+        clearInterval(watch);
+        setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* already exited */
+          }
+        }, 750);
+      }
+    }, 1000);
+    child.stdout.on('data', (c) => (stdout += c.toString()));
+    child.stderr.on('data', (c) => (stderr += c.toString()));
+    child.on('error', (e) => finish({ code: -1, stdout, stderr: `${stderr}\n${e.message}`, timedOut }));
+    child.on('close', (code) => finish({ code, stdout, stderr, timedOut }));
+  });
 }
 
 // A ready-to-paste command to continue a drafter Codex session from a terminal.
