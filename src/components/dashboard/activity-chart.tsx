@@ -74,12 +74,14 @@ export function ActivityChart({ data }: ActivityChartProps) {
                   fill="var(--color-created)"
                   radius={[4, 4, 0, 0]}
                   maxBarSize={24}
+                  isAnimationActive={false}
                 />
                 <Bar
                   dataKey="completed"
                   fill="var(--color-completed)"
                   radius={[4, 4, 0, 0]}
                   maxBarSize={24}
+                  isAnimationActive={false}
                 />
               </BarChart>
             </ChartContainer>

@@ -82,6 +82,9 @@ export function EarningsChart({ data }: EarningsChartProps) {
                   fill="var(--color-amount)"
                   fillOpacity={0.1}
                   dot={false}
+                  // Entry animation can freeze its clip-path mid-tween,
+                  // leaving the area invisible (recharts/react-smooth flake)
+                  isAnimationActive={false}
                   activeDot={{
                     r: 4,
                     stroke: 'var(--card)',
