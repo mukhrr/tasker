@@ -1015,8 +1015,18 @@ export class StatusWidget {
     if (this.destroyed) return;
     if (!res.ok || !res.data) return;
     const next = res.data;
-    if (!this.proposal || next.state !== this.proposal.state || next.posted_at !== this.proposal.posted_at) {
+    if (
+      !this.proposal ||
+      next.state !== this.proposal.state ||
+      next.posted_at !== this.proposal.posted_at ||
+      next.body !== this.proposal.body
+    ) {
       this.proposal = next;
+      // The poll only runs while the row is server-owned (queued/drafting/armed/
+      // posting) — the textarea is hidden or read-only, so there are no unsaved
+      // local edits to clobber. Sync the working copy so a just-drafted/armed body
+      // appears immediately, instead of only after a manual page refresh.
+      this.proposalDraftBody = next.body ?? '';
       if (next.state === 'posted' || next.state === 'failed' || next.state === 'draft') {
         this.stopProposalPoll();
       }
