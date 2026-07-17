@@ -5,7 +5,8 @@ import type {
   MessageResponse,
   SessionData,
 } from '../shared/messages';
-import type { Task, UserStatus, Proposal } from '../shared/types';
+import type { Task, UserStatus, Proposal, ProposalState } from '../shared/types';
+import { SERVER_OWNED_STATES } from '../shared/types';
 import { handleTestTelegram } from './telegram';
 import {
   handleSendHelpWantedNotification,
@@ -585,8 +586,11 @@ async function handleSaveProposal(owner: string, repo: string, number: number, b
     .eq('issue_number', number)
     .maybeSingle();
 
-  if (existing && (existing.state === 'posting' || existing.state === 'posted')) {
-    return { ok: false, error: `Proposal already ${existing.state}` };
+  // Never overwrite a row the server owns: a posting/posted proposal (too late
+  // to edit) or an auto-draft still being queued/generated (the drafter is
+  // mid-write; a human Save here would clobber its state and body).
+  if (existing && SERVER_OWNED_STATES.has(existing.state as ProposalState)) {
+    return { ok: false, error: `Proposal is ${existing.state} — not editable here` };
   }
 
   const { data, error } = await supabase
@@ -636,8 +640,8 @@ async function handleSetProposalState(
   if (newState === 'armed' && !existing.body?.trim()) {
     return { ok: false, error: 'Cannot arm an empty proposal' };
   }
-  if (existing.state === 'posting' || existing.state === 'posted') {
-    return { ok: false, error: `Proposal already ${existing.state}` };
+  if (SERVER_OWNED_STATES.has(existing.state as ProposalState)) {
+    return { ok: false, error: `Proposal is ${existing.state} — not editable here` };
   }
 
   if (newState === 'armed') {

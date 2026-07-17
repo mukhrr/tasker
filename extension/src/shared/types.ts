@@ -68,7 +68,26 @@ export interface Task {
   updated_at: string;
 }
 
-export type ProposalState = 'draft' | 'armed' | 'posting' | 'posted' | 'failed';
+// `queued` and `drafting` are server-owned states created by the auto-draft
+// pipeline (the sniper enqueues, the drafter fills). The extension treats them
+// as read-only — it never authors or mutates a proposal in these states.
+export type ProposalState =
+  | 'queued'
+  | 'drafting'
+  | 'draft'
+  | 'armed'
+  | 'posting'
+  | 'posted'
+  | 'failed';
+
+// States the extension must not overwrite: an in-flight server draft, or a row
+// already claimed for / completed posting.
+export const SERVER_OWNED_STATES: ReadonlySet<ProposalState> = new Set([
+  'queued',
+  'drafting',
+  'posting',
+  'posted',
+]);
 
 export interface Proposal {
   id: string;

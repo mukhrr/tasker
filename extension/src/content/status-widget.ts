@@ -152,7 +152,11 @@ export class StatusWidget {
       this.autoPostEnabled = autoPostRes.data.enabled;
     }
 
-    if (this.proposal?.state === 'armed' || this.proposal?.state === 'posting') {
+    // Poll while the row is in a transient server-driven state so the widget
+    // observes the drafter's queued → drafting → armed → posted progression
+    // without a page reload.
+    const pollStates = ['queued', 'drafting', 'armed', 'posting'];
+    if (this.proposal && pollStates.includes(this.proposal.state)) {
       this.startProposalPoll();
     }
 
@@ -553,6 +557,26 @@ export class StatusWidget {
     const isArmed = state === 'armed' || state === 'posting';
     const isFinal = state === 'posted';
     const isFailed = state === 'failed';
+    const isAutoDrafting = state === 'queued' || state === 'drafting';
+
+    if (isAutoDrafting) {
+      // Server-owned: the sniper queued this issue and the drafter is writing
+      // the body. Show a read-only status; never expose the editable draft UI,
+      // which would let a Save clobber the in-flight server state.
+      const label = state === 'queued' ? 'Queued for auto-drafting…' : 'Auto-drafting proposal…';
+      body.innerHTML = `
+        <div class="proposal-status">
+          <span class="check">🤖</span>
+          <div>
+            <div class="proposal-status-line">${this.escapeHtml(label)}</div>
+            <div class="proposal-status-sub">A proposal is being written and will arm automatically.</div>
+          </div>
+        </div>
+      `;
+      section.appendChild(body);
+      this.root.appendChild(section);
+      return;
+    }
 
     if (isFinal) {
       const when = this.proposal?.posted_at
@@ -1313,6 +1337,11 @@ export class StatusWidget {
       .proposal-status-line {
         font-size: 11px;
         opacity: 0.7;
+      }
+      .proposal-status-sub {
+        font-size: 10px;
+        opacity: 0.5;
+        margin-top: 2px;
       }
 
       .proposal-notice {
