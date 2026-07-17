@@ -86,6 +86,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleSetProposalState(msg.owner, msg.repo, msg.number, 'armed');
     case 'DISARM_PROPOSAL':
       return handleSetProposalState(msg.owner, msg.repo, msg.number, 'draft');
+    case 'ENQUEUE_AUTO_DRAFT':
+      return handleEnqueueAutoDraft(msg.owner, msg.repo, msg.number);
     case 'POST_PROPOSAL_NOW':
       return handlePostProposalNow(msg.proposalId, msg.force === true);
     case 'GET_AUTOPOST':
@@ -672,6 +674,66 @@ async function handleSetProposalState(
     .from('proposals')
     .update({ state: newState, last_error: null })
     .eq('id', existing.id)
+    .select()
+    .single();
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: data as Proposal };
+}
+
+// "Run Auto-pilot": hand this issue to the server-side drafter by setting a
+// proposals row to state='queued', origin='auto'. Works for any issue, not just
+// ones in a watched label group. Refuses if the row is already in flight
+// (queued/drafting) or done with (armed/posting/posted).
+async function handleEnqueueAutoDraft(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<Proposal>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data: existing, error: readErr } = await supabase
+    .from('proposals')
+    .select('id, state')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+
+  if (existing) {
+    const s = existing.state as ProposalState;
+    if (s === 'queued' || s === 'drafting') {
+      return { ok: false, error: 'Auto-pilot is already running for this issue' };
+    }
+    if (SERVER_OWNED_STATES.has(s)) {
+      return { ok: false, error: `Proposal is ${s} — can't auto-pilot` };
+    }
+  }
+
+  // Reset draft_attempts so a previously-failed row gets a fresh run. The drafter
+  // overwrites the body when it arms, so we leave any existing body untouched.
+  const { data, error } = await supabase
+    .from('proposals')
+    .upsert(
+      {
+        user_id: session.session.user.id,
+        repo_owner: owner,
+        repo_name: repo,
+        issue_number: number,
+        state: 'queued',
+        origin: 'auto',
+        draft_attempts: 0,
+        last_error: null,
+      },
+      { onConflict: 'user_id,repo_owner,repo_name,issue_number' },
+    )
     .select()
     .single();
 

@@ -124,6 +124,17 @@ export interface DisarmProposalRequest {
   number: number;
 }
 
+// "Run Auto-pilot" enqueues this issue for the server-side drafter (Codex writes
+// the proposal, validates it, and arms it). Creates/sets a proposals row to
+// state='queued', origin='auto' regardless of whether the issue is in a watched
+// label group — this is the manual, per-issue trigger for the auto-draft flow.
+export interface EnqueueAutoDraftRequest {
+  type: 'ENQUEUE_AUTO_DRAFT';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 // Manual "Post now" asks the background to claim the proposal and post it.
 export interface PostProposalNowRequest {
   type: 'POST_PROPOSAL_NOW';
@@ -171,6 +182,7 @@ export type MessageRequest =
   | SaveProposalRequest
   | ArmProposalRequest
   | DisarmProposalRequest
+  | EnqueueAutoDraftRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
   | SetAutoPostRequest

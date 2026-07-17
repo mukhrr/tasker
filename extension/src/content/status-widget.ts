@@ -596,6 +596,26 @@ export class StatusWidget {
       return;
     }
 
+    // Run Auto-pilot — hand the whole draft→validate→arm→post flow to the
+    // server-side drafter. Offered in editable states only (draft/failed/none);
+    // armed/posting/posted/queued/drafting rows don't need it.
+    if (!isArmed) {
+      const autopilotRow = document.createElement('div');
+      autopilotRow.className = 'proposal-autopilot';
+      const autopilotBtn = document.createElement('button');
+      autopilotBtn.className = 'proposal-btn autopilot';
+      autopilotBtn.textContent = this.proposalBusy ? 'Starting…' : '🤖 Run Auto-pilot';
+      autopilotBtn.disabled = this.proposalBusy;
+      autopilotBtn.title = 'Let the server draft, validate, and arm this proposal automatically.';
+      autopilotBtn.addEventListener('click', () => void this.enqueueAutoDraft());
+      autopilotRow.appendChild(autopilotBtn);
+      const hint = document.createElement('div');
+      hint.className = 'proposal-status-sub';
+      hint.textContent = 'Drafts with Codex, validates, and arms — no typing needed.';
+      autopilotRow.appendChild(hint);
+      body.appendChild(autopilotRow);
+    }
+
     if (this.proposalNotice) {
       const noticeEl = document.createElement('div');
       noticeEl.className = 'proposal-notice';
@@ -783,6 +803,31 @@ export class StatusWidget {
       }
     } else {
       this.error = res.error ?? 'Update failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  // "Run Auto-pilot": hand this issue to the server-side drafter, which writes
+  // the proposal, validates it, and arms it (posting directly if Help Wanted is
+  // already present). The row goes to state='queued'; the widget then shows the
+  // read-only auto-drafting status and polls the progression.
+  private async enqueueAutoDraft(): Promise<void> {
+    if (this.proposalBusy) return;
+    this.proposalBusy = true;
+    this.render();
+    const res = await sendMessage<MessageResponse<Proposal>>({
+      type: 'ENQUEUE_AUTO_DRAFT',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.proposalBusy = false;
+    if (res.ok && res.data) {
+      this.proposal = res.data;
+      this.startProposalPoll();
+    } else {
+      this.error = res.error ?? 'Could not start Auto-pilot';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();
@@ -1333,6 +1378,20 @@ export class StatusWidget {
         border-color: #dc2626;
       }
       .proposal-btn.danger:hover:not(:disabled) { background: #b91c1c; }
+
+      .proposal-autopilot {
+        margin-bottom: 8px;
+      }
+      .proposal-btn.autopilot {
+        width: 100%;
+        background: linear-gradient(135deg, #7c3aed, #2563eb);
+        color: #ffffff;
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .proposal-btn.autopilot:hover:not(:disabled) {
+        background: linear-gradient(135deg, #6d28d9, #1d4ed8);
+      }
 
       .proposal-status-line {
         font-size: 11px;
