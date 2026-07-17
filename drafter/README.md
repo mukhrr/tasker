@@ -62,6 +62,26 @@ keeps going while your laptop sleeps — the only manual step is a one-time
 - **Codex usage limits** — detected in Codex output; the row is re-queued and the worker
   backs off 15 minutes with a Telegram warning.
 
+## Continuing a draft from your terminal
+
+Every draft and enrich run records its Codex session id on the proposals row
+(`codex_session_id`) and includes a ready-to-paste resume command in the log and
+the Telegram ping, e.g.:
+
+```
+Resume the Codex session:
+CODEX_HOME=/data/codex codex exec resume <id> "make the RCA even tighter"
+```
+
+Two things to know:
+- **Codex's own thread names are an auto-incrementing counter, not the issue
+  number** — and `codex exec` ignores an override — so we resume by the stable
+  session **id**, tagged to the issue in Supabase and in every notification.
+- **The sessions live wherever `CODEX_HOME` is.** Running the drafter locally
+  (e.g. a dry run) puts them in your `~/.codex`, so the command works as-is. When
+  the drafter runs on Railway they live on the `/data` volume — `railway ssh` into
+  the service first, then run the command (it already sets `CODEX_HOME=/data/codex`).
+
 ## Setup
 
 ```bash

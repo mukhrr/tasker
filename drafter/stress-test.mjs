@@ -23,7 +23,7 @@ const DRAFTER = new URL('.', import.meta.url);
 // counter (falls back to the highest that exists), so a scenario can hand out
 // bad-then-good outputs. Touch $FAKE_CODEX_DIR/usage_limit to simulate the cap.
 const FAKE_CODEX = `#!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 const dir = process.env.FAKE_CODEX_DIR;
 const argv = process.argv.slice(2);
@@ -44,6 +44,15 @@ const body = readFileSync(path.join(dir, pick + '.md'), 'utf8');
 if (out) writeFileSync(out, body);
 // Capture the prompt (last positional arg) so tests can assert its wiring.
 writeFileSync(path.join(dir, 'last_prompt.txt'), argv[argv.length - 1] || '');
+// Record a session like real Codex does, so the drafter can read the id back.
+const home = process.env.CODEX_HOME;
+if (home) {
+  mkdirSync(home, { recursive: true });
+  appendFileSync(
+    path.join(home, 'session_index.jsonl'),
+    JSON.stringify({ id: 'sess-' + n, thread_name: String(90000 + n), updated_at: '2026-07-17T00:00:00Z' }) + '\\n',
+  );
+}
 console.log('done');
 `;
 
@@ -248,6 +257,7 @@ await runScenario({
     const r = state.rows.get('r1');
     assert.ok(r.body.includes('root cause'), 'armed body missing proposal content');
     assert.equal(state.commentPosts.length, 0, 'no direct post expected (no Help Wanted)');
+    assert.match(r.codex_session_id || '', /^sess-\d+$/, 'codex_session_id not captured on the armed row');
     // The draft prompt must reference the bundled skill and carry the issue.
     const prompt = readFileSync(path.join(codexDir, 'last_prompt.txt'), 'utf8');
     assert.match(prompt, /expensify-proposal-writer\/SKILL\.md/, 'draft prompt did not reference the skill');

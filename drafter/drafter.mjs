@@ -240,7 +240,29 @@ async function refreshRepo() {
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────────────
-async function runCodex(prompt) {
+// Read the session Codex just recorded. It appends one {id, thread_name, ...}
+// line to CODEX_HOME/session_index.jsonl per run; the drafter runs codex one at
+// a time, so the newest line after the run is this session. Returns null if the
+// index isn't present (e.g. an old Codex, or --ephemeral).
+async function latestCodexSession() {
+  try {
+    const raw = await readFile(path.join(CODEX_HOME, 'session_index.jsonl'), 'utf8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const row = JSON.parse(lines[i]);
+        if (row?.id) return { id: row.id, threadName: row.thread_name || '' };
+      } catch {
+        /* skip malformed line */
+      }
+    }
+  } catch {
+    /* no index */
+  }
+  return null;
+}
+
+async function runCodex(prompt, { threadName } = {}) {
   const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
   const args = ['exec', '-a', 'never', '-C', REPO_DIR, '--skip-git-repo-check', '--output-last-message', outFile];
   if (CODEX_UNSAFE_SANDBOX) {
@@ -249,6 +271,10 @@ async function runCodex(prompt) {
     args.push('--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true');
   }
   if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
+  // Best-effort: label the session by issue. `codex exec` currently ignores this
+  // (it assigns an auto-incrementing name), but we read the real id back either
+  // way, so this just helps if a future Codex honors it.
+  if (threadName) args.push('-c', `thread_name=${JSON.stringify(threadName)}`);
   args.push(prompt);
 
   const res = await run(CODEX_BIN, args, {
@@ -271,7 +297,15 @@ async function runCodex(prompt) {
     body = res.stdout.trim(); // fall back to stdout if the file wasn't written
   }
   if (!body) return { ok: false, error: 'codex produced an empty proposal' };
-  return { ok: true, body };
+  const session = await latestCodexSession();
+  return { ok: true, body, sessionId: session?.id || null };
+}
+
+// A ready-to-paste command to continue a drafter Codex session from a terminal.
+// Includes CODEX_HOME so it works locally and via `railway ssh` into the service.
+function resumeHint(sessionId) {
+  if (!sessionId) return '';
+  return `\nResume the Codex session:\nCODEX_HOME=${CODEX_HOME} codex exec resume ${sessionId} "<your follow-up>"`;
 }
 
 // ── validator ──────────────────────────────────────────────────────────────────
@@ -372,19 +406,28 @@ async function draftOne(row) {
   const result = await draftWithValidation(prompt, claimed);
   if (!result) return; // failure paths handled inside
 
-  const body = result;
+  const { body, sessionId } = result;
 
   if (DRY_RUN) {
-    log(`🧪 DRY_RUN #${n}: would arm this proposal (${body.length} chars):\n${body.slice(0, 400)}…`);
+    log(
+      `🧪 DRY_RUN #${n}: would arm this proposal (${body.length} chars):\n${body.slice(0, 400)}…` +
+        resumeHint(sessionId),
+    );
     // Return the row to queued so a real run can pick it up later.
-    await updateProposal(claimed.id, { state: 'queued' });
+    await updateProposal(claimed.id, { state: 'queued', codex_session_id: sessionId });
     return;
   }
 
   // Arm: drafting → armed. The sniper stages it and posts on Help Wanted.
   const armed = await updateProposal(
     claimed.id,
-    { state: 'armed', body, last_error: null, draft_attempts: (claimed.draft_attempts || 0) + 1 },
+    {
+      state: 'armed',
+      body,
+      last_error: null,
+      draft_attempts: (claimed.draft_attempts || 0) + 1,
+      codex_session_id: sessionId,
+    },
     { requireState: 'drafting' },
   );
   if (!armed) {
@@ -392,8 +435,8 @@ async function draftOne(row) {
     return;
   }
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
-  log(`📝 #${n} armed`);
-  await notify(`📝 Auto-armed ${REPO}#${n} — ${issue.title}\n${issueUrl}`);
+  log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
+  await notify(`📝 Auto-armed ${REPO}#${n} — ${issue.title}\n${issueUrl}${resumeHint(sessionId)}`);
 
   // Fast path: if Help Wanted is already on the issue, the sniper intentionally
   // ignores the stale label event, so post directly.
@@ -407,12 +450,15 @@ async function draftOne(row) {
   }
 }
 
-// Draft, validate, and retry once with validator feedback. Returns the final
-// body on success, or null after handling the failure path.
+// Draft, validate, and retry once with validator feedback. Returns
+// { body, sessionId } on success, or null after handling the failure path.
 async function draftWithValidation(prompt, row) {
   const n = row.issue_number;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const draft = await runCodex(attempt === 1 ? prompt : `${prompt}\n\n## Fix these problems from your last attempt\n${row._lastProblems}`);
+    const draft = await runCodex(
+      attempt === 1 ? prompt : `${prompt}\n\n## Fix these problems from your last attempt\n${row._lastProblems}`,
+      { threadName: `tasker-${n}` },
+    );
     if (!draft.ok) {
       if (draft.usageLimited) {
         backoffUntil = Date.now() + 15 * 60_000;
@@ -425,7 +471,7 @@ async function draftWithValidation(prompt, row) {
       return null;
     }
     const problems = await validateProposal(draft.body);
-    if (problems.length === 0) return draft.body;
+    if (problems.length === 0) return { body: draft.body, sessionId: draft.sessionId };
     log(`⚠️  #${n} validation failed (attempt ${attempt}): ${problems.join('; ')}`);
     row._lastProblems = problems.map((p) => `- ${p}`).join('\n');
     if (attempt === 2) {
@@ -494,7 +540,7 @@ async function enrichOne(id, n, currentBody) {
   const template = await readFile(ENRICH_PROMPT_FILE, 'utf8');
   const prompt = template.replace('<<<CURRENT_PROPOSAL>>>', currentBody);
   await refreshRepo();
-  const draft = await runCodex(prompt);
+  const draft = await runCodex(prompt, { threadName: `tasker-${n}-enrich` });
   if (!draft.ok) {
     log(`enrich #${n} skipped: ${draft.error}`);
     return;
@@ -518,10 +564,14 @@ async function enrichOne(id, n, currentBody) {
   if (!row) return;
 
   if (row.state === 'armed') {
-    const updated = await updateProposal(id, { state: 'armed', body: draft.body, enriched_at: new Date().toISOString() }, { requireState: 'armed' });
+    const updated = await updateProposal(
+      id,
+      { state: 'armed', body: draft.body, enriched_at: new Date().toISOString(), codex_session_id: draft.sessionId },
+      { requireState: 'armed' },
+    );
     if (updated) {
-      log(`🧬 #${n} enriched (armed body updated)`);
-      await notify(`🧬 Enriched ${REPO}#${n} — stronger RCA + permalinks.`);
+      log(`🧬 #${n} enriched (armed body updated)${draft.sessionId ? ` [codex ${draft.sessionId}]` : ''}`);
+      await notify(`🧬 Enriched ${REPO}#${n} — stronger RCA + permalinks.${resumeHint(draft.sessionId)}`);
     }
   } else if (row.state === 'posted' && row.github_comment_id) {
     const { status } = await gh(`/repos/${REPO}/issues/comments/${row.github_comment_id}`, {
@@ -529,9 +579,9 @@ async function enrichOne(id, n, currentBody) {
       body: { body: draft.body },
     });
     if (status === 200) {
-      await updateProposal(id, { enriched_at: new Date().toISOString() });
-      log(`🧬 #${n} enriched (posted comment edited)`);
-      await notify(`🧬 Enriched posted comment on ${REPO}#${n}.`);
+      await updateProposal(id, { enriched_at: new Date().toISOString(), codex_session_id: draft.sessionId });
+      log(`🧬 #${n} enriched (posted comment edited)${draft.sessionId ? ` [codex ${draft.sessionId}]` : ''}`);
+      await notify(`🧬 Enriched posted comment on ${REPO}#${n}.${resumeHint(draft.sessionId)}`);
     } else {
       log(`enrich #${n}: comment edit failed (${status})`);
     }
