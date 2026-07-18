@@ -56,6 +56,7 @@ const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
 const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 75); // past the second boundary after HW
+const POST_LATENCY_COMP_CAP_MS = int('POST_LATENCY_COMP_CAP_MS', 12); // max send-early compensation; 0 disables
 const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 // Before posting, look up the real Help Wanted event time so a boundary-crossing
 // detection doesn't anchor the post a full second late. Bounded so a slow lookup
@@ -182,6 +183,70 @@ function noteServerDate(dateHeader) {
 
 function serverNowLowerBound() {
   return clockLB ? clockLB.serverMs + (Date.now() - clockLB.localMs) : null;
+}
+
+// ── latency compensation ─────────────────────────────────────────────────────
+// created_at is stamped when the POST ARRIVES at GitHub (send + one-way), so
+// waiting until the boundary locally means landing one-way later. Send earlier
+// by 40% of the minimum recent round-trip (a hard floor on the network path —
+// strictly less than the true one-way, so arrival can never precede the
+// boundary). Capped, and disabled with POST_LATENCY_COMP_CAP_MS=0.
+const rttSamples = []; // { at, ms } — round-trips to headers-received
+function noteRtt(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  const now = Date.now();
+  rttSamples.push({ at: now, ms });
+  while (rttSamples.length && (rttSamples.length > 40 || now - rttSamples[0].at > 120_000)) {
+    rttSamples.shift();
+  }
+}
+function latencyCompMs() {
+  if (POST_LATENCY_COMP_CAP_MS <= 0 || !rttSamples.length) return 0;
+  const minRtt = Math.min(...rttSamples.map((s) => s.ms));
+  return Math.max(0, Math.min(POST_LATENCY_COMP_CAP_MS, Math.floor(minRtt * 0.4)));
+}
+
+// ── clock calibration burst ──────────────────────────────────────────────────
+// The clock lower bound is only as tight as the sampling around a Date-header
+// rollover (~one 50ms poll interval). When a race locks on, burst cheap samples
+// at /rate_limit — exempt from rate limiting and deliberately NOT counted
+// toward the request budget — until a rollover is observed, pinning the phase
+// to ~one 40ms gap + jitter before the fire matters.
+let calibratingClock = false;
+let lastCalibrationAt = 0;
+async function calibrateClock(reason) {
+  if (calibratingClock || Date.now() - lastCalibrationAt < 10_000) return;
+  calibratingClock = true;
+  lastCalibrationAt = Date.now();
+  try {
+    let prevSec = null;
+    const deadline = Date.now() + 1_400;
+    while (Date.now() < deadline) {
+      const t0 = Date.now();
+      let res;
+      try {
+        res = await fetch(`${API}/rate_limit`, {
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'tasker-sniper',
+          },
+        });
+      } catch {
+        break;
+      }
+      noteRtt(Date.now() - t0);
+      const parsed = noteServerDate(res.headers.get('date'));
+      void res.text().catch(() => '');
+      const sec = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+      if (prevSec !== null && sec !== null && sec > prevSec) break; // rollover captured — phase pinned
+      if (sec !== null) prevSec = sec;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    log(`⏱️  clock calibration burst done (${reason}), comp=${latencyCompMs()}ms`);
+  } finally {
+    calibratingClock = false;
+  }
 }
 
 // ── Supabase proposal source ─────────────────────────────────────────────────
@@ -588,6 +653,7 @@ async function gh(p, { method = 'GET', body, useEtag = false, key } = {}) {
   } catch (e) {
     return { status: 0, data: null, error: e.message };
   }
+  noteRtt(Date.now() - startedAt);
 
   if (useEtag) {
     const et = res.headers.get('etag');
@@ -805,6 +871,7 @@ function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'loca
   };
   tracked.set(n, st);
   log(mode === 'tight' ? `🔒 #${n} locked (tight) via discovery` : `👁  #${n} watching`);
+  if (mode === 'tight') void calibrateClock('lock');
   if (mode === 'tight' && source === 'cloud') void preClaimCloudProposal(n);
   void tick(n);
 }
@@ -814,6 +881,7 @@ function upgradeToTight(n, st) {
   st.tightUntil = Date.now() + TIGHT_WINDOW_MS;
   log(`⚡ #${n} "${LOCK_NAME}" seen → tight-polling for "${TRIGGER_NAME}"`);
   if (st.source === 'cloud') void preClaimCloudProposal(n);
+  void calibrateClock('tight'); // pin the second boundary before the fire matters
 }
 
 async function tick(n) {
@@ -888,17 +956,21 @@ function survivesTightExpiry(n, st) {
 // exactly until the boundary after the HW second plus a small margin — firing
 // immediately when that boundary has already passed.
 function computePostDelay(ctx) {
-  if (!ctx) return 0;
+  // Send earlier by (a hard under-estimate of) the one-way network latency:
+  // the comment is stamped on ARRIVAL, so arrival ≈ send + one-way still lands
+  // past the boundary. See latencyCompMs.
+  const compMs = latencyCompMs();
+  if (!ctx) return { delayMs: 0, compMs };
   const hwMs = Number.isFinite(ctx.hwEventMs) ? ctx.hwEventMs : ctx.detectDateMs;
   if (Number.isFinite(hwMs)) {
-    const target = (Math.floor(hwMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS;
+    const target = (Math.floor(hwMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS - compMs;
     const serverNow = serverNowLowerBound();
-    if (serverNow !== null) return clamp(target - serverNow, 0, MAX_POST_DELAY_MS);
+    if (serverNow !== null) return { delayMs: clamp(target - serverNow, 0, MAX_POST_DELAY_MS), compMs };
   }
   // No usable server clock sample — conservatively sleep one full second past
   // the local detection time.
   const base = Number.isFinite(ctx.detectLocalMs) ? ctx.detectLocalMs : Date.now();
-  return clamp(base + 1000 + POST_BOUNDARY_MARGIN_MS - Date.now(), 0, MAX_POST_DELAY_MS);
+  return { delayMs: clamp(base + 1000 + POST_BOUNDARY_MARGIN_MS - compMs - Date.now(), 0, MAX_POST_DELAY_MS), compMs };
 }
 
 async function fire(n, issue, via, ctx) {
@@ -932,11 +1004,11 @@ async function fire(n, issue, via, ctx) {
     }
   }
 
-  const delayMs = computePostDelay(ctx);
+  const { delayMs, compMs } = computePostDelay(ctx);
 
   if (DRY_RUN) {
     log(
-      `🧪 DRY_RUN: would wait ${delayMs}ms for the second boundary, then POST proposal to #${n} ` +
+      `🧪 DRY_RUN: would wait ${delayMs}ms (comp=${compMs}ms) for the second boundary, then POST proposal to #${n} ` +
         `(via ${via}, ${body.length} chars)${title}`,
     );
     await notify(`🧪 [dry-run] would snipe #${n}${title}\n${issueUrl}`);
@@ -1014,7 +1086,7 @@ async function fire(n, issue, via, ctx) {
     }
     log(
         `✅ sniped #${n} via ${via} → ${data.html_url} ` +
-        `[claim=${claimLabel} wait=${delayMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms${stampInfo}]`,
+        `[claim=${claimLabel} wait=${delayMs}ms comp=${compMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms${stampInfo}]`,
     );
     if (POST_MORTEM_DELAY_MS > 0) {
       setTimeout(() => void racePostMortem(n, data.id), POST_MORTEM_DELAY_MS);
