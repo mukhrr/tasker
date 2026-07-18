@@ -25,18 +25,19 @@ you learned.
    - **Web** (fastest, prefer when the bug is web-reproducible): start the dev
      server (`npm run web`, port 8082; slow to boot — don't wait more than a few
      minutes) and drive it with a throwaway `npx playwright` script.
-   - **Android emulator** (when the bug is native-only): AVD
-     `Medium_Phone_API_36.0` exists. ONLY attempt this if a warm build is
-     available (an APK under `android/app/build/outputs/apk/` or gradle caches
-     from a prior build — check first); a cold gradle build takes 30+ min and is
-     forbidden. Boot headless (`emulator -avd Medium_Phone_API_36.0
-     -no-window -no-audio &`), install the APK with `adb install`, start metro
-     (`npm run start`) if it's a debug build, and drive the UI with
-     `adb shell input tap/swipe/text` + `adb exec-out screencap -p > shot.png`
-     (read the screenshots to see the screen). Kill the emulator when done.
-   - **iOS simulator**: only if Android is unsuitable AND Pods + a prior build
-     already exist under `ios/` — same cold-build prohibition. Use `xcrun simctl`
-     (boot/install/launch/screenshot).
+   - **Android emulator** (when the bug is native-only): boot the AVD headless
+     (`emulator -avd Medium_Phone_API_36.0 -no-window -no-audio &`,
+     `adb wait-for-device`), then build+install with **`npm run android`**.
+     If the Android build fails: run `git clean -fdx android/` and re-run
+     `npm run android` — that recovery is known-good for this checkout.
+     Drive the UI with `adb shell input tap/swipe/text` +
+     `adb exec-out screencap -p > shot.png` (read the screenshots to see the
+     screen). Kill the emulator when done. If the build clearly won't fit the
+     remaining time budget, drop to the Simulate rung instead of stalling.
+   - **iOS simulator**: use **`npm run ios`** (run `npm run pod-install` first
+     if `ios/Pods` is missing); drive via `xcrun simctl`
+     (boot/install/launch/screenshot). Same rule: if the build won't fit the
+     budget, simulate instead.
    - **Simulate** (first-class outcome, not a failure — use it whenever live
      repro is blocked by account/backend state, missing warm builds, or
      platform limits): reconstruct the reported conditions deterministically in
