@@ -21,30 +21,35 @@ you learned.
 ## Suggested flow (time-box ~30 minutes total)
 
 1. Read the issue and the current proposal below. Read the code paths involved.
-2. **Reproduce (time-box ~10-12 min) — work down this ladder, top rung that fits:**
-   - **Web** (fastest, prefer when the bug is web-reproducible): start the dev
-     server (`npm run web`, port 8082; slow to boot — don't wait more than a few
-     minutes) and drive it with a throwaway `npx playwright` script.
-   - **Android emulator** (when the bug is native-only): boot the AVD headless
-     (`emulator -avd Medium_Phone_API_36.0 -no-window -no-audio &`,
-     `adb wait-for-device`), then build+install with **`npm run android`**.
-     If the Android build fails: run `git clean -fdx android/` and re-run
-     `npm run android` — that recovery is known-good for this checkout.
-     Drive the UI with `adb shell input tap/swipe/text` +
-     `adb exec-out screencap -p > shot.png` (read the screenshots to see the
-     screen). Kill the emulator when done. If the build clearly won't fit the
-     remaining time budget, drop to the Simulate rung instead of stalling.
-   - **iOS simulator**: use **`npm run ios`** (run `npm run pod-install` first
-     if `ios/Pods` is missing); drive via `xcrun simctl`
-     (boot/install/launch/screenshot). Same rule: if the build won't fit the
-     budget, simulate instead.
-   - **Simulate** (first-class outcome, not a failure — use it whenever live
-     repro is blocked by account/backend state, missing warm builds, or
-     platform limits): reconstruct the reported conditions deterministically in
-     a Jest harness — mock the Onyx state / navigation / API responses the
-     issue describes — and empirically CONFIRM or DISPROVE the proposal's root
-     cause against production code paths. Disproving a wrong root cause this
-     way is as valuable as a repro; say clearly which you did.
+2. **Reproduce (time-box ~10-12 min for web, more for native) — the platform is
+   NOT your choice: read the issue's "Platforms:" checklist and follow this RULE:**
+   - **Any web platform checked** (Windows: Chrome, MacOS: Chrome Safari, or any
+     mWeb variant) → **web verification in the browser is enough.** Start the
+     dev server (`npm run web`, port 8082; slow to boot — don't wait more than a
+     few minutes) and drive it with a throwaway `npx playwright` script (use a
+     mobile viewport / device emulation when only mWeb variants are checked).
+     Do not spin up native builds when web is checked.
+   - **ONLY "Android: App" checked** (no web) → you MUST attempt the Android
+     emulator: boot the AVD headless (`emulator -avd Medium_Phone_API_36.0
+     -no-window -no-audio &`, `adb wait-for-device`), then build+install with
+     **`npm run android`** (it pulls a prebuilt APK from rock's remote cache —
+     fast). If the build fails: `git clean -fdx android/` and re-run — that
+     recovery is known-good. Drive the UI with `adb shell input tap/swipe/text`
+     + `adb exec-out screencap -p > shot.png` (read the screenshots). Kill the
+     emulator when done.
+   - **ONLY "iOS: App" checked** (no web) → you MUST attempt the iOS simulator:
+     **`npm run ios`** (run `npm run pod-install` first if `ios/Pods` is
+     missing); drive via `xcrun simctl` (boot/install/launch/screenshot).
+   - **Both native apps checked, no web** → Android first (warmer, easier to
+     drive); iOS only if the behavior can't be shown on Android.
+   - **Simulate** — the fallback, never the first choice when the required
+     platform is runnable: use it when the required platform genuinely cannot
+     run (build breakage beyond the known recovery, won't fit the time budget)
+     or the repro needs account/backend state you don't have. Reconstruct the
+     reported conditions deterministically in a Jest harness — mock the Onyx
+     state / navigation / API responses — and empirically CONFIRM or DISPROVE
+     the proposal's root cause against production code paths. If you fall back,
+     STATE explicitly why the required platform couldn't be attempted.
 3. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
