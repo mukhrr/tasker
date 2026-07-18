@@ -103,3 +103,22 @@ export interface Proposal {
   created_at: string;
   updated_at: string;
 }
+
+// A "Run Claude analysis" request, processed by the local analyzer daemon
+// (analyzer/analyzer.mjs) on the user's machine: reproduce → fix locally →
+// update the proposal → stash → Telegram.
+export type AnalysisState = 'queued' | 'running' | 'done' | 'failed';
+
+export interface AnalysisRequest {
+  id: string;
+  user_id: string;
+  repo_owner: string;
+  repo_name: string;
+  issue_number: number;
+  state: AnalysisState;
+  result_summary: string | null;
+  stash_ref: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -1,4 +1,4 @@
-import type { Task, UserStatus, Proposal } from './types';
+import type { Task, UserStatus, Proposal, AnalysisRequest as AnalysisRow } from './types';
 
 // ── Request types ──
 
@@ -164,6 +164,23 @@ export interface PostProposalNowRequest {
   force?: boolean;
 }
 
+// "Run Claude analysis": queue this issue for the LOCAL analyzer daemon (the
+// user's Mac runs Claude Code on subscription auth against their local App
+// checkout — reproduce, fix locally, update the proposal, stash, Telegram).
+export interface RunAnalysisRequest {
+  type: 'RUN_ANALYSIS';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+export interface QueryAnalysisRequest {
+  type: 'QUERY_ANALYSIS';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 // Sync the extension's watched label groups + excluded labels to Supabase so the
 // server-side sniper queues auto-drafts by the same config the user edits here.
 export interface SyncLabelConfigRequest {
@@ -224,6 +241,8 @@ export type MessageRequest =
   | EnqueueAutoDraftRequest
   | CancelAutoDraftRequest
   | ClearProposalRequest
+  | RunAnalysisRequest
+  | QueryAnalysisRequest
   | SyncLabelConfigRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
@@ -257,3 +276,5 @@ export type IssueLabelsResponse = MessageResponse<string[]>;
 export type ProposalResponse = MessageResponse<Proposal | null>;
 
 export type AutoPostResponse = MessageResponse<{ enabled: boolean }>;
+
+export type AnalysisResponse = MessageResponse<AnalysisRow | null>;

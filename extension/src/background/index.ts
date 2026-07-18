@@ -5,7 +5,7 @@ import type {
   MessageResponse,
   SessionData,
 } from '../shared/messages';
-import type { Task, UserStatus, Proposal, ProposalState } from '../shared/types';
+import type { Task, UserStatus, Proposal, ProposalState, AnalysisRequest } from '../shared/types';
 import { SERVER_OWNED_STATES } from '../shared/types';
 import { handleTestTelegram } from './telegram';
 import {
@@ -92,6 +92,10 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleCancelAutoDraft(msg.owner, msg.repo, msg.number);
     case 'CLEAR_PROPOSAL':
       return handleClearProposal(msg.owner, msg.repo, msg.number);
+    case 'RUN_ANALYSIS':
+      return handleRunAnalysis(msg.owner, msg.repo, msg.number);
+    case 'QUERY_ANALYSIS':
+      return handleQueryAnalysis(msg.owner, msg.repo, msg.number);
     case 'SYNC_LABEL_CONFIG':
       return handleSyncLabelConfig(msg.watchedLabelGroups, msg.excludedLabels);
     case 'POST_PROPOSAL_NOW':
@@ -827,6 +831,80 @@ async function handleClearProposal(
   const { error } = await supabase.from('proposals').delete().eq('id', existing.id);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+// ── "Run Claude analysis" — queue for the LOCAL analyzer daemon ─────────────
+// The daemon (analyzer/analyzer.mjs on the user's Mac) polls analysis_requests,
+// runs Claude Code (subscription auth) against the local App checkout, and
+// writes the outcome back. Re-running a done/failed request resets it to queued.
+async function handleRunAnalysis(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<AnalysisRequest>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data: existing, error: readErr } = await supabase
+    .from('analysis_requests')
+    .select('id, state')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (existing && (existing.state === 'queued' || existing.state === 'running')) {
+    return { ok: false, error: `Analysis is already ${existing.state}` };
+  }
+
+  const { data, error } = await supabase
+    .from('analysis_requests')
+    .upsert(
+      {
+        user_id: session.session.user.id,
+        repo_owner: owner,
+        repo_name: repo,
+        issue_number: number,
+        state: 'queued',
+        result_summary: null,
+        stash_ref: null,
+        last_error: null,
+      },
+      { onConflict: 'user_id,repo_owner,repo_name,issue_number' },
+    )
+    .select()
+    .single();
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: data as AnalysisRequest };
+}
+
+async function handleQueryAnalysis(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<AnalysisRequest | null>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data, error } = await supabase
+    .from('analysis_requests')
+    .select('*')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: (data as AnalysisRequest) ?? null };
 }
 
 // ── Proposal controls shared by the popup, manual post, and Railway worker ──

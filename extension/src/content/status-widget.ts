@@ -1,4 +1,4 @@
-import type { Task, UserStatus, TaskStatusGroup, Proposal } from '../shared/types';
+import type { Task, UserStatus, TaskStatusGroup, Proposal, AnalysisRequest } from '../shared/types';
 import type {
   MessageRequest,
   MessageResponse,
@@ -10,6 +10,7 @@ import type {
   IssueLabelsResponse,
   ProposalResponse,
   AutoPostResponse,
+  AnalysisResponse,
 } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
 
@@ -55,6 +56,9 @@ export class StatusWidget {
   private proposalPollHandle: ReturnType<typeof setInterval> | null = null;
   private proposalNotice: string | null = null;
   private destroyed = false;
+  private analysis: AnalysisRequest | null = null;
+  private analysisBusy = false;
+  private analysisPollTimer: number | null = null;
   private autoPostEnabled = true;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
@@ -121,12 +125,13 @@ export class StatusWidget {
   }
 
   private async initIssue() {
-    const [taskRes, statusesRes, labelsRes, proposalRes, autoPostRes] = await Promise.all([
+    const [taskRes, statusesRes, labelsRes, proposalRes, autoPostRes, analysisRes] = await Promise.all([
       sendMessage<TaskResponse>({ type: 'QUERY_TASK', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
       sendMessage<IssueLabelsResponse>({ type: 'QUERY_ISSUE_LABELS', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<ProposalResponse>({ type: 'QUERY_PROPOSAL', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<AutoPostResponse>({ type: 'GET_AUTOPOST' }),
+      sendMessage<AnalysisResponse>({ type: 'QUERY_ANALYSIS', owner: this.owner, repo: this.repo, number: this.number }),
     ]);
 
     if (!taskRes.ok) {
@@ -150,6 +155,13 @@ export class StatusWidget {
 
     if (autoPostRes.ok && autoPostRes.data) {
       this.autoPostEnabled = autoPostRes.data.enabled;
+    }
+
+    if (analysisRes.ok) {
+      this.analysis = analysisRes.data ?? null;
+      if (this.analysis && (this.analysis.state === 'queued' || this.analysis.state === 'running')) {
+        this.startAnalysisPoll();
+      }
     }
 
     // Poll while the row is in a transient server-driven state so the widget
@@ -429,6 +441,7 @@ export class StatusWidget {
     section.appendChild(btn);
     this.root.appendChild(section);
 
+    this.renderAnalysisPanel();
     this.renderProposalPanel();
   }
 
@@ -463,6 +476,7 @@ export class StatusWidget {
 
     this.root.appendChild(section);
 
+    this.renderAnalysisPanel();
     this.renderProposalPanel();
   }
 
@@ -1081,9 +1095,113 @@ export class StatusWidget {
     return el.innerHTML;
   }
 
+  // ── "Run Claude analysis" — local analyzer daemon ──
+  // Renders below the Add-to-Tasker / status section. Queues a request that the
+  // analyzer daemon on the user's machine picks up (Claude Code on subscription
+  // auth: reproduce with Playwright → fix locally → update proposal → stash →
+  // Telegram). The widget just shows the request lifecycle.
+  private renderAnalysisPanel(): void {
+    const section = document.createElement('div');
+    section.className = 'section proposal';
+    const body = document.createElement('div');
+    body.className = 'proposal-body';
+
+    const st = this.analysis?.state ?? null;
+    const inFlight = st === 'queued' || st === 'running';
+
+    const row = document.createElement('div');
+    row.className = 'proposal-actions';
+    const btn = document.createElement('button');
+    btn.className = 'proposal-btn autopilot';
+    btn.textContent = this.analysisBusy
+      ? 'Queuing…'
+      : inFlight
+        ? (st === 'queued' ? '⏳ Analysis queued…' : '🔬 Analyzing…')
+        : st === 'done' || st === 'failed'
+          ? '🧠 Re-run Claude analysis'
+          : '🧠 Run Claude analysis';
+    btn.disabled = this.analysisBusy || inFlight;
+    btn.title =
+      'Runs Claude Code on your machine: reproduce the bug, apply a local fix (no commit), update the proposal, stash the changes, and ping Telegram. Requires the analyzer daemon to be running.';
+    btn.addEventListener('click', () => void this.runAnalysis());
+    row.appendChild(btn);
+    body.appendChild(row);
+
+    const line = document.createElement('div');
+    line.className = 'proposal-status-sub';
+    if (st === 'done') {
+      const summary = (this.analysis?.result_summary ?? '').slice(0, 240);
+      line.textContent = `✅ ${summary || 'Analysis finished.'}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
+    } else if (st === 'failed') {
+      line.textContent = `⚠️ ${(this.analysis?.last_error ?? 'Analysis failed').slice(0, 240)}`;
+    } else if (st === 'running') {
+      line.textContent = 'Claude is reproducing and fixing locally — result lands here and on Telegram.';
+    } else if (st === 'queued') {
+      line.textContent = 'Waiting for the analyzer daemon on your Mac to pick this up.';
+    } else {
+      line.textContent = 'Reproduce → fix locally → update proposal → stash. Needs the local analyzer running.';
+    }
+    body.appendChild(line);
+
+    section.appendChild(body);
+    this.root.appendChild(section);
+  }
+
+  private async runAnalysis(): Promise<void> {
+    if (this.analysisBusy) return;
+    this.analysisBusy = true;
+    this.render();
+    const res = await sendMessage<AnalysisResponse>({
+      type: 'RUN_ANALYSIS',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.analysisBusy = false;
+    if (res.ok && res.data) {
+      this.analysis = res.data;
+      this.startAnalysisPoll();
+    } else {
+      this.error = res.error ?? 'Could not queue analysis';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  private startAnalysisPoll(): void {
+    this.stopAnalysisPoll();
+    this.analysisPollTimer = window.setInterval(() => {
+      void (async () => {
+        if (this.destroyed) return;
+        const res = await sendMessage<AnalysisResponse>({
+          type: 'QUERY_ANALYSIS',
+          owner: this.owner,
+          repo: this.repo,
+          number: this.number,
+        });
+        if (this.destroyed || !res.ok) return;
+        const next = res.data ?? null;
+        const changed = JSON.stringify(next) !== JSON.stringify(this.analysis);
+        this.analysis = next;
+        if (!next || (next.state !== 'queued' && next.state !== 'running')) {
+          this.stopAnalysisPoll();
+        }
+        if (changed) this.render();
+      })();
+    }, 15000);
+  }
+
+  private stopAnalysisPoll(): void {
+    if (this.analysisPollTimer !== null) {
+      clearInterval(this.analysisPollTimer);
+      this.analysisPollTimer = null;
+    }
+  }
+
   destroy() {
     this.destroyed = true;
     this.stopProposalPoll();
+    this.stopAnalysisPoll();
     this.container.remove();
   }
 

@@ -1154,7 +1154,7 @@ async function racePostMortem(n, commentId) {
       (sameSecond ? ' ⚠️ same second as the label — may render above it' : '') +
       (ahead.length ? ` — ahead: ${aheadList}` : '');
     log(report);
-    await notify(report);
+    await notify(report, { level: 'verbose' }); // still in the Railway logs; Telegram only when TELEGRAM_VERBOSE
   } catch (e) {
     log(`race report #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
   }
