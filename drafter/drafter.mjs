@@ -71,6 +71,10 @@ const SKILL_NAME = process.env.SKILL_NAME || 'expensify-proposal-writer';
 const SKILL_DIR = path.join(CODEX_HOME, 'skills', SKILL_NAME);
 
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 12000); // 12s — the drafter isn't latency-critical; keeps Supabase egress low
+// How many issues to draft at once. Codex runs are network-bound, so parallel
+// drafts compress a mass-labeling backlog's wall-clock (~4-5 min per draft
+// serially) without using more plan quota in total.
+const MAX_CONCURRENT_DRAFTS = int('MAX_CONCURRENT_DRAFTS', 3);
 const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
 const STALE_SWEEP_MS = int('STALE_SWEEP_MS', 60_000);
 const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
@@ -81,6 +85,7 @@ const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'pr
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
+let draftsInFlight = 0; // concurrent draftOne calls, capped at MAX_CONCURRENT_DRAFTS
 const dryRunSeen = new Set(); // issues already dry-drafted this process (no re-loop)
 
 // ── logging + telegram ────────────────────────────────────────────────────────
@@ -244,6 +249,15 @@ async function ensureRepo() {
 }
 
 async function refreshRepo() {
+  // With concurrent drafts, never `reset --hard` while another draft may have a
+  // codex run mid-investigation in the same checkout. Solo drafts refresh; the
+  // rest ride the existing checkout — at most minutes stale, and the draft
+  // prompt has codex `git fetch origin main` itself for SHA-pinned permalinks
+  // (fetch is safe concurrently; only the reset moves the working tree).
+  if (draftsInFlight > 1) {
+    log('repo refresh skipped — another draft is using the checkout');
+    return;
+  }
   const fetchRes = await run('git', ['fetch', 'origin', 'main', '--quiet'], {
     cwd: REPO_DIR,
     timeoutMs: 120_000,
@@ -256,26 +270,29 @@ async function refreshRepo() {
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────────────
-// Read the session Codex just recorded. It appends one {id, thread_name, ...}
-// line to CODEX_HOME/session_index.jsonl per run; the drafter runs codex one at
-// a time, so the newest line after the run is this session. Returns null if the
-// index isn't present (e.g. an old Codex, or --ephemeral).
-async function latestCodexSession() {
+// Codex appends one {id, thread_name, ...} line to CODEX_HOME/session_index.jsonl
+// per run. With MAX_CONCURRENT_DRAFTS > 1 several runs can be in flight, so "the
+// newest line" is ambiguous — runCodex snapshots the ids before its run and
+// attributes the first NEW id afterwards. Returns [] if the index isn't present
+// (e.g. an old Codex, or --ephemeral).
+async function codexSessionIds() {
   try {
     const raw = await readFile(path.join(CODEX_HOME, 'session_index.jsonl'), 'utf8');
-    const lines = raw.trim().split('\n').filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const row = JSON.parse(lines[i]);
-        if (row?.id) return { id: row.id, threadName: row.thread_name || '' };
-      } catch {
-        /* skip malformed line */
-      }
-    }
+    return raw
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l)?.id || null;
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
   } catch {
-    /* no index */
+    return [];
   }
-  return null;
 }
 
 // The environment handed to the Codex subprocess. Codex runs model-authored
@@ -320,6 +337,9 @@ async function runCodex(prompt, { threadName } = {}) {
   if (threadName) args.push('-c', `thread_name=${JSON.stringify(threadName)}`);
   args.push(prompt);
 
+  // Snapshot session ids so this run's session can be identified afterwards even
+  // with other codex runs in flight (see codexSessionIds).
+  const sessionsBefore = new Set(await codexSessionIds());
   const res = await runCodexProcess(CODEX_BIN, args, {
     env: codexSubprocessEnv(),
     timeoutMs: CODEX_TIMEOUT_MS,
@@ -350,8 +370,10 @@ async function runCodex(prompt, { threadName } = {}) {
     body = res.stdout.trim(); // last-resort fallback
   }
   if (!body) return { ok: false, error: 'codex produced an empty proposal' };
-  const session = await latestCodexSession();
-  return { ok: true, body, sessionId: session?.id || null };
+  const fresh = (await codexSessionIds()).filter((id) => !sessionsBefore.has(id));
+  // One new id → unambiguous. Several (concurrent runs finished together) → take
+  // the first new one as best-effort; the id is only used for resume hints.
+  return { ok: true, body, sessionId: fresh[0] || null };
 }
 
 // Run `codex exec`, but stop waiting the moment it writes its final proposal to
@@ -771,6 +793,8 @@ async function tick() {
   if (!AUTOPILOT_ENABLED) return; // Railway master switch — idle when off
   if (Date.now() < backoffUntil) return;
   await recoverStaleDrafting();
+  const slots = MAX_CONCURRENT_DRAFTS - draftsInFlight;
+  if (slots <= 0) return; // all drafting slots busy — check again next poll
   const settings = await fetchSettings();
   if (!settings.autoPilot) return; // "Auto-pilot" checkbox off — draft nothing
 
@@ -783,12 +807,26 @@ async function tick() {
     repo_name: `ilike.${REPO_NAME}`,
     state: 'eq.queued',
     origin: 'eq.auto',
-    order: 'created_at.asc',
-    limit: '1',
+    // Newest first: in a mass-labeling burst the freshest issue has the most
+    // valuable race window still open; a stale backlog item has already lost
+    // its minutes either way. (Was oldest-first, which polished stale issues
+    // while fresh Help Wanted windows slipped by.)
+    order: 'created_at.desc',
+    limit: String(slots),
   });
   const rows = await supabaseRequest(`proposals?${query}`);
   if (!Array.isArray(rows) || rows.length === 0) return;
-  await draftOne(rows[0], settings);
+  // Fire drafts without awaiting so the poll loop keeps running and can fill
+  // freed slots. The queued→drafting claim is atomic (state-filtered PATCH), so
+  // a row can never be drafted twice even if it were fetched twice.
+  for (const row of rows) {
+    draftsInFlight++;
+    void draftOne(row, settings)
+      .catch((e) => log(`draft #${row.issue_number} crashed: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => {
+        draftsInFlight--;
+      });
+  }
 }
 
 async function loop() {
@@ -812,6 +850,7 @@ async function main() {
     `drafter up — repo=${REPO} skill=${SKILL_NAME} autopilot=${AUTOPILOT_ENABLED ? 'on' : 'OFF'} ` +
       `dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
       `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
+      `concurrency=${MAX_CONCURRENT_DRAFTS} ` +
       `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
   );
   void loop();
