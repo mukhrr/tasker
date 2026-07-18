@@ -24,11 +24,26 @@ you learned.
 2. **Reproduce (time-box ~10-12 min for web, more for native) — the platform is
    NOT your choice: read the issue's "Platforms:" checklist and follow this RULE:**
    - **Any web platform checked** (Windows: Chrome, MacOS: Chrome Safari, or any
-     mWeb variant) → **web verification in the browser is enough.** Start the
-     dev server (`npm run web`, port 8082; slow to boot — don't wait more than a
-     few minutes) and drive it with a throwaway `npx playwright` script (use a
-     mobile viewport / device emulation when only mWeb variants are checked).
-     Do not spin up native builds when web is checked.
+     mWeb variant) → **web verification in the browser is enough.** Do this
+     properly, in this order:
+     1. Start the dev server **first thing, in the background** (`npm run web`,
+        port 8082) and go read the code while it boots — it can take up to
+        ~10 minutes; poll `curl -sk https://localhost:8082` until it serves.
+        Do not give up on it early; only abandon web if it still isn't serving
+        after ~12 minutes.
+     2. **Sign in** with the test account below (if one is configured) via a
+        `npx playwright` script; use a mobile viewport / device emulation when
+        only mWeb variants are checked.
+     3. **Seed the state the issue requires via the UI** — e.g. create the
+        workspace / expense / split / message the repro steps mention. Most
+        "cannot reproduce" outcomes are really "didn't set up the data"; the
+        setup is part of the reproduction.
+     4. Reproduce the reported steps and capture screenshots.
+     Do not spin up native builds when web is checked. If no test account is
+     configured and the flow requires auth, say exactly that as the fallback
+     reason.
+
+     Test account for staging/dev sign-in: <<<TEST_ACCOUNT>>>
    - **ONLY "Android: App" checked** (no web) → you MUST attempt the Android
      emulator: boot the AVD headless (`emulator -avd Medium_Phone_API_36.0
      -no-window -no-audio &`, `adb wait-for-device`), then build+install with

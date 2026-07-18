@@ -41,6 +41,12 @@ const GITHUB_API = 'https://api.github.com';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 
+// Optional throwaway staging test account for web repro sign-in (a fixed-magic-
+// code account — never a real/personal account). Injected into the PROMPT, not
+// the subprocess env.
+const TEST_ACCOUNT_EMAIL = process.env.TEST_ACCOUNT_EMAIL || '';
+const TEST_ACCOUNT_MAGIC_CODE = process.env.TEST_ACCOUNT_MAGIC_CODE || '';
+
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || ''; // '' → CLI default; subscription auth either way
 const CLAUDE_TIMEOUT_MS = int('CLAUDE_TIMEOUT_MS', 45 * 60_000); // repro + fix can legitimately take a while
@@ -277,8 +283,13 @@ async function processRequest(req) {
     const proposal = Array.isArray(propRows) ? propRows[0] || null : null;
 
     const template = await readFile(PROMPT_FILE, 'utf8');
+    const testAccount =
+      TEST_ACCOUNT_EMAIL && TEST_ACCOUNT_MAGIC_CODE
+        ? `email ${TEST_ACCOUNT_EMAIL}, magic code ${TEST_ACCOUNT_MAGIC_CODE}. You may also derive fresh sibling accounts with a "+suffix" on the same mailbox (same magic code) when the repro needs a second user.`
+        : '(none configured — auth-gated flows cannot be reproduced live; state this when falling back)';
     const prompt = template
       .replaceAll('<<<ISSUE_NUMBER>>>', String(n))
+      .replace('<<<TEST_ACCOUNT>>>', testAccount)
       .replace('<<<ISSUE>>>', `#${n}: ${issue.title}\n\n${issue.body || '(no description)'}`)
       .replace('<<<PROPOSAL>>>', proposal?.body || '(no proposal drafted yet)');
 
