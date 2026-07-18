@@ -41,11 +41,10 @@ const GITHUB_API = 'https://api.github.com';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 
-// Optional throwaway staging test account for web repro sign-in (a fixed-magic-
-// code account — never a real/personal account). Injected into the PROMPT, not
-// the subprocess env.
+// Base mailbox for web-repro sign-UPS: each run joins with a brand-new
+// +suffix address (fresh account → "Join" button → no magic code needed).
+// Injected into the PROMPT, not the subprocess env.
 const TEST_ACCOUNT_EMAIL = process.env.TEST_ACCOUNT_EMAIL || '';
-const TEST_ACCOUNT_MAGIC_CODE = process.env.TEST_ACCOUNT_MAGIC_CODE || '';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || ''; // '' → CLI default; subscription auth either way
@@ -283,10 +282,19 @@ async function processRequest(req) {
     const proposal = Array.isArray(propRows) ? propRows[0] || null : null;
 
     const template = await readFile(PROMPT_FILE, 'utf8');
+    // Magic codes are dynamic (emailed per login), so existing accounts can't be
+    // used headlessly. Instead: a BRAND-NEW +suffix address shows the "Join"
+    // button — a fresh account with no code required. Generate a new suffix per
+    // run; fresh accounts also make data seeding deterministic.
+    const [mailboxUser, mailboxDomain] = TEST_ACCOUNT_EMAIL.split('@');
     const testAccount =
-      TEST_ACCOUNT_EMAIL && TEST_ACCOUNT_MAGIC_CODE
-        ? `email ${TEST_ACCOUNT_EMAIL}, magic code ${TEST_ACCOUNT_MAGIC_CODE}. You may also derive fresh sibling accounts with a "+suffix" on the same mailbox (same magic code) when the repro needs a second user.`
-        : '(none configured — auth-gated flows cannot be reproduced live; state this when falling back)';
+      mailboxUser && mailboxDomain
+        ? `sign UP (never sign in) with a BRAND-NEW address each run: ` +
+          `${mailboxUser}+${n}x${Date.now().toString(36)}@${mailboxDomain} (or add your own fresh suffix). ` +
+          `A never-used address shows the "Join" button — click it and you are in a new account with NO magic code. ` +
+          `If you ever see a magic-code prompt, the address was used before: switch to a new suffix. ` +
+          `Need a second user? Use another fresh +suffix on the same mailbox.`
+        : '(no TEST_ACCOUNT_EMAIL mailbox configured — auth-gated flows cannot be reproduced live; state this when falling back)';
     const prompt = template
       .replaceAll('<<<ISSUE_NUMBER>>>', String(n))
       .replace('<<<TEST_ACCOUNT>>>', testAccount)

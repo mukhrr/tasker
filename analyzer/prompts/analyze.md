@@ -31,9 +31,12 @@ you learned.
         ~10 minutes; poll `curl -sk https://localhost:8082` until it serves.
         Do not give up on it early; only abandon web if it still isn't serving
         after ~12 minutes.
-     2. **Sign in** with the test account below (if one is configured) via a
-        `npx playwright` script; use a mobile viewport / device emulation when
-        only mWeb variants are checked.
+     2. **Sign up fresh** (never sign in to an existing account — magic codes
+        are dynamic and unreadable headlessly): use the brand-new address from
+        the instructions below; the login screen shows a **Join** button for a
+        never-used email, which creates the account instantly with no code.
+        Drive it with a `npx playwright` script; use a mobile viewport / device
+        emulation when only mWeb variants are checked.
      3. **Seed the state the issue requires via the UI** — e.g. create the
         workspace / expense / split / message the repro steps mention. Most
         "cannot reproduce" outcomes are really "didn't set up the data"; the
