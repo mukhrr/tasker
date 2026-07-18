@@ -18,10 +18,10 @@
  *         node --env-file=.env analyzer.mjs
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +44,7 @@ const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || ''; // '' → CLI default; subscription auth either way
 const CLAUDE_TIMEOUT_MS = int('CLAUDE_TIMEOUT_MS', 45 * 60_000); // repro + fix can legitimately take a while
+const JEST_TIMEOUT_MS = int('JEST_TIMEOUT_MS', 10 * 60_000); // per red/green jest run
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 15_000);
 const PROMPT_FILE = path.join(HERE, 'prompts', 'analyze.md');
 
@@ -192,6 +193,52 @@ function changedFiles(porcelain) {
     .filter(Boolean);
 }
 
+function isTestFile(f) {
+  return /(^|\/)tests?\//.test(f) || /\.(test|spec)\.[jt]sx?$/i.test(f) || /Test\.[jt]sx?$/.test(f);
+}
+
+// Red/green verification: with the fix still in the working tree, run the
+// changed test files (expect PASS), then revert only the source files via a
+// saved patch and run again (expect FAIL — proving the test captures the bug),
+// then re-apply the fix. Returns a one-line verdict for the summary/Telegram.
+async function redGreenCheck(n, files, overlap) {
+  const testFiles = files.filter(isTestFile);
+  const srcFiles = files.filter((f) => !isTestFile(f));
+  if (!testFiles.length) return srcFiles.length ? '⚠️ no repro test in the change set — fix unverified' : null;
+  if (!srcFiles.length) return 'test-only change — nothing to red/green';
+
+  log(`🧪 #${n} red/green: ${testFiles.length} test file(s) vs ${srcFiles.length} src file(s)`);
+  const green = await run('npx', ['jest', ...testFiles, '--silent'], { cwd: APP_REPO_DIR, timeoutMs: JEST_TIMEOUT_MS });
+  if (green.timedOut) return '⏱️ repro test run timed out — fix unverified';
+  if (green.code !== 0) return '🚨 tests FAIL even with the fix applied — needs a human look';
+
+  // The red half needs a clean revert of exactly the fix. Skip it when that
+  // isn't possible: brand-new source files (checkout -- can't revert them) or
+  // files that also carry the user's own pre-existing edits.
+  if (overlap.length) return '🟢 repro tests pass with the fix (red-check skipped: pre-existing local edits overlap)';
+  for (const f of srcFiles) {
+    const tracked = await git(['ls-files', '--error-unmatch', f]);
+    if (tracked.code !== 0) return '🟢 repro tests pass with the fix (red-check skipped: fix adds new files)';
+  }
+
+  const diff = await git(['diff', '--', ...srcFiles]);
+  if (diff.code !== 0 || !diff.stdout.trim()) return '🟢 repro tests pass with the fix (red-check skipped: could not capture the fix diff)';
+  const patchFile = path.join(tmpdir(), `tasker-fix-${n}-${Date.now()}.patch`);
+  await writeFile(patchFile, diff.stdout);
+  await git(['checkout', '--', ...srcFiles]);
+  const red = await run('npx', ['jest', ...testFiles, '--silent'], { cwd: APP_REPO_DIR, timeoutMs: JEST_TIMEOUT_MS });
+  const reapply = await git(['apply', patchFile]);
+  if (reapply.code !== 0) {
+    // Never lose the fix silently — the patch file has it.
+    const msg = `🚨 red-check could not re-apply the fix — recover it from ${patchFile}`;
+    log(msg);
+    return msg;
+  }
+  if (red.timedOut) return '🟢 repro tests pass with the fix (red run timed out)';
+  if (red.code !== 0) return '✅ VERIFIED red/green — repro test FAILS without the fix, PASSES with it';
+  return '⚠️ repro tests pass even WITHOUT the fix — the test may not capture the bug';
+}
+
 async function processRequest(req) {
   const n = req.issue_number;
   const claimed = await updateRequest(req.id, { state: 'running' }, { requireState: 'queued' });
@@ -255,6 +302,17 @@ async function processRequest(req) {
     const afterFiles = changedFiles(after.stdout);
     const files = afterFiles.filter((f) => !preDirty.has(f));
     const overlap = afterFiles.filter((f) => preDirty.has(f));
+
+    // Red/green verification runs BEFORE stashing, while the fix is in the tree.
+    let verification = null;
+    try {
+      verification = await redGreenCheck(n, files, overlap);
+      if (verification) log(`🧪 #${n} ${verification}`);
+    } catch (e) {
+      verification = `red/green check errored: ${e instanceof Error ? e.message : String(e)}`;
+      log(`🧪 #${n} ${verification}`);
+    }
+
     let stashRef = null;
     if (files.length) {
       const stash = await git(['stash', 'push', '-u', '-m', `tasker-analysis-#${n}`, '--', ...files]);
@@ -294,11 +352,12 @@ async function processRequest(req) {
     }
 
     const overlapNote = overlap.length ? `; ⚠️ ${overlap.length} file(s) had pre-existing local edits and were left unstashed: ${overlap.slice(0, 3).join(', ')}` : '';
-    const resultSummary = `${summary}\n\n[${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
+    const verificationNote = verification ? `${verification}; ` : '';
+    const resultSummary = `${summary}\n\n[${verificationNote}${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
     await updateRequest(req.id, { state: 'done', result_summary: resultSummary, stash_ref: stashRef, last_error: null });
     log(`✅ #${n} analysis done — ${proposalNote}${stashRef ? `, ${stashRef}` : ''}`);
     await notify(
-      `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}${overlapNote}`,
+      `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${verification ? `${verification}\n` : ''}${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}${overlapNote}`,
     );
   } catch (e) {
     await fail(e instanceof Error ? e.message : String(e));

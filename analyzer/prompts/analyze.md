@@ -31,6 +31,11 @@ you learned.
 3. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
+   **Always add or extend a deterministic Jest test that reproduces the bug**
+   (fails on the unfixed code, passes with your fix) unless truly impossible —
+   the harness automatically runs your changed test files with and without your
+   source changes to verify the fix red/green, so the test is what turns your
+   analysis into proof. Keep it fast and focused.
 4. **Sanity-check** what you changed (lint/typecheck the touched files if fast:
    `npx tsc --noEmit` is too slow for the whole repo — prefer targeted checks;
    skip heavyweight verification rather than stalling).
