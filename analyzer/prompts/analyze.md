@@ -21,13 +21,29 @@ you learned.
 ## Suggested flow (time-box ~30 minutes total)
 
 1. Read the issue and the current proposal below. Read the code paths involved.
-2. **Reproduce (time-box ~10-12 min):** if the bug is web-reproducible, try
-   Playwright — e.g. start the dev server (`npm run web`, port 8082; it is slow
-   to boot, don't wait more than a few minutes) and drive it with a throwaway
-   script via `npx playwright`. If reproduction is impractical (native-only,
-   needs an account/backend state you don't have, server too slow), SAY SO and
-   verify the root cause by tracing the code instead — do not burn the whole
-   budget on the environment.
+2. **Reproduce (time-box ~10-12 min) — work down this ladder, top rung that fits:**
+   - **Web** (fastest, prefer when the bug is web-reproducible): start the dev
+     server (`npm run web`, port 8082; slow to boot — don't wait more than a few
+     minutes) and drive it with a throwaway `npx playwright` script.
+   - **Android emulator** (when the bug is native-only): AVD
+     `Medium_Phone_API_36.0` exists. ONLY attempt this if a warm build is
+     available (an APK under `android/app/build/outputs/apk/` or gradle caches
+     from a prior build — check first); a cold gradle build takes 30+ min and is
+     forbidden. Boot headless (`emulator -avd Medium_Phone_API_36.0
+     -no-window -no-audio &`), install the APK with `adb install`, start metro
+     (`npm run start`) if it's a debug build, and drive the UI with
+     `adb shell input tap/swipe/text` + `adb exec-out screencap -p > shot.png`
+     (read the screenshots to see the screen). Kill the emulator when done.
+   - **iOS simulator**: only if Android is unsuitable AND Pods + a prior build
+     already exist under `ios/` — same cold-build prohibition. Use `xcrun simctl`
+     (boot/install/launch/screenshot).
+   - **Simulate** (first-class outcome, not a failure — use it whenever live
+     repro is blocked by account/backend state, missing warm builds, or
+     platform limits): reconstruct the reported conditions deterministically in
+     a Jest harness — mock the Onyx state / navigation / API responses the
+     issue describes — and empirically CONFIRM or DISPROVE the proposal's root
+     cause against production code paths. Disproving a wrong root cause this
+     way is as valuable as a repro; say clearly which you did.
 3. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
