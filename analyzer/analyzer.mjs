@@ -205,13 +205,15 @@ async function processRequest(req) {
   };
 
   try {
-    // Preflight: the stash step assumes every post-run change belongs to this
-    // analysis, so refuse to start on a dirty checkout.
+    // Preflight: snapshot pre-existing dirty files. The run may proceed on a
+    // dirty checkout — afterwards we stash ONLY files that were clean before
+    // and changed during the run. Files that were already dirty stay untouched
+    // (and if Claude edits one of those, it's flagged, not stashed — the two
+    // sets of edits can't be separated cleanly).
     const status = await git(['status', '--porcelain']);
     if (status.code !== 0) return void (await fail(`git status failed: ${status.stderr.slice(0, 200)}`));
-    if (status.stdout.trim()) {
-      return void (await fail('Local App checkout has uncommitted changes — commit or stash them, then re-run.'));
-    }
+    const preDirty = new Set(changedFiles(status.stdout));
+    if (preDirty.size) log(`⚠️ #${n} checkout has ${preDirty.size} pre-existing dirty file(s) — they will be left alone`);
 
     const { status: ghStatus, data: issue } = await gh(`/repos/${REPO}/issues/${n}`);
     if (ghStatus !== 200 || !issue) return void (await fail(`could not fetch issue (${ghStatus})`));
@@ -247,15 +249,18 @@ async function processRequest(req) {
 
     const { summary, proposal: updatedProposal } = parseOutput(res.stdout);
 
-    // Stash exactly what the run changed (checkout was clean at start).
+    // Stash exactly what the run changed: post-run dirty files minus the ones
+    // that were already dirty before it started (those are the user's).
     const after = await git(['status', '--porcelain']);
-    const files = changedFiles(after.stdout);
+    const afterFiles = changedFiles(after.stdout);
+    const files = afterFiles.filter((f) => !preDirty.has(f));
+    const overlap = afterFiles.filter((f) => preDirty.has(f));
     let stashRef = null;
     if (files.length) {
       const stash = await git(['stash', 'push', '-u', '-m', `tasker-analysis-#${n}`, '--', ...files]);
       if (stash.code === 0) {
         stashRef = `tasker-analysis-#${n}`;
-        log(`📦 #${n} stashed ${files.length} file(s)`);
+        log(`📦 #${n} stashed ${files.length} file(s)${overlap.length ? ` (${overlap.length} pre-dirty file(s) left in place)` : ''}`);
       } else {
         log(`stash failed (leaving changes in place): ${stash.stderr.slice(0, 200)}`);
       }
@@ -288,14 +293,32 @@ async function processRequest(req) {
       proposalNote = 'no proposal row to update';
     }
 
-    const resultSummary = `${summary}\n\n[${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}]`.slice(0, 2000);
+    const overlapNote = overlap.length ? `; ⚠️ ${overlap.length} file(s) had pre-existing local edits and were left unstashed: ${overlap.slice(0, 3).join(', ')}` : '';
+    const resultSummary = `${summary}\n\n[${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
     await updateRequest(req.id, { state: 'done', result_summary: resultSummary, stash_ref: stashRef, last_error: null });
     log(`✅ #${n} analysis done — ${proposalNote}${stashRef ? `, ${stashRef}` : ''}`);
     await notify(
-      `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}`,
+      `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}${overlapNote}`,
     );
   } catch (e) {
     await fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Only one analyzer runs at a time, so any `running` row at boot is an orphan
+// from a previous process that died mid-analysis — requeue it.
+async function recoverOrphanedRuns() {
+  const q = new URLSearchParams({
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    state: 'eq.running',
+  });
+  const rows = await supabaseRequest(`analysis_requests?${q}`, {
+    method: 'PATCH',
+    body: { state: 'queued', last_error: 'Recovered after an analyzer restart.' },
+    prefer: 'return=representation',
+  });
+  if (Array.isArray(rows) && rows.length) {
+    log(`♻️  re-queued ${rows.length} orphaned run(s): ${rows.map((r) => `#${r.issue_number}`).join(', ')}`);
   }
 }
 
@@ -344,6 +367,11 @@ async function main() {
     `analyzer up — repo=${REPO} checkout=${APP_REPO_DIR} claude=${CLAUDE_BIN}${CLAUDE_MODEL ? ` model=${CLAUDE_MODEL}` : ''} ` +
       `poll=${POLL_INTERVAL_MS}ms telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} github=${GITHUB_TOKEN ? 'token' : 'anon'}`,
   );
+  try {
+    await recoverOrphanedRuns();
+  } catch (e) {
+    log(`orphan sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
   void loop();
 }
 
