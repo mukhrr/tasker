@@ -1218,6 +1218,24 @@ export class StatusWidget {
         if (!next || (next.state !== 'queued' && next.state !== 'running')) {
           this.stopAnalysisPoll();
         }
+        // A finished analysis may have created/armed/posted a proposal (the
+        // no-proposal path) or rewritten an existing one — refresh it so the
+        // proposal panel updates without a page reload.
+        if (changed && next?.state === 'done') {
+          const propRes = await sendMessage<ProposalResponse>({
+            type: 'QUERY_PROPOSAL',
+            owner: this.owner,
+            repo: this.repo,
+            number: this.number,
+          });
+          if (!this.destroyed && propRes.ok) {
+            this.proposal = propRes.data ?? null;
+            this.proposalDraftBody = this.proposal?.body ?? '';
+            if (this.proposal && ['queued', 'drafting', 'armed', 'posting'].includes(this.proposal.state)) {
+              this.startProposalPoll();
+            }
+          }
+        }
         if (changed) this.render();
       })();
     }, 15000);
