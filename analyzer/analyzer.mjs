@@ -169,6 +169,11 @@ function claudeEnv() {
 }
 
 // ── request lifecycle ────────────────────────────────────────────────────────
+async function updateProposalRow(id, values) {
+  const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}` });
+  return supabaseRequest(`proposals?${q}`, { method: 'PATCH', body: values, prefer: 'return=representation' });
+}
+
 async function updateRequest(id, values, { requireState } = {}) {
   const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}` });
   if (requireState) q.set('state', `eq.${requireState}`);
@@ -414,6 +419,29 @@ async function processRequest(req) {
           prefer: 'return=representation',
         });
         proposalNote = Array.isArray(rows) && rows.length ? `updated the ${proposal.state} proposal body` : 'proposal row changed state — not updated';
+      }
+      // An armed proposal on an issue that ALREADY has Help Wanted will never
+      // be fired by the sniper (it ignores stale label events) — post it here,
+      // like the no-proposal path does. ("Post now" was retired from the UI.)
+      const hwNow = (issue.labels || [])
+        .map((l) => (typeof l === 'string' ? l : l?.name || '').toLowerCase())
+        .includes('help wanted');
+      if (hwNow && GITHUB_TOKEN && proposal.state === 'armed' && !proposal.github_comment_id) {
+        const bodyToPost = updatedProposal || proposal.body;
+        const claim = await supabaseRequest(
+          `proposals?${new URLSearchParams({ id: `eq.${proposal.id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' })}`,
+          { method: 'PATCH', body: { state: 'posting' }, prefer: 'return=representation' },
+        );
+        if (Array.isArray(claim) && claim.length) {
+          const post = await gh(`/repos/${REPO}/issues/${n}/comments`, { method: 'POST', body: { body: bodyToPost } });
+          if (post.status === 201 && post.data?.id) {
+            await updateProposalRow(proposal.id, { state: 'posted', github_comment_id: post.data.id, posted_at: new Date().toISOString(), last_error: null });
+            proposalNote += '; posted the armed proposal (Help Wanted already present)';
+          } else {
+            await updateProposalRow(proposal.id, { state: 'armed', last_error: `analyzer post failed: ${post.status}` });
+            proposalNote += `; armed-post failed (${post.status})`;
+          }
+        }
       }
     } else if (updatedProposal) {
       // No proposal exists yet — the analysis IS the proposal. Post it right

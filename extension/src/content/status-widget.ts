@@ -698,7 +698,7 @@ export class StatusWidget {
     if (readyAlready) {
       const notice = document.createElement('div');
       notice.className = 'proposal-notice';
-      notice.textContent = '"Help Wanted" is already on this issue. Use “Post now” for an immediate manual post.';
+      notice.textContent = '"Help Wanted" is already on this issue — Run Claude analysis posts directly.';
       body.appendChild(notice);
     } else if (!hasBugDaily) {
       const notice = document.createElement('div');
@@ -720,19 +720,22 @@ export class StatusWidget {
     const actions = document.createElement('div');
     actions.className = 'proposal-actions';
 
-    const computeDirty = (): boolean =>
-      this.proposalDraftBody !== (this.proposal?.body ?? '') &&
-      this.proposalDraftBody.trim().length > 0;
-
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'proposal-btn secondary';
-    saveBtn.textContent = this.proposalBusy ? 'Saving…' : (this.proposal ? 'Save changes' : 'Save draft');
-    saveBtn.disabled = this.proposalBusy || isArmed || !computeDirty();
-    saveBtn.addEventListener('click', () => void this.saveProposal());
-    actions.appendChild(saveBtn);
-
     let armBtnRef: HTMLButtonElement | null = null;
     if (isArmed) {
+      // Armed: the body is locked in — offer Copy + Disarm.
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'proposal-btn';
+      copyBtn.textContent = 'Copy proposal';
+      copyBtn.disabled = !this.proposal?.body;
+      copyBtn.title = 'Copy the armed proposal text to the clipboard.';
+      copyBtn.addEventListener('click', () => {
+        void navigator.clipboard
+          .writeText(this.proposal?.body ?? '')
+          .then(() => { copyBtn.textContent = 'Copied ✓'; })
+          .catch(() => { copyBtn.textContent = 'Copy failed'; })
+          .finally(() => { setTimeout(() => { copyBtn.textContent = 'Copy proposal'; }, 1500); });
+      });
+      actions.appendChild(copyBtn);
       const disarmBtn = document.createElement('button');
       disarmBtn.className = 'proposal-btn';
       disarmBtn.textContent = state === 'posting' ? 'Posting…' : 'Disarm';
@@ -740,42 +743,18 @@ export class StatusWidget {
       disarmBtn.addEventListener('click', () => void this.setProposalState('draft'));
       actions.appendChild(disarmBtn);
     } else {
+      // One button: saves whatever is in the textarea AND arms it.
       const armBtn = document.createElement('button');
       armBtn.className = 'proposal-btn primary';
       armBtn.textContent = this.proposalBusy ? 'Arming…' : 'Arm auto-post';
-      const dirty = computeDirty();
-      armBtn.disabled =
-        this.proposalBusy ||
-        !this.proposalDraftBody.trim() ||
-        dirty; // must save first
-      armBtn.title = dirty ? 'Save changes before arming' : '';
-      armBtn.addEventListener('click', () => void this.setProposalState('armed'));
+      armBtn.disabled = this.proposalBusy || !this.proposalDraftBody.trim();
+      armBtn.title = 'Save the current text and arm it for auto-posting on "Help Wanted".';
+      armBtn.addEventListener('click', () => void this.armProposal());
       actions.appendChild(armBtn);
       armBtnRef = armBtn;
     }
 
     body.appendChild(actions);
-
-    // Manual "Post now" — bypasses Help-Wanted detection and the kill switch.
-    // Visible when the row isn't yet posted/posting, so the user can fire
-    // immediately if the label is already there or they just want to test.
-    let postNowBtnRef: HTMLButtonElement | null = null;
-    if (state !== 'posting') {
-      const postRow = document.createElement('div');
-      postRow.className = 'proposal-actions';
-      const postNowBtn = document.createElement('button');
-      postNowBtn.className = 'proposal-btn danger';
-      postNowBtn.textContent = this.proposalBusy ? 'Posting…' : 'Post now';
-      const trimmedNow = this.proposalDraftBody.trim().length > 0;
-      postNowBtn.disabled = this.proposalBusy || !trimmedNow;
-      postNowBtn.title = trimmedNow
-        ? 'Post the current text as a comment immediately, without waiting for Help Wanted.'
-        : 'Type your proposal first.';
-      postNowBtn.addEventListener('click', () => void this.postProposalNow());
-      postRow.appendChild(postNowBtn);
-      body.appendChild(postRow);
-      postNowBtnRef = postNowBtn;
-    }
 
     // Clear draft — delete the saved row so the panel returns to its empty state.
     // Shown only when something is actually persisted (there is a row to clear).
@@ -796,18 +775,8 @@ export class StatusWidget {
     // the whole panel (which would yank focus out of the textarea on every key).
     textarea.addEventListener('input', () => {
       this.proposalDraftBody = textarea.value;
-      const dirty = computeDirty();
-      const trimmed = this.proposalDraftBody.trim().length > 0;
-      saveBtn.disabled = this.proposalBusy || isArmed || !dirty;
       if (armBtnRef) {
-        armBtnRef.disabled = this.proposalBusy || !trimmed || dirty;
-        armBtnRef.title = dirty ? 'Save changes before arming' : '';
-      }
-      if (postNowBtnRef) {
-        postNowBtnRef.disabled = this.proposalBusy || !trimmed;
-        postNowBtnRef.title = trimmed
-          ? 'Post the current text as a comment immediately, without waiting for Help Wanted.'
-          : 'Type your proposal first.';
+        armBtnRef.disabled = this.proposalBusy || !this.proposalDraftBody.trim();
       }
     });
 
@@ -838,28 +807,6 @@ export class StatusWidget {
     this.root.appendChild(section);
   }
 
-  private async saveProposal(): Promise<void> {
-    if (this.proposalBusy) return;
-    this.proposalBusy = true;
-    this.render();
-    const res = await sendMessage<MessageResponse<Proposal>>({
-      type: 'SAVE_PROPOSAL',
-      owner: this.owner,
-      repo: this.repo,
-      number: this.number,
-      body: this.proposalDraftBody,
-    });
-    this.proposalBusy = false;
-    if (res.ok && res.data) {
-      this.proposal = res.data;
-      this.proposalDraftBody = res.data.body;
-    } else {
-      this.error = res.error ?? 'Save failed';
-      setTimeout(() => { this.error = null; this.render(); }, 3000);
-    }
-    this.render();
-  }
-
   private async setProposalState(target: 'armed' | 'draft'): Promise<void> {
     if (this.proposalBusy) return;
     this.proposalBusy = true;
@@ -880,6 +827,47 @@ export class StatusWidget {
       }
     } else {
       this.error = res.error ?? 'Update failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  // One-click arm: persist whatever is in the textarea, then arm it. (The old
+  // flow required a separate Save first.)
+  private async armProposal(): Promise<void> {
+    if (this.proposalBusy) return;
+    const body = this.proposalDraftBody.trim();
+    if (!body) return;
+    this.proposalBusy = true;
+    this.render();
+    const saveRes = await sendMessage<MessageResponse<Proposal>>({
+      type: 'SAVE_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      body,
+    });
+    if (!saveRes.ok || !saveRes.data) {
+      this.proposalBusy = false;
+      this.error = saveRes.error ?? 'Save failed';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+      this.render();
+      return;
+    }
+    this.proposal = saveRes.data;
+    this.proposalDraftBody = saveRes.data.body;
+    const armRes = await sendMessage<MessageResponse<Proposal>>({
+      type: 'ARM_PROPOSAL',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.proposalBusy = false;
+    if (armRes.ok && armRes.data) {
+      this.proposal = armRes.data;
+      this.startProposalPoll();
+    } else {
+      this.error = armRes.error ?? 'Arm failed';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();
@@ -958,74 +946,6 @@ export class StatusWidget {
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();
-  }
-
-  // Manual "Post now": save the current textarea, then force-post regardless
-  // of label state and the auto-post kill switch. Used when the issue already
-  // has Help Wanted, or for one-off posting without arming.
-  private async postProposalNow(): Promise<void> {
-    if (this.proposalBusy) return;
-    const body = this.proposalDraftBody.trim();
-    if (!body) return;
-    if (!confirm('Post this proposal as a comment now?')) return;
-
-    this.proposalBusy = true;
-    this.render();
-
-    try {
-      // Always save first so the row exists and reflects exactly what we post.
-      const saveRes = await sendMessage<MessageResponse<Proposal>>({
-        type: 'SAVE_PROPOSAL',
-        owner: this.owner,
-        repo: this.repo,
-        number: this.number,
-        body: this.proposalDraftBody,
-      });
-      if (!saveRes.ok || !saveRes.data) {
-        this.error = saveRes.error ?? 'Save failed';
-        setTimeout(() => { this.error = null; this.render(); }, 3000);
-        return;
-      }
-      this.proposal = saveRes.data;
-
-      // Optimistically flip to 'posting' AND start polling the row from
-      // Supabase. The DB state is the source of truth — even if the
-      // sendMessage promise hangs (MV3 can kill the service worker mid-fetch
-      // and silently drop the response), the poll loop will catch the row
-      // landing in 'posted' or 'failed' and update the UI.
-      this.proposal = { ...this.proposal, state: 'posting' };
-      this.startProposalPoll();
-      this.render();
-
-      // Force-post — bypasses the kill switch and accepts draft|armed|failed.
-      const postRes = await sendMessage<MessageResponse<Proposal>>({
-        type: 'POST_PROPOSAL_NOW',
-        proposalId: saveRes.data.id,
-        force: true,
-      });
-
-      if (postRes.ok && postRes.data) {
-        this.proposal = postRes.data;
-        if (postRes.data.state === 'posted' || postRes.data.state === 'failed') {
-          this.stopProposalPoll();
-        }
-      } else {
-        this.error = postRes.error ?? 'Post failed';
-        setTimeout(() => { this.error = null; this.render(); }, 5000);
-        // Pull canonical state — handler may have flipped to 'failed'.
-        void this.refreshProposal();
-      }
-    } catch (e) {
-      // Common cause: MV3 service worker died mid-fetch and the message
-      // channel closed. The proposal poll started above will catch the
-      // eventual DB state and update the UI.
-      console.error('[tasker] postProposalNow threw', e);
-      this.error = e instanceof Error ? e.message : 'Post failed (channel closed)';
-      setTimeout(() => { this.error = null; this.render(); }, 5000);
-    } finally {
-      this.proposalBusy = false;
-      this.render();
-    }
   }
 
   private startProposalPoll(): void {
