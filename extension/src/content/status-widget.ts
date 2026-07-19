@@ -1117,7 +1117,7 @@ export class StatusWidget {
       ? 'Queuing…'
       : inFlight
         ? (st === 'queued' ? '⏳ Analysis queued…' : '🔬 Analyzing…')
-        : st === 'done' || st === 'failed'
+        : st === 'done' || st === 'failed' || st === 'canceled'
           ? '🧠 Re-run Claude analysis'
           : '🧠 Run Claude analysis';
     btn.disabled = this.analysisBusy || inFlight;
@@ -1125,6 +1125,15 @@ export class StatusWidget {
       'Runs Claude Code on your machine: reproduce the bug, apply a local fix (no commit), update the proposal, stash the changes, and ping Telegram. Requires the analyzer daemon to be running.';
     btn.addEventListener('click', () => void this.runAnalysis());
     row.appendChild(btn);
+    if (inFlight) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'proposal-btn';
+      cancelBtn.textContent = this.analysisBusy ? 'Cancelling…' : 'Cancel';
+      cancelBtn.disabled = this.analysisBusy;
+      cancelBtn.title = 'Stop this analysis. A running claude is killed; partial work is parked in a stash.';
+      cancelBtn.addEventListener('click', () => void this.cancelAnalysis());
+      row.appendChild(cancelBtn);
+    }
     body.appendChild(row);
 
     const line = document.createElement('div');
@@ -1134,6 +1143,8 @@ export class StatusWidget {
       line.textContent = `✅ ${summary || 'Analysis finished.'}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
     } else if (st === 'failed') {
       line.textContent = `⚠️ ${(this.analysis?.last_error ?? 'Analysis failed').slice(0, 240)}`;
+    } else if (st === 'canceled') {
+      line.textContent = '🚫 Canceled — re-run anytime.';
     } else if (st === 'running') {
       line.textContent = 'Claude is reproducing and fixing locally — result lands here and on Telegram.';
     } else if (st === 'queued') {
@@ -1163,6 +1174,27 @@ export class StatusWidget {
       this.startAnalysisPoll();
     } else {
       this.error = res.error ?? 'Could not queue analysis';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  private async cancelAnalysis(): Promise<void> {
+    if (this.analysisBusy) return;
+    this.analysisBusy = true;
+    this.render();
+    const res = await sendMessage<AnalysisResponse>({
+      type: 'CANCEL_ANALYSIS',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+    });
+    this.analysisBusy = false;
+    if (res.ok && res.data) {
+      this.analysis = res.data;
+      this.stopAnalysisPoll();
+    } else {
+      this.error = res.error ?? 'Could not cancel';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();

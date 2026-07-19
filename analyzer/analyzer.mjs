@@ -116,13 +116,14 @@ async function gh(pathname, { method = 'GET', body } = {}) {
   return { status: res.status, data };
 }
 
-function run(cmd, args, { cwd, env, timeoutMs, input } = {}) {
+function run(cmd, args, { cwd, env, timeoutMs, input, onChild } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
       env: env || process.env,
       stdio: [input != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+    if (onChild) onChild(child);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -252,8 +253,9 @@ async function processRequest(req) {
 
   const fail = async (error) => {
     log(`❌ #${n} analysis failed: ${error}`);
-    await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500) });
-    await notify(`⚠️ Claude analysis for ${REPO}#${n} failed: ${String(error).slice(0, 200)}`);
+    // State-filtered: a cancel that landed meanwhile must not be overwritten.
+    const row = await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500) }, { requireState: 'running' });
+    if (row) await notify(`⚠️ Claude analysis for ${REPO}#${n} failed: ${String(error).slice(0, 200)}`);
   };
 
   try {
@@ -304,12 +306,59 @@ async function processRequest(req) {
     const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'text'];
     if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
-    const res = await run(CLAUDE_BIN, args, {
-      cwd: APP_REPO_DIR,
-      env: claudeEnv(),
-      timeoutMs: CLAUDE_TIMEOUT_MS,
-      input: prompt,
-    });
+
+    // Watch for a Cancel from the extension (running → canceled) and kill the
+    // in-flight claude when it lands.
+    let canceled = false;
+    let claudeChild = null;
+    const cancelWatch = setInterval(() => {
+      void (async () => {
+        try {
+          const q = new URLSearchParams({ id: `eq.${req.id}`, user_id: `eq.${SUPABASE_USER_ID}`, select: 'state', limit: '1' });
+          const rows = await supabaseRequest(`analysis_requests?${q}`);
+          if (Array.isArray(rows) && rows[0]?.state === 'canceled') {
+            canceled = true;
+            clearInterval(cancelWatch);
+            log(`🚫 #${n} cancel requested — killing claude`);
+            try {
+              claudeChild?.kill('SIGKILL');
+            } catch {
+              /* already gone */
+            }
+          }
+        } catch {
+          /* transient; retry next tick */
+        }
+      })();
+    }, 15_000);
+
+    let res;
+    try {
+      res = await run(CLAUDE_BIN, args, {
+        cwd: APP_REPO_DIR,
+        env: claudeEnv(),
+        timeoutMs: CLAUDE_TIMEOUT_MS,
+        input: prompt,
+        onChild: (c) => {
+          claudeChild = c;
+        },
+      });
+    } finally {
+      clearInterval(cancelWatch);
+    }
+    if (canceled) {
+      // Park whatever partial work exists so the checkout is clean again; the
+      // row is already 'canceled' (set by the extension) — leave it that way.
+      const part = await git(['status', '--porcelain']);
+      const partFiles = changedFiles(part.stdout).filter((f) => !preDirty.has(f));
+      if (partFiles.length) {
+        await git(['stash', 'push', '-u', '-m', `canceled-analysis-#${n}`, '--', ...partFiles]);
+        log(`🚫 #${n} canceled — ${partFiles.length} partial file(s) stashed as canceled-analysis-#${n}`);
+      } else {
+        log(`🚫 #${n} canceled — no partial changes`);
+      }
+      return;
+    }
     if (res.timedOut) return void (await fail(`claude timed out after ${CLAUDE_TIMEOUT_MS}ms`));
     if (res.code !== 0) return void (await fail(`claude exited ${res.code}: ${res.stderr.slice(0, 300)}`));
 
@@ -373,7 +422,15 @@ async function processRequest(req) {
     const overlapNote = overlap.length ? `; ⚠️ ${overlap.length} file(s) had pre-existing local edits and were left unstashed: ${overlap.slice(0, 3).join(', ')}` : '';
     const verificationNote = verification ? `${verification}; ` : '';
     const resultSummary = `${summary}\n\n[${verificationNote}${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
-    await updateRequest(req.id, { state: 'done', result_summary: resultSummary, stash_ref: stashRef, last_error: null });
+    const doneRow = await updateRequest(
+      req.id,
+      { state: 'done', result_summary: resultSummary, stash_ref: stashRef, last_error: null },
+      { requireState: 'running' },
+    );
+    if (!doneRow) {
+      log(`#${n} finished but the request was canceled meanwhile — result kept in stash only`);
+      return;
+    }
     log(`✅ #${n} analysis done — ${proposalNote}${stashRef ? `, ${stashRef}` : ''}`);
     await notify(
       `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${verification ? `${verification}\n` : ''}${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}${overlapNote}`,

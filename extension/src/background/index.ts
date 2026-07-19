@@ -96,6 +96,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleRunAnalysis(msg.owner, msg.repo, msg.number);
     case 'QUERY_ANALYSIS':
       return handleQueryAnalysis(msg.owner, msg.repo, msg.number);
+    case 'CANCEL_ANALYSIS':
+      return handleCancelAnalysis(msg.owner, msg.repo, msg.number);
     case 'SYNC_LABEL_CONFIG':
       return handleSyncLabelConfig(msg.watchedLabelGroups, msg.excludedLabels);
     case 'POST_PROPOSAL_NOW':
@@ -880,6 +882,35 @@ async function handleRunAnalysis(
     .select()
     .single();
   if (error) return { ok: false, error: error.message };
+  return { ok: true, data: data as AnalysisRequest };
+}
+
+async function handleCancelAnalysis(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MessageResponse<AnalysisRequest>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  // Atomic: only a queued/running row can be canceled; the daemon honors the
+  // flip mid-run by killing its claude subprocess.
+  const { data, error } = await supabase
+    .from('analysis_requests')
+    .update({ state: 'canceled' })
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .in('state', ['queued', 'running'])
+    .select()
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: 'Nothing to cancel' };
   return { ok: true, data: data as AnalysisRequest };
 }
 

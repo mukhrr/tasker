@@ -107,7 +107,7 @@ export interface Proposal {
 // A "Run Claude analysis" request, processed by the local analyzer daemon
 // (analyzer/analyzer.mjs) on the user's machine: reproduce → fix locally →
 // update the proposal → stash → Telegram.
-export type AnalysisState = 'queued' | 'running' | 'done' | 'failed';
+export type AnalysisState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 
 export interface AnalysisRequest {
   id: string;

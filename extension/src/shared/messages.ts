@@ -181,6 +181,15 @@ export interface QueryAnalysisRequest {
   number: number;
 }
 
+// Cancel a queued/running analysis: queued -> never picked up; running -> the
+// daemon kills the in-flight claude and parks partial work in a stash.
+export interface CancelAnalysisRequest {
+  type: 'CANCEL_ANALYSIS';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 // Sync the extension's watched label groups + excluded labels to Supabase so the
 // server-side sniper queues auto-drafts by the same config the user edits here.
 export interface SyncLabelConfigRequest {
@@ -243,6 +252,7 @@ export type MessageRequest =
   | ClearProposalRequest
   | RunAnalysisRequest
   | QueryAnalysisRequest
+  | CancelAnalysisRequest
   | SyncLabelConfigRequest
   | PostProposalNowRequest
   | GetAutoPostRequest
