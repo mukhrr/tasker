@@ -26,11 +26,17 @@ you learned.
    - **Any web platform checked** (Windows: Chrome, MacOS: Chrome Safari, or any
      mWeb variant) → **web verification in the browser is enough.** Do this
      properly, in this order:
-     1. Start the dev server **first thing, in the background** (`npm run web`,
-        port 8082) and go read the code while it boots — it can take up to
-        ~10 minutes; poll `curl -sk https://localhost:8082` until it serves.
-        Do not give up on it early; only abandon web if it still isn't serving
-        after ~12 minutes.
+     1. **The app URL is ALWAYS `https://dev.new.expensify.com:8082` — never
+        any other port.** First check whether a dev server is already serving:
+        `curl -sk https://dev.new.expensify.com:8082/` — if it responds, REUSE
+        it (do NOT start a second server; rsbuild would auto-increment to 8083,
+        which is a broken origin for this app). Only if 8082 is not serving:
+        start `npm run web` in the background first thing and go read the code
+        while it boots — it can take up to ~10 minutes; poll the URL until it
+        serves, and only abandon web if it still isn't serving after ~12
+        minutes. If the server you started comes up on any port other than
+        8082, kill it and re-check 8082. When you're done, kill only the
+        server processes YOU started this run — never a pre-existing one.
      2. **Sign up fresh** (never sign in to an existing account — magic codes
         are dynamic and unreadable headlessly): use the brand-new address from
         the instructions below; the login screen shows a **Join** button for a
