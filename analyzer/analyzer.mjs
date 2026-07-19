@@ -416,7 +416,42 @@ async function processRequest(req) {
         proposalNote = Array.isArray(rows) && rows.length ? `updated the ${proposal.state} proposal body` : 'proposal row changed state — not updated';
       }
     } else if (updatedProposal) {
-      proposalNote = 'no proposal row to update';
+      // No proposal exists yet — the analysis IS the proposal. Post it right
+      // away when Help Wanted is already on the issue; otherwise save it as an
+      // ARMED row so the sniper fires it at the second boundary the moment
+      // Help Wanted lands (posting pre-HW would violate the posting rule).
+      const hasHW = (issue.labels || [])
+        .map((l) => (typeof l === 'string' ? l : l?.name || '').toLowerCase())
+        .includes('help wanted');
+      const upsert = (fields) =>
+        supabaseRequest('proposals?on_conflict=user_id,repo_owner,repo_name,issue_number', {
+          method: 'POST',
+          prefer: 'resolution=merge-duplicates,return=representation',
+          body: {
+            user_id: SUPABASE_USER_ID,
+            repo_owner: REPO_OWNER,
+            repo_name: REPO_NAME,
+            issue_number: n,
+            body: updatedProposal,
+            origin: 'manual',
+            ...fields,
+          },
+        });
+      if (hasHW && GITHUB_TOKEN) {
+        const post = await gh(`/repos/${REPO}/issues/${n}/comments`, { method: 'POST', body: { body: updatedProposal } });
+        if (post.status === 201 && post.data?.id) {
+          await upsert({ state: 'posted', github_comment_id: post.data.id, posted_at: new Date().toISOString() });
+          proposalNote = 'posted a NEW proposal comment';
+        } else {
+          await upsert({ state: 'armed' });
+          proposalNote = `new-proposal post failed (${post.status}) — saved as armed instead`;
+        }
+      } else {
+        await upsert({ state: 'armed' });
+        proposalNote = hasHW
+          ? 'armed a NEW proposal (no GITHUB_TOKEN to post it)'
+          : 'armed a NEW proposal — the sniper posts it when Help Wanted lands';
+      }
     }
 
     const overlapNote = overlap.length ? `; ⚠️ ${overlap.length} file(s) had pre-existing local edits and were left unstashed: ${overlap.slice(0, 3).join(', ')}` : '';

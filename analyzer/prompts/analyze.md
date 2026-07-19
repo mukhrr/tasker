@@ -101,6 +101,12 @@ root cause, what you changed (files), and any caveats.
 
 === PROPOSAL ===
 The full updated proposal markdown, or the single word UNCHANGED.
+If the "Current proposal" section below says none exists yet, you MUST output a
+complete NEW proposal (never UNCHANGED) — it will be posted for you (immediately
+if the issue already has Help Wanted, otherwise armed to auto-post the moment
+Help Wanted lands). Follow the expensify-proposal-writer template exactly:
+`## Proposal` / root cause / changes / optional alternatives, first person,
+bare-URL SHA-pinned permalinks on their own lines, small illustrative diff.
 
 ## Issue
 
