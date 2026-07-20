@@ -1082,8 +1082,8 @@ export class StatusWidget {
     if (!inFlight && this.analysis?.claude_session_id) {
       row.appendChild(
         this.makeCopyButton(
-          `cd ~/Documents/App && claude --resume ${this.analysis.claude_session_id}`,
-          'Copy the resume command — paste in a terminal to continue this analysis session in chat.',
+          this.analysis.claude_session_id,
+          'Copy the analysis session id — resume from ~/Documents/App with: claude --resume <id>',
         ),
       );
     }
