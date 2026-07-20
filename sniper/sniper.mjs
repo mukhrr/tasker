@@ -592,10 +592,11 @@ async function enqueueForDrafting(issue) {
   const [owner, repo] = REPO.split('/');
   const title = issue.title ? ` — ${issue.title}` : '';
   try {
-    // ignore-duplicates makes this idempotent against the unique
+    // ignore-duplicates + on_conflict makes this idempotent against the unique
     // (user_id, repo_owner, repo_name, issue_number) constraint — a manual row
-    // or a prior queue entry is never overwritten.
-    const rows = await supabaseRequest('proposals', {
+    // or a prior queue entry is never overwritten. (Without on_conflict,
+    // PostgREST still 409s — learned from the #93306 retry spam.)
+    const rows = await supabaseRequest('proposals?on_conflict=user_id,repo_owner,repo_name,issue_number', {
       method: 'POST',
       body: {
         user_id: SUPABASE_USER_ID,
@@ -615,8 +616,14 @@ async function enqueueForDrafting(issue) {
       log(`#${n} already has a proposal row — not re-queued`);
     }
   } catch (e) {
-    queued.delete(n); // transient failure: allow a later scan to retry
-    log(`enqueue #${n} failed: ${e instanceof Error ? e.message : String(e)}`);
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/duplicate key|23505|409/.test(msg)) {
+      // Already has a row — terminal, keep it marked so we never retry.
+      log(`#${n} already has a proposal row — not re-queued`);
+    } else {
+      queued.delete(n); // transient failure: allow a later scan to retry
+      log(`enqueue #${n} failed: ${msg}`);
+    }
   }
 }
 
