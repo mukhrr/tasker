@@ -18,7 +18,7 @@
  * the row to state='draft' for a human to rescue (with a Telegram ping).
  */
 
-import { readFile, writeFile, mkdir, cp } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, cp, readdir, open } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -270,28 +270,41 @@ async function refreshRepo() {
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────────────
-// Codex appends one {id, thread_name, ...} line to CODEX_HOME/session_index.jsonl
-// per run. With MAX_CONCURRENT_DRAFTS > 1 several runs can be in flight, so "the
-// newest line" is ambiguous — runCodex snapshots the ids before its run and
-// attributes the first NEW id afterwards. Returns [] if the index isn't present
-// (e.g. an old Codex, or --ephemeral).
-async function codexSessionIds() {
+// Every `codex exec` run writes a rollout file under
+// CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl — the file
+// `codex exec resume <uuid>` replays — so the filenames are the authoritative
+// session-id source. It is written from session START, so it survives
+// runCodexProcess SIGKILLing Codex the moment the proposal lands (which is also
+// why the previous source, session_index.jsonl written at clean shutdown, never
+// materialized here and every captured id was null). With
+// MAX_CONCURRENT_DRAFTS > 1 several runs can be in flight, so runCodex snapshots
+// the ids before its run and attributes the new one afterwards, disambiguating
+// concurrent finishers by the issue marker embedded in each draft prompt.
+const ROLLOUT_ID_RE = /rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+
+async function rolloutFiles() {
   try {
-    const raw = await readFile(path.join(CODEX_HOME, 'session_index.jsonl'), 'utf8');
-    return raw
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => {
-        try {
-          return JSON.parse(l)?.id || null;
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
+    const dir = path.join(CODEX_HOME, 'sessions');
+    const names = await readdir(dir, { recursive: true });
+    return names
+      .map((rel) => ({ file: path.join(dir, rel), m: ROLLOUT_ID_RE.exec(rel) }))
+      .filter((e) => e.m)
+      .map((e) => ({ file: e.file, id: e.m[1] }));
   } catch {
     return [];
+  }
+}
+
+// The prompt is in the rollout's first lines, so a bounded head read is enough
+// to tell which issue a session belongs to.
+async function rolloutHead(file, bytes = 256 * 1024) {
+  const fh = await open(file, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+    return buf.toString('utf8', 0, bytesRead);
+  } finally {
+    await fh.close();
   }
 }
 
@@ -319,7 +332,7 @@ function codexSubprocessEnv() {
   return env;
 }
 
-async function runCodex(prompt, { threadName } = {}) {
+async function runCodex(prompt, { threadName, marker } = {}) {
   const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
   // `codex exec` is non-interactive by design and does not accept the `-a`
   // approval flag (that lives on the top-level `codex` command). Sandbox mode
@@ -338,8 +351,8 @@ async function runCodex(prompt, { threadName } = {}) {
   args.push(prompt);
 
   // Snapshot session ids so this run's session can be identified afterwards even
-  // with other codex runs in flight (see codexSessionIds).
-  const sessionsBefore = new Set(await codexSessionIds());
+  // with other codex runs in flight (see rolloutFiles).
+  const sessionsBefore = new Set((await rolloutFiles()).map((r) => r.id));
   const res = await runCodexProcess(CODEX_BIN, args, {
     env: codexSubprocessEnv(),
     timeoutMs: CODEX_TIMEOUT_MS,
@@ -370,10 +383,19 @@ async function runCodex(prompt, { threadName } = {}) {
     body = res.stdout.trim(); // last-resort fallback
   }
   if (!body) return { ok: false, error: 'codex produced an empty proposal' };
-  const fresh = (await codexSessionIds()).filter((id) => !sessionsBefore.has(id));
-  // One new id → unambiguous. Several (concurrent runs finished together) → take
-  // the first new one as best-effort; the id is only used for resume hints.
-  return { ok: true, body, sessionId: fresh[0] || null };
+  const fresh = (await rolloutFiles()).filter((r) => !sessionsBefore.has(r.id));
+  // One new rollout → unambiguous. Several (concurrent runs) → the one whose
+  // prompt contains this run's issue marker; first as a last resort.
+  let session = fresh[0] || null;
+  if (fresh.length > 1 && marker) {
+    for (const r of fresh) {
+      if ((await rolloutHead(r.file).catch(() => '')).includes(marker)) {
+        session = r;
+        break;
+      }
+    }
+  }
+  return { ok: true, body, sessionId: session?.id || null };
 }
 
 // Run `codex exec`, but stop waiting the moment it writes its final proposal to
@@ -611,7 +633,7 @@ async function draftWithValidation(prompt, row) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const draft = await runCodex(
       attempt === 1 ? prompt : `${prompt}\n\n## Fix these problems from your last attempt\n${row._lastProblems}`,
-      { threadName: `tasker-${n}` },
+      { threadName: `tasker-${n}`, marker: `Issue #${n}:` },
     );
     if (!draft.ok) {
       if (draft.usageLimited) {
@@ -746,6 +768,46 @@ async function enrichOne(id, n, currentBody) {
   }
 }
 
+// ── session-id backfill ──────────────────────────────────────────────────────
+// One-shot at boot: proposals drafted before rollout-based capture (every
+// codex_session_id was null — see the comment on rolloutFiles) get their id
+// recovered from the rollout files already on the volume. Draft prompts embed
+// "Issue #<n>: <title>", so each rollout attributes itself; the newest session
+// per issue wins, matching the row's latest body.
+async function backfillCodexSessionIds() {
+  const query = new URLSearchParams({
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    repo_owner: `ilike.${REPO_OWNER}`,
+    repo_name: `ilike.${REPO_NAME}`,
+    codex_session_id: 'is.null',
+    select: 'id,issue_number',
+  });
+  const rows = await supabaseRequest(`proposals?${query}`);
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const newestByIssue = new Map(); // issue → { id, mtime }
+  for (const r of await rolloutFiles()) {
+    const m = /Issue #(\d+):/.exec(await rolloutHead(r.file).catch(() => ''));
+    if (!m) continue;
+    const n = Number(m[1]);
+    let mtime = 0;
+    try {
+      mtime = statSync(r.file).mtimeMs;
+    } catch {
+      continue;
+    }
+    const prev = newestByIssue.get(n);
+    if (!prev || mtime > prev.mtime) newestByIssue.set(n, { id: r.id, mtime });
+  }
+  let filled = 0;
+  for (const row of rows) {
+    const hit = newestByIssue.get(row.issue_number);
+    if (!hit) continue;
+    await updateProposal(row.id, { codex_session_id: hit.id });
+    filled++;
+  }
+  log(`🧾 codex session backfill: ${filled}/${rows.length} row(s) recovered from ${newestByIssue.size} attributable rollout(s)`);
+}
+
 // ── stale recovery ───────────────────────────────────────────────────────────
 async function recoverStaleDrafting() {
   if (Date.now() - lastStaleSweepAt < STALE_SWEEP_MS) return;
@@ -846,6 +908,9 @@ async function main() {
   await ensureCodexAuth();
   await installSkills();
   await ensureRepo();
+  await backfillCodexSessionIds().catch((e) =>
+    log(`codex session backfill failed (continuing): ${e instanceof Error ? e.message : String(e)}`),
+  );
   log(
     `drafter up — repo=${REPO} skill=${SKILL_NAME} autopilot=${AUTOPILOT_ENABLED ? 'on' : 'OFF'} ` +
       `dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +

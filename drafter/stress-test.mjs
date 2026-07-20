@@ -49,13 +49,18 @@ const body = readFileSync(path.join(dir, pick + '.md'), 'utf8');
 if (out) writeFileSync(out, body);
 // Capture the prompt (last positional arg) so tests can assert its wiring.
 writeFileSync(path.join(dir, 'last_prompt.txt'), argv[argv.length - 1] || '');
-// Record a session like real Codex does, so the drafter can read the id back.
+// Record a session rollout like real Codex does — written from session start,
+// filename carries the uuid, first lines carry the prompt — so the drafter can
+// read the id back and attribute concurrent runs by issue marker.
 const home = process.env.CODEX_HOME;
 if (home) {
-  mkdirSync(home, { recursive: true });
-  appendFileSync(
-    path.join(home, 'session_index.jsonl'),
-    JSON.stringify({ id: 'sess-' + n, thread_name: String(90000 + n), updated_at: '2026-07-17T00:00:00Z' }) + '\\n',
+  const day = path.join(home, 'sessions', '2026', '07', '17');
+  mkdirSync(day, { recursive: true });
+  const uuid = '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
+  writeFileSync(
+    path.join(day, 'rollout-2026-07-17T00-00-00-' + uuid + '.jsonl'),
+    JSON.stringify({ type: 'session_meta', payload: { id: uuid } }) + '\\n' +
+      JSON.stringify({ type: 'user_message', text: argv[argv.length - 1] || '' }) + '\\n',
   );
 }
 if (existsSync(path.join(dir, 'hang'))) {
@@ -270,7 +275,11 @@ await runScenario({
     const r = state.rows.get('r1');
     assert.ok(r.body.includes('root cause'), 'armed body missing proposal content');
     assert.equal(state.commentPosts.length, 0, 'no direct post expected (no Help Wanted)');
-    assert.match(r.codex_session_id || '', /^sess-\d+$/, 'codex_session_id not captured on the armed row');
+    assert.match(
+      r.codex_session_id || '',
+      /^00000000-0000-4000-8000-\d{12}$/,
+      'codex_session_id not captured from the rollout filename on the armed row',
+    );
     // The draft prompt must reference the bundled skill and carry the issue.
     const prompt = readFileSync(path.join(codexDir, 'last_prompt.txt'), 'utf8');
     assert.match(prompt, /expensify-proposal-writer\/SKILL\.md/, 'draft prompt did not reference the skill');
