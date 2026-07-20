@@ -308,7 +308,9 @@ async function processRequest(req) {
       .replace('<<<ISSUE>>>', `#${n}: ${issue.title}\n\n${issue.body || '(no description)'}`)
       .replace('<<<PROPOSAL>>>', proposal?.body || '(no proposal drafted yet)');
 
-    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'text'];
+    // json output = the same final text plus metadata — notably session_id,
+    // which the widget offers as a copyable `claude --resume` command.
+    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json'];
     if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
 
@@ -367,7 +369,18 @@ async function processRequest(req) {
     if (res.timedOut) return void (await fail(`claude timed out after ${CLAUDE_TIMEOUT_MS}ms`));
     if (res.code !== 0) return void (await fail(`claude exited ${res.code}: ${res.stderr.slice(0, 300)}`));
 
-    const { summary, proposal: updatedProposal } = parseOutput(res.stdout);
+    // --output-format json → {"result": "<final text>", "session_id": "...", ...}.
+    // Fall back to treating stdout as plain text if parsing fails.
+    let finalText = res.stdout.trim();
+    let claudeSessionId = null;
+    try {
+      const j = JSON.parse(finalText);
+      if (typeof j.result === 'string') finalText = j.result;
+      claudeSessionId = j.session_id || null;
+    } catch {
+      /* plain-text fallback */
+    }
+    const { summary, proposal: updatedProposal } = parseOutput(finalText);
 
     // Stash exactly what the run changed: post-run dirty files minus the ones
     // that were already dirty before it started (those are the user's).
@@ -487,7 +500,7 @@ async function processRequest(req) {
     const resultSummary = `${summary}\n\n[${verificationNote}${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
     const doneRow = await updateRequest(
       req.id,
-      { state: 'done', result_summary: resultSummary, stash_ref: stashRef, last_error: null },
+      { state: 'done', result_summary: resultSummary, stash_ref: stashRef, claude_session_id: claudeSessionId, last_error: null },
       { requireState: 'running' },
     );
     if (!doneRow) {

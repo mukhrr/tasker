@@ -671,6 +671,14 @@ export class StatusWidget {
       autopilotBtn.title = 'Let the server draft, validate, and arm this proposal automatically.';
       autopilotBtn.addEventListener('click', () => void this.enqueueAutoDraft());
       autopilotRow.appendChild(autopilotBtn);
+      if (this.proposal?.codex_session_id) {
+        autopilotRow.appendChild(
+          this.makeCopyButton(
+            this.proposal.codex_session_id,
+            'Copy the Codex session id — resume on the Railway drafter: codex exec resume <id>.',
+          ),
+        );
+      }
       const hint = document.createElement('div');
       hint.className = 'proposal-status-sub';
       hint.textContent = 'Drafts with Codex, validates, and arms — no typing needed.';
@@ -1015,6 +1023,23 @@ export class StatusWidget {
     return el.innerHTML;
   }
 
+  // Small 📋 button that copies `text` with a brief ✓ confirmation.
+  private makeCopyButton(text: string, title: string): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'proposal-btn';
+    btn.textContent = '📋';
+    btn.title = title;
+    btn.style.flex = '0 0 auto';
+    btn.addEventListener('click', () => {
+      void navigator.clipboard
+        .writeText(text)
+        .then(() => { btn.textContent = '✓'; })
+        .catch(() => { btn.textContent = '✗'; })
+        .finally(() => { setTimeout(() => { btn.textContent = '📋'; }, 1200); });
+    });
+    return btn;
+  }
+
   // ── "Run Claude analysis" — local analyzer daemon ──
   // Renders below the Add-to-Tasker / status section. Queues a request that the
   // analyzer daemon on the user's machine picks up (Claude Code on subscription
@@ -1053,6 +1078,14 @@ export class StatusWidget {
       cancelBtn.title = 'Stop this analysis. A running claude is killed; partial work is parked in a stash.';
       cancelBtn.addEventListener('click', () => void this.cancelAnalysis());
       row.appendChild(cancelBtn);
+    }
+    if (!inFlight && this.analysis?.claude_session_id) {
+      row.appendChild(
+        this.makeCopyButton(
+          `cd ~/Documents/App && claude --resume ${this.analysis.claude_session_id}`,
+          'Copy the resume command — paste in a terminal to continue this analysis session in chat.',
+        ),
+      );
     }
     body.appendChild(row);
 

@@ -98,6 +98,7 @@ export interface Proposal {
   body: string;
   state: ProposalState;
   github_comment_id: number | null;
+  codex_session_id?: string | null;
   last_error: string | null;
   posted_at: string | null;
   created_at: string;
@@ -118,6 +119,7 @@ export interface AnalysisRequest {
   state: AnalysisState;
   result_summary: string | null;
   stash_ref: string | null;
+  claude_session_id?: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;
