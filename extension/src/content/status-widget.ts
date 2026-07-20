@@ -651,6 +651,14 @@ export class StatusWidget {
       clearBtn.disabled = this.proposalBusy;
       clearBtn.title = 'Remove this record from Tasker. The posted GitHub comment is not deleted.';
       clearBtn.addEventListener('click', () => void this.clearProposal());
+      if (this.proposal?.codex_session_id) {
+        postedActions.appendChild(
+          this.makeCopyButton(
+            this.proposal.codex_session_id,
+            'Copy the Codex draft session id — resume on the Railway drafter: codex exec resume <id>',
+          ),
+        );
+      }
       postedActions.appendChild(clearBtn);
       body.appendChild(postedActions);
       section.appendChild(body);
@@ -750,6 +758,15 @@ export class StatusWidget {
       disarmBtn.disabled = this.proposalBusy || state === 'posting';
       disarmBtn.addEventListener('click', () => void this.setProposalState('draft'));
       actions.appendChild(disarmBtn);
+      if (this.proposal?.codex_session_id) {
+        actions.appendChild(
+          this.makeCopyButton(
+            this.proposal.codex_session_id,
+            'Copy the Codex draft session id — resume on the Railway drafter: codex exec resume <id>',
+          ),
+        );
+      }
+
     } else {
       // One button: saves whatever is in the textarea AND arms it.
       const armBtn = document.createElement('button');
