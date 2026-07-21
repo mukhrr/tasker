@@ -37,21 +37,42 @@ you learned.
         minutes. If the server you started comes up on any port other than
         8082, kill it and re-check 8082. When you're done, kill only the
         server processes YOU started this run — never a pre-existing one.
-     2. **Sign up fresh** (never sign in to an existing account — magic codes
-        are dynamic and unreadable headlessly): use the brand-new address from
-        the instructions below; the login screen shows a **Join** button for a
-        never-used email, which creates the account instantly with no code.
-        Drive it with a `npx playwright` script; use a mobile viewport / device
-        emulation when only mWeb variants are checked.
+     2. **Auth via the shared persistent profile.** Drive the browser with a
+        persistent context at `~/.tasker/pw-profile`
+        (`chromium.launchPersistentContext(...)` in a `npx playwright`
+        script). Expensify sessions are long-lived, so most runs start
+        already signed in — load the app and check. ONLY if signed out,
+        **sign up fresh** (never sign in to an existing account — magic codes
+        are dynamic and unreadable headlessly): use the brand-new address
+        from the instructions below; the login screen shows a **Join**
+        button for a never-used email, which creates the account instantly
+        with no code. NEVER create a fresh account when the profile is
+        already signed in: every signed-out app load fires unauthenticated
+        API calls, and bursts of those + repeated sign-ups from one IP get
+        Expensify's API 403-throttled, which breaks the API for later runs.
+        Use a mobile viewport / device emulation when only mWeb variants are
+        checked.
      3. **API reachability truths:** the app's API is same-origin `/api/*`,
-        proxied by the dev server to Expensify's real API. The config-default
-        host `www.expensify.com.dev` only exists inside Expensify's internal
-        dev VM — its NXDOMAIN is EXPECTED here and is never, by itself, a
-        reason to abandon web. If the app shows "You appear to be offline"
-        while `:8082` still serves 200, that is a transient outbound blip:
-        wait ~60s and retry once (fresh browser context) before falling back
-        to Simulate — a one-minute wait is cheaper than losing the browser
-        repro.
+        forwarded by the dev proxy (`web/proxy.ts`) to Expensify's PRODUCTION
+        API at `www.expensify.com`; the same proxy also forwards a staging
+        route to `staging.expensify.com`. The config-default host
+        `www.expensify.com.dev` only exists inside Expensify's internal dev
+        VM — its NXDOMAIN is EXPECTED here and never, by itself, a reason to
+        abandon web. "You appear to be offline" while `:8082` serves 200
+        means the API layer is failing — the banner cannot be dismissed
+        client-side, so diagnose the cause:
+        - **Network errors / timeouts** on `/api/*` → transient outbound
+          blip: wait ~60s and retry once.
+        - **HTTP 403** on every `/api/*` call (incl. `Ping`) → the
+          production API is IP-throttling us (usually self-inflicted by
+          earlier runs' unauthenticated bursts + sign-ups). Do NOT hammer
+          it. Flip the app to the staging API instead: Settings →
+          Troubleshoot → enable **"Use Staging Server"** (persists in the
+          profile), reload, re-check `/api/*`. If staging also 403s, wait
+          2–3 min and retry once; then try the repro on
+          `https://staging.new.expensify.com` with the same persistent
+          profile; only after all of that fall back to Simulate, stating
+          the 403 chain explicitly in the summary.
      4. **Seed the state the issue requires via the UI** — e.g. create the
         workspace / expense / split / message the repro steps mention. Most
         "cannot reproduce" outcomes are really "didn't set up the data"; the
