@@ -62,6 +62,15 @@ const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 // detection doesn't anchor the post a full second late. Bounded so a slow lookup
 // falls back to the detection time instead of stalling the fire.
 const HW_ANCHOR_TIMEOUT_MS = int('HW_ANCHOR_TIMEOUT_MS', 500);
+// Freshly-armed issues are HOT: the drafter reacts to Bug/Daily triage, so
+// External→Help Wanted often lands within minutes of arming (#96604: armed 31s
+// before HW). The shared discovery scan catches External ~1-2s late, which with
+// a 1s External→HW gap leaves no calibration runway and a rushed fire. Recent
+// arms get their own label poll instead, which catches External and upgrades to
+// tight with full runway. Capped, and expires back to the shared detector.
+const HOT_ARMED_WINDOW_MS = int('HOT_ARMED_WINDOW_MS', 15 * 60_000);
+const HOT_ARMED_MAX = int('HOT_ARMED_MAX', 3); // max concurrent hot label polls
+const HOT_POLL_INTERVAL_MS = int('HOT_POLL_INTERVAL_MS', 1200);
 const REQUEST_BUDGET_PER_MIN = int('REQUEST_BUDGET_PER_MIN', 500); // all GitHub requests, 304s included
 const THROTTLED_INTERVAL_MS = int('THROTTLED_INTERVAL_MS', 250); // poll cadence while over budget
 const POST_MORTEM_DELAY_MS = int('POST_MORTEM_DELAY_MS', 10000); // 0 disables the race report
@@ -219,8 +228,15 @@ function latencyCompMs() {
 // so the fire must be able to rely on an already-pinned clock).
 let calibratingClock = false;
 let lastCalibrationAt = 0;
+let lastRolloverPinAt = 0;
 async function calibrateClock(reason) {
   if (calibratingClock || Date.now() - lastCalibrationAt < 10_000) return;
+  // With the background repin keeping the phase pinned, a lock-time burst is
+  // usually redundant — and its request stream contends with the critical
+  // first label poll and the fire POST on the same connection (#96604: the
+  // tight poll confirming Help Wanted took ~600ms while the lock burst ran).
+  // Skip the burst when the phase was pinned by a rollover recently.
+  if (reason !== 'background' && Date.now() - lastRolloverPinAt < 90_000) return;
   const spacingMs = reason === 'background' ? 40 : 15;
   calibratingClock = true;
   lastCalibrationAt = Date.now();
@@ -245,7 +261,10 @@ async function calibrateClock(reason) {
       const parsed = noteServerDate(res.headers.get('date'));
       void res.text().catch(() => '');
       const sec = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
-      if (prevSec !== null && sec !== null && sec > prevSec) break; // rollover captured — phase pinned
+      if (prevSec !== null && sec !== null && sec > prevSec) {
+        lastRolloverPinAt = Date.now(); // rollover captured — phase pinned
+        break;
+      }
       if (sec !== null) prevSec = sec;
       await new Promise((r) => setTimeout(r, spacingMs));
     }
@@ -413,6 +432,18 @@ async function syncArmedProposals() {
       posted.delete(n); // allow an intentionally re-armed issue in this process
       etags.delete('discover'); // re-evaluate an External label already in the cached page
       log(`📌 #${n} armed and staged`);
+      // Give a FRESH arm its own hot label poll (see HOT_ARMED_WINDOW_MS).
+      // Boot re-staging naturally skips this: old rows fail the freshness check.
+      const armedAtMs = Date.parse(proposal.updated_at || '');
+      const hotCount = [...tracked.values()].filter((s) => s.hotUntil && s.mode === 'slow').length;
+      if (
+        Number.isFinite(armedAtMs) &&
+        Date.now() - armedAtMs < HOT_ARMED_WINDOW_MS &&
+        hotCount < HOT_ARMED_MAX &&
+        !tracked.has(n)
+      ) {
+        track(n, { mode: 'slow', source: 'cloud', isWatch: true, hotUntil: armedAtMs + HOT_ARMED_WINDOW_MS });
+      }
     }
   }
 
@@ -865,7 +896,7 @@ async function getRecentLabelEvent(n, label, after, issueUpdatedAt, memo = check
 }
 
 // ── per-issue tracker: slow until `External`, then tight until `Help Wanted` ──
-function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'local' } = {}) {
+function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'local', hotUntil = 0 } = {}) {
   if (posted.has(n)) return;
   // External normally gives us a 2–3 second head start. Use it to resolve and
   // cache the proposal now, never after Help Wanted has landed.
@@ -881,10 +912,17 @@ function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'loca
     isWatch,
     issue,
     source,
+    hotUntil,
     tightUntil: mode === 'tight' ? Date.now() + TIGHT_WINDOW_MS : 0,
   };
   tracked.set(n, st);
-  log(mode === 'tight' ? `🔒 #${n} locked (tight) via discovery` : `👁  #${n} watching`);
+  log(
+    mode === 'tight'
+      ? `🔒 #${n} locked (tight) via discovery`
+      : hotUntil
+        ? `🔥 #${n} hot-armed — own label poll until ${new Date(hotUntil).toISOString()}`
+        : `👁  #${n} watching`,
+  );
   if (mode === 'tight') void calibrateClock('lock');
   if (mode === 'tight' && source === 'cloud') void preClaimCloudProposal(n);
   void tick(n);
@@ -938,7 +976,15 @@ async function tick(n) {
 
   if (!survivesTightExpiry(n, st)) return;
 
-  const interval = st.mode === 'tight' ? TIGHT_INTERVAL_MS : DISCOVERY_INTERVAL_MS;
+  // Hot-armed window over without External/HW — hand the issue back to the
+  // shared discovery detector instead of polling it forever.
+  if (st.mode === 'slow' && st.hotUntil && Date.now() > st.hotUntil) {
+    tracked.delete(n);
+    return;
+  }
+
+  const interval =
+    st.mode === 'tight' ? TIGHT_INTERVAL_MS : st.hotUntil ? HOT_POLL_INTERVAL_MS : DISCOVERY_INTERVAL_MS;
   const elapsed = Date.now() - tickStartedAt;
   setTimeout(() => void tick(n), Math.max(0, interval - elapsed));
 }
