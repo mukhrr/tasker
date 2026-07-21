@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "replay": {
+      "command": "repro-mcp",
+      "args": []
+    }
+  }
+}

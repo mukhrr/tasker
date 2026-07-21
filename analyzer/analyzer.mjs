@@ -19,6 +19,7 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
@@ -50,6 +51,12 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || ''; // '' → CLI default; subscription auth either way
 const CLAUDE_TIMEOUT_MS = int('CLAUDE_TIMEOUT_MS', 45 * 60_000); // repro + fix can legitimately take a while
 const JEST_TIMEOUT_MS = int('JEST_TIMEOUT_MS', 10 * 60_000); // per red/green jest run
+const REPRO_TIMEOUT_MS = int('REPRO_TIMEOUT_MS', 3 * 60_000); // per fast-replay run
+// After reverting/re-applying src files, the dev server needs a moment to
+// rebuild before a replay reflects the new tree (rsbuild HMR, ~3s typical).
+const REBUILD_WAIT_MS = int('REBUILD_WAIT_MS', 10_000);
+const PW_PROFILE_DIR = process.env.PW_PROFILE_DIR || path.join(homedir(), '.tasker', 'pw-profile');
+const REPRO_MCP_CONFIG = path.join(HERE, 'repro-mcp.json');
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 15_000);
 const PROMPT_FILE = path.join(HERE, 'prompts', 'analyze.md');
 
@@ -214,7 +221,9 @@ function isTestFile(f) {
 // then re-apply the fix. Returns a one-line verdict for the summary/Telegram.
 async function redGreenCheck(n, files, overlap) {
   const testFiles = files.filter(isTestFile);
-  const srcFiles = files.filter((f) => !isTestFile(f));
+  // .repros/ recordings are run artifacts, not source — without this exclusion
+  // an authored replay would trip the "fix adds new files" skip below.
+  const srcFiles = files.filter((f) => !isTestFile(f) && !f.startsWith('.repros/'));
   if (!testFiles.length) return srcFiles.length ? '⚠️ no repro test in the change set — fix unverified' : null;
   if (!srcFiles.length) return 'test-only change — nothing to red/green';
 
@@ -248,6 +257,63 @@ async function redGreenCheck(n, files, overlap) {
   if (red.timedOut) return '🟢 repro tests pass with the fix (red run timed out)';
   if (red.code !== 0) return '✅ VERIFIED red/green — repro test FAILS without the fix, PASSES with it';
   return '⚠️ repro tests pass even WITHOUT the fix — the test may not capture the bug';
+}
+
+// Browser-level red/green via fast-replay: when the run authored a recording
+// in .repros/issue-<n>, replay it against the live dev app — `--expect-fixed`
+// must pass with the fix in the tree (green), the plain run must pass (bug
+// observed) with the src files reverted (red), then re-apply. Same honest-skip
+// rules as the Jest check. Requires the dev server to be serving; each tree
+// change waits REBUILD_WAIT_MS for the dev server to rebuild before replaying.
+async function browserRedGreenCheck(n, files, overlap) {
+  const reproName = `issue-${n}`;
+  if (!existsSync(path.join(APP_REPO_DIR, '.repros', reproName))) return null;
+  const srcFiles = files.filter((f) => !isTestFile(f) && !f.startsWith('.repros/'));
+  if (!srcFiles.length) return null;
+
+  const served = await run(
+    'curl',
+    ['-sk', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '8', 'https://dev.new.expensify.com:8082/'],
+    { timeoutMs: 15_000 },
+  );
+  if (!/^2\d\d$/.test((served.stdout || '').trim())) {
+    return '🌐 replay skipped: dev server not serving on :8082';
+  }
+
+  const replay = (extra = []) =>
+    run('repro', ['run', reproName, '--profile', PW_PROFILE_DIR, ...extra], {
+      cwd: APP_REPO_DIR,
+      timeoutMs: REPRO_TIMEOUT_MS,
+    });
+
+  const green = await replay(['--expect-fixed']);
+  if (green.timedOut) return '🌐 replay timed out with the fix — browser verification inconclusive';
+  if (green.code !== 0) return '🌐 replay still shows the bug WITH the fix — needs a human look';
+
+  if (overlap.length) return '🌐 replay green with the fix (browser red-check skipped: pre-existing local edits overlap)';
+  for (const f of srcFiles) {
+    const tracked = await git(['ls-files', '--error-unmatch', f]);
+    if (tracked.code !== 0) return '🌐 replay green with the fix (browser red-check skipped: fix adds new files)';
+  }
+  const diff = await git(['diff', '--', ...srcFiles]);
+  if (diff.code !== 0 || !diff.stdout.trim()) {
+    return '🌐 replay green with the fix (browser red-check skipped: could not capture the fix diff)';
+  }
+  const patchFile = path.join(tmpdir(), `tasker-fix-${n}-browser-${Date.now()}.patch`);
+  await writeFile(patchFile, diff.stdout);
+  await git(['checkout', '--', ...srcFiles]);
+  await new Promise((r) => setTimeout(r, REBUILD_WAIT_MS));
+  const red = await replay();
+  const reapply = await git(['apply', patchFile]);
+  if (reapply.code !== 0) {
+    // Never lose the fix silently — the patch file has it.
+    const msg = `🚨 browser red-check could not re-apply the fix — recover it from ${patchFile}`;
+    log(msg);
+    return msg;
+  }
+  if (red.timedOut) return '🌐 replay green with the fix (browser red run timed out)';
+  if (red.code !== 0) return '⚠️ replay does not observe the bug even WITHOUT the fix — the recording may not capture it';
+  return '🌐 VERIFIED browser red/green — replay observes the bug without the fix, gone with it';
 }
 
 async function processRequest(req) {
@@ -312,6 +378,10 @@ async function processRequest(req) {
     // which the widget offers as a copyable `claude --resume` command.
     const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json'];
     if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
+    // fast-replay's MCP server: gives the run a one-call `repro_run` tool
+    // (verdict + failing step + console + network + screenshot) instead of
+    // shelling out to the CLI. Additive to the App repo's own MCP config.
+    if (existsSync(REPRO_MCP_CONFIG)) args.push('--mcp-config', REPRO_MCP_CONFIG);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
 
     // Watch for the row changing state under us and kill the in-flight claude
@@ -406,6 +476,17 @@ async function processRequest(req) {
       verification = `red/green check errored: ${e instanceof Error ? e.message : String(e)}`;
       log(`🧪 #${n} ${verification}`);
     }
+    // Browser-level verdict rides alongside the Jest one — either can skip
+    // independently; a combined line reads "✅ ...; 🌐 ...".
+    let browserVerification = null;
+    try {
+      browserVerification = await browserRedGreenCheck(n, files, overlap);
+      if (browserVerification) log(`🌐 #${n} ${browserVerification}`);
+    } catch (e) {
+      browserVerification = `browser red/green errored: ${e instanceof Error ? e.message : String(e)}`;
+      log(`🌐 #${n} ${browserVerification}`);
+    }
+    if (browserVerification) verification = verification ? `${verification}; ${browserVerification}` : browserVerification;
 
     let stashRef = null;
     if (files.length) {

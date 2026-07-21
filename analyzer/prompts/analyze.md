@@ -85,7 +85,10 @@ you learned.
         `semantic` description, `waitAfter` with a `timeoutMs` ceiling, and
         `author: "agent"`; "the bug" is defined by the recording's observed
         console errors / failed requests. Read the schema at
-        `$(npm root -g)/fast-replay` when unsure. Then:
+        `$(npm root -g)/fast-replay` when unsure. Prefer the `repro_run`
+        MCP tool (server: `replay`) over shelling out — one call returns
+        the verdict, failing step, console, network, and a screenshot.
+        Then:
         - while the bug exists, `repro run issue-<<<ISSUE_NUMBER>>>
           --profile ~/.tasker/pw-profile` must PASS — that is the red
           baseline at browser level;
