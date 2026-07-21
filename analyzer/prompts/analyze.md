@@ -48,6 +48,18 @@ you learned.
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
      4. Reproduce the reported steps and capture screenshots.
+     5. **Crash-safe interaction rule:** when the NEXT interaction is the one
+        expected to trigger the bug (crash, freeze, render loop), never fire
+        it as a bare Playwright click (`browser_click` / `locator.click()`) —
+        if the page crashes, the click's actionability wait blocks forever and
+        freezes this entire run. Dispatch it from JS with a hard timeout
+        instead: `browser_evaluate` with
+        `() => document.querySelector('<sel>').click()`, or in a script
+        `Promise.race([page.evaluate(…), timeout(10s)])`. If the call then
+        errors ("Execution context was destroyed", "Target crashed") — that IS
+        the reproduction evidence: record it, screenshot if the tab still
+        responds, and move on. Never retry the same interaction as a plain
+        click.
      Do not spin up native builds when web is checked. If no test account is
      configured and the flow requires auth, say exactly that as the fallback
      reason.
