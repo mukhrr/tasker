@@ -170,3 +170,12 @@ pm2 stop sniper            # pause it
   budget` lines mean the guard is working. If logs ever show `⏸️ rate-limited`
   anyway, lower `REQUEST_BUDGET_PER_MIN` and bump `TIGHT_INTERVAL_MS` to 80 and
   `DISCOVERY_INTERVAL_MS` to 1000 in `.env`, then `pm2 restart sniper`.
+
+## Railway watch paths
+
+Both services deploy from this monorepo, so each has a Watch Path configured
+(service → Settings → Watch Paths): `tasker` = `/sniper/**`, drafter
+(`affectionate-empathy`) = `/drafter/**`. Pushes that touch neither directory
+(analyzer, extension, web app) no longer restart the services — before this,
+every push rebooted the sniper and cost it a blind window mid-race. If a
+sniper change ever fails to auto-deploy, check these patterns first.
