@@ -43,12 +43,21 @@ you learned.
         never-used email, which creates the account instantly with no code.
         Drive it with a `npx playwright` script; use a mobile viewport / device
         emulation when only mWeb variants are checked.
-     3. **Seed the state the issue requires via the UI** — e.g. create the
+     3. **API reachability truths:** the app's API is same-origin `/api/*`,
+        proxied by the dev server to Expensify's real API. The config-default
+        host `www.expensify.com.dev` only exists inside Expensify's internal
+        dev VM — its NXDOMAIN is EXPECTED here and is never, by itself, a
+        reason to abandon web. If the app shows "You appear to be offline"
+        while `:8082` still serves 200, that is a transient outbound blip:
+        wait ~60s and retry once (fresh browser context) before falling back
+        to Simulate — a one-minute wait is cheaper than losing the browser
+        repro.
+     4. **Seed the state the issue requires via the UI** — e.g. create the
         workspace / expense / split / message the repro steps mention. Most
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
-     4. Reproduce the reported steps and capture screenshots.
-     5. **Crash-safe interaction rule:** when the NEXT interaction is the one
+     5. Reproduce the reported steps and capture screenshots.
+     6. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
         if the page crashes, the click's actionability wait blocks forever and
