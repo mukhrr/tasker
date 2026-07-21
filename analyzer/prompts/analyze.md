@@ -78,7 +78,26 @@ you learned.
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
      5. Reproduce the reported steps and capture screenshots.
-     6. **Crash-safe interaction rule:** when the NEXT interaction is the one
+     6. **Capture the repro as a deterministic replay** (the `repro` CLI —
+        fast-replay, installed globally). Author agent steps in
+        `.repros/issue-<<<ISSUE_NUMBER>>>/recording.json`: each step carries
+        Playwright selector `candidates` (highest-confidence first), a
+        `semantic` description, `waitAfter` with a `timeoutMs` ceiling, and
+        `author: "agent"`; "the bug" is defined by the recording's observed
+        console errors / failed requests. Read the schema at
+        `$(npm root -g)/fast-replay` when unsure. Then:
+        - while the bug exists, `repro run issue-<<<ISSUE_NUMBER>>>
+          --profile ~/.tasker/pw-profile` must PASS — that is the red
+          baseline at browser level;
+        - after implementing the fix, re-run with `--expect-fixed` — that
+          is the green.
+        Close any browser you launched on that profile first (one Chromium
+        per profile dir). Quote both verdict lines in the summary and leave
+        `.repros/issue-<<<ISSUE_NUMBER>>>/` in the working tree — it is
+        stashed with the analysis so the fix can be re-verified in seconds.
+        If the browser lane is unavailable (offline / 403 chain), skip
+        this — the Jest red/green remains the verification floor.
+     7. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
         if the page crashes, the click's actionability wait blocks forever and
