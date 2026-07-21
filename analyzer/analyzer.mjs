@@ -314,8 +314,12 @@ async function processRequest(req) {
     if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
 
-    // Watch for a Cancel from the extension (running → canceled) and kill the
-    // in-flight claude when it lands.
+    // Watch for the row changing state under us and kill the in-flight claude
+    // when it does. Not just 'canceled': a Cancel followed by a fast Re-run can
+    // outrun this poll and land as 'queued' — the old claude then kept running
+    // and blocked the re-run until the 60m timeout (seen live on #90789 and
+    // #96580). Any state other than 'running' (or a vanished row) means this
+    // run's claim is gone.
     let canceled = false;
     let claudeChild = null;
     const cancelWatch = setInterval(() => {
@@ -323,10 +327,12 @@ async function processRequest(req) {
         try {
           const q = new URLSearchParams({ id: `eq.${req.id}`, user_id: `eq.${SUPABASE_USER_ID}`, select: 'state', limit: '1' });
           const rows = await supabaseRequest(`analysis_requests?${q}`);
-          if (Array.isArray(rows) && rows[0]?.state === 'canceled') {
+          if (!Array.isArray(rows)) return; // transient shape — retry next tick
+          const state = rows[0]?.state ?? '(deleted)';
+          if (state !== 'running') {
             canceled = true;
             clearInterval(cancelWatch);
-            log(`🚫 #${n} cancel requested — killing claude`);
+            log(`🚫 #${n} run claim lost (row is '${state}') — killing claude`);
             try {
               claudeChild?.kill('SIGKILL');
             } catch {
@@ -354,8 +360,10 @@ async function processRequest(req) {
       clearInterval(cancelWatch);
     }
     if (canceled) {
-      // Park whatever partial work exists so the checkout is clean again; the
-      // row is already 'canceled' (set by the extension) — leave it that way.
+      // Park whatever partial work exists so the checkout is clean again. The
+      // row was moved out of 'running' externally (canceled, or already
+      // re-queued by a fast Re-run) — leave it exactly as the extension set it;
+      // a 'queued' row gets picked up fresh by the main loop right after this.
       const part = await git(['status', '--porcelain']);
       const partFiles = changedFiles(part.stdout).filter((f) => !preDirty.has(f));
       if (partFiles.length) {
