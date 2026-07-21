@@ -211,11 +211,17 @@ function latencyCompMs() {
 // rollover (~one 50ms poll interval). When a race locks on, burst cheap samples
 // at /rate_limit — exempt from rate limiting and deliberately NOT counted
 // toward the request budget — until a rollover is observed, pinning the phase
-// to ~one 40ms gap + jitter before the fire matters.
+// to ~one sample gap + jitter before the fire matters. Lock-time bursts sample
+// every 15ms (phase ≤ ~15ms); the always-on background repin (see boot) uses a
+// gentler 40ms so its per-minute traffic stays negligible while still keeping
+// the phase pinned and the RTT window fresh for races that lock with sub-second
+// runway (#96588 locked 300ms after the label — the burst can't finish in time,
+// so the fire must be able to rely on an already-pinned clock).
 let calibratingClock = false;
 let lastCalibrationAt = 0;
 async function calibrateClock(reason) {
   if (calibratingClock || Date.now() - lastCalibrationAt < 10_000) return;
+  const spacingMs = reason === 'background' ? 40 : 15;
   calibratingClock = true;
   lastCalibrationAt = Date.now();
   try {
@@ -241,9 +247,10 @@ async function calibrateClock(reason) {
       const sec = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
       if (prevSec !== null && sec !== null && sec > prevSec) break; // rollover captured — phase pinned
       if (sec !== null) prevSec = sec;
-      await new Promise((r) => setTimeout(r, 40));
+      await new Promise((r) => setTimeout(r, spacingMs));
     }
-    log(`⏱️  clock calibration burst done (${reason}), comp=${latencyCompMs()}ms`);
+    // Background repins run every minute — logging each would drown the stream.
+    if (reason !== 'background') log(`⏱️  clock calibration burst done (${reason}), comp=${latencyCompMs()}ms`);
   } finally {
     calibratingClock = false;
   }
@@ -1361,6 +1368,12 @@ function main() {
         'follow up every snipe with a real proposal. Blanket auto-posting is a ban risk.'
     );
   }
+
+  // Keep the boundary phase pinned and the RTT window fresh at all times, so a
+  // race that locks with sub-second runway (HW seen first via discovery) fires
+  // off an already-calibrated clock instead of a half-finished burst, and
+  // latency comp never decays to 0 because the 120s RTT window went quiet.
+  setInterval(() => void calibrateClock('background'), 60_000);
 
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
   if (DISCOVER || CLOUD_MODE) void discoverTick();
