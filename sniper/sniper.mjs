@@ -88,7 +88,14 @@ const HW_ANCHOR_TIMEOUT_MS = int('HW_ANCHOR_TIMEOUT_MS', 500);
 // tight with full runway. Capped, and expires back to the shared detector.
 const HOT_ARMED_WINDOW_MS = int('HOT_ARMED_WINDOW_MS', 15 * 60_000);
 const HOT_ARMED_MAX = int('HOT_ARMED_MAX', 3); // max concurrent hot label polls
-const HOT_POLL_INTERVAL_MS = int('HOT_POLL_INTERVAL_MS', 1200);
+// Must be well under the External→Help Wanted gap (observed as tight as ~1s) so
+// we catch External BEFORE HW and tight-poll through the transition — anchoring
+// the boundary on the real second. At 1200ms we caught External ~1.5s late on
+// #96740, never saw the transition, and anchored a full second late (fired
+// "perfectly" for the wrong second → +2s). 500ms keeps worst-case detection lag
+// inside a 1s gap; the budget guard throttles if a full hot set ever nears the
+// request ceiling.
+const HOT_POLL_INTERVAL_MS = int('HOT_POLL_INTERVAL_MS', 500);
 const REQUEST_BUDGET_PER_MIN = int('REQUEST_BUDGET_PER_MIN', 500); // all GitHub requests, 304s included
 const THROTTLED_INTERVAL_MS = int('THROTTLED_INTERVAL_MS', 250); // poll cadence while over budget
 const POST_MORTEM_DELAY_MS = int('POST_MORTEM_DELAY_MS', 10000); // 0 disables the race report
@@ -1437,13 +1444,19 @@ async function racePostMortem(n, commentId) {
       return ms < ourMs || (ms === ourMs && c.id < ours.id);
     });
     const sameSecond = Math.floor(ourMs / 1000) === Math.floor(hwMs / 1000);
+    // Truth vs the live snipe log: `stamp=` there is computed against whatever
+    // HW second the sniper ANCHORED at fire time. This uses the real labeled
+    // event, so a `+2s` here against a `+0s` there means we anchored a second
+    // late (detected the transition late) — the fire was fine, the target wasn't.
+    const deltaS = Math.round((ourMs - hwMs) / 1000);
     const aheadList = ahead
       .map((c) => `${c.user?.login || '?'} +${Math.round((Date.parse(c.created_at) - hwMs) / 1000)}s`)
       .join(', ');
     const report =
-      `🔬 #${n} race: "${TRIGGER_NAME}" @ ${hw.created_at} → own comment +${Math.round((ourMs - hwMs) / 1000)}s, ` +
+      `🔬 #${n} race: "${TRIGGER_NAME}" @ ${hw.created_at} → own comment +${deltaS}s, ` +
       `position ${ahead.length + 1}/${postHw.length + 1} post-HW` +
       (sameSecond ? ' ⚠️ same second as the label — may render above it' : '') +
+      (deltaS >= 2 ? ' ⚠️ ≥2s after HW — likely late detection/anchor, not slow POST' : '') +
       (ahead.length ? ` — ahead: ${aheadList}` : '');
     log(report);
     await notify(report, { level: 'verbose' }); // still in the Railway logs; Telegram only when TELEGRAM_VERBOSE
