@@ -66,9 +66,16 @@ you learned.
         - **HTTP 403** on every `/api/*` call (incl. `Ping`) → the
           production API is IP-throttling us (usually self-inflicted by
           earlier runs' unauthenticated bursts + sign-ups). Do NOT hammer
-          it. Flip the app to the staging API instead: Settings →
-          Troubleshoot → enable **"Use Staging Server"** (persists in the
-          profile), reload, re-check `/api/*`. If staging also 403s, wait
+          it. Flip the app to the staging API instead. The Settings →
+          Troubleshoot toggle does NOT exist on local dev web — upstream
+          code disables it via `CONFIG.IS_USING_LOCAL_WEB` in
+          `src/libs/ApiUtils.ts`, but this checkout carries a standing
+          one-line local patch (hidden via git skip-worktree) that removes
+          that guard. NEVER revert, stash, or "clean up"
+          `src/libs/ApiUtils.ts` unless your fix itself targets it. So:
+          seed `shouldUseStagingServer: true` into the app's Onyx store
+          (IndexedDB `OnyxDB` → `keyvaluepairs`), reload, and confirm
+          requests now go to `/staging/api/*`. If staging also 403s, wait
           2–3 min and retry once; then try the repro on
           `https://staging.new.expensify.com` with the same persistent
           profile; only after all of that fall back to Simulate, stating
