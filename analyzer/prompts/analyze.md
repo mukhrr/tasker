@@ -101,29 +101,32 @@ you learned.
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
      5. Reproduce the reported steps and capture screenshots.
-     6. **Capture the repro as a deterministic replay** (the `repro` CLI —
-        fast-replay, installed globally). Author agent steps in
-        `.repros/issue-<<<ISSUE_NUMBER>>>/recording.json`: each step carries
-        Playwright selector `candidates` (highest-confidence first), a
-        `semantic` description, `waitAfter` with a `timeoutMs` ceiling, and
-        `author: "agent"`; "the bug" is defined by the recording's observed
-        console errors / failed requests. Read the schema at
-        `$(npm root -g)/fast-replay` when unsure. Prefer the `repro_run`
-        MCP tool (server: `replay`) over shelling out — one call returns
-        the verdict, failing step, console, network, and a screenshot.
-        Always pass `--headed` (real Chrome, to clear Cloudflare — see
-        step 2/3) along with the profile. Then:
-        - while the bug exists, `repro run issue-<<<ISSUE_NUMBER>>>
-          --profile ~/.tasker/pw-profile --headed` must PASS — that is the
-          red baseline at browser level;
-        - after implementing the fix, re-run with `--expect-fixed` — that
-          is the green.
-        Close any browser you launched on that profile first (one Chromium
-        per profile dir). Quote both verdict lines in the summary and leave
-        `.repros/issue-<<<ISSUE_NUMBER>>>/` in the working tree — it is
-        stashed with the analysis so the fix can be re-verified in seconds.
-        If the browser lane is unavailable (offline / 403 chain), skip
-        this — the Jest red/green remains the verification floor.
+     6. **Verify the fix in the browser — Playwright is the DEFAULT.** You
+        already reproduced the bug with your headed-Chrome Playwright script
+        (steps 2–5) = the RED baseline. After implementing the fix, re-run
+        that same script against the running dev server (same profile, same
+        steps) and confirm the bug is GONE = GREEN. Capture before/after
+        screenshots and state both plainly in the summary, e.g. "browser
+        repro: error toast appeared before the fix, gone after (Playwright,
+        headed Chrome)." This Playwright red→green IS the browser
+        verification; do not require anything else for it.
+        **fast-replay is a FALLBACK, not the default** — reach for it only
+        when a durable, re-runnable artifact is worth leaving behind (a
+        subtle/flaky repro you want the harness or the user to re-confirm
+        later), or when your ad-hoc Playwright verification was
+        inconclusive. When you do use it: author agent steps in
+        `.repros/issue-<<<ISSUE_NUMBER>>>/recording.json` (selector
+        `candidates` high-confidence first, a `semantic` string, `waitAfter`
+        with a `timeoutMs`, `author: "agent"`; schema at
+        `$(npm root -g)/fast-replay`), then `repro run
+        issue-<<<ISSUE_NUMBER>>> --profile ~/.tasker/pw-profile --headed`
+        (PASS = bug reproduces) and `--expect-fixed` after the fix (PASS =
+        fixed); quote both verdict lines and leave
+        `.repros/issue-<<<ISSUE_NUMBER>>>/` in the tree (it is stashed with
+        the analysis). Close any browser on that profile first (one Chrome
+        per profile dir). If the browser lane is unavailable (Cloudflare
+        challenge unsolved / offline), the Jest red/green remains the
+        verification floor for both paths.
      7. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
