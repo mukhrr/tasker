@@ -281,7 +281,9 @@ async function browserRedGreenCheck(n, files, overlap) {
   }
 
   const replay = (extra = []) =>
-    run('repro', ['run', reproName, '--profile', PW_PROFILE_DIR, ...extra], {
+    // --headed = real Chrome, so the replay clears Cloudflare's bot challenge
+    // (headless Chromium 403s on every /api/* call).
+    run('repro', ['run', reproName, '--profile', PW_PROFILE_DIR, '--headed', ...extra], {
       cwd: APP_REPO_DIR,
       timeoutMs: REPRO_TIMEOUT_MS,
     });
