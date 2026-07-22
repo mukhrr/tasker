@@ -81,6 +81,19 @@ const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
 
 const DRAFT_PROMPT_FILE = process.env.DRAFT_PROMPT_FILE || path.join(HERE, 'prompts', 'draft.md');
 const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'prompts', 'enrich.md');
+const INTERIM_PROMPT_FILE = process.env.INTERIM_PROMPT_FILE || path.join(HERE, 'prompts', 'interim.md');
+
+// Fast interim arm: a concise, valid proposal armed in ~1 min right after
+// queueing, so the sniper always has ammunition even when Help Wanted lands
+// minutes after queue — before the ~4-min deep draft is ready (missed
+// #96732/#96742 entirely). The full draft then replaces the body: a silent swap
+// while still armed, or a comment edit if the sniper already posted the interim
+// (which proposal-police stamps "edited" — the accepted cost of racing a slow
+// draft). Disable with FAST_INTERIM_ARM=false. Costs one extra Codex call per
+// issue; INTERIM_CODEX_MODEL can point it at a faster/cheaper model.
+const FAST_INTERIM_ARM = bool('FAST_INTERIM_ARM', true);
+const INTERIM_TIMEOUT_MS = int('INTERIM_TIMEOUT_MS', 120_000);
+const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
@@ -332,7 +345,7 @@ function codexSubprocessEnv() {
   return env;
 }
 
-async function runCodex(prompt, { threadName, marker } = {}) {
+async function runCodex(prompt, { threadName, marker, model = CODEX_MODEL, timeoutMs = CODEX_TIMEOUT_MS } = {}) {
   const outFile = path.join(tmpdir(), `codex-${process.pid}-${Date.now()}.md`);
   // `codex exec` is non-interactive by design and does not accept the `-a`
   // approval flag (that lives on the top-level `codex` command). Sandbox mode
@@ -343,7 +356,7 @@ async function runCodex(prompt, { threadName, marker } = {}) {
   } else {
     args.push('--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true');
   }
-  if (CODEX_MODEL) args.push('-m', CODEX_MODEL);
+  if (model) args.push('-m', model);
   // Best-effort: label the session by issue. `codex exec` currently ignores this
   // (it assigns an auto-incrementing name), but we read the real id back either
   // way, so this just helps if a future Codex honors it.
@@ -355,7 +368,7 @@ async function runCodex(prompt, { threadName, marker } = {}) {
   const sessionsBefore = new Set((await rolloutFiles()).map((r) => r.id));
   const res = await runCodexProcess(CODEX_BIN, args, {
     env: codexSubprocessEnv(),
-    timeoutMs: CODEX_TIMEOUT_MS,
+    timeoutMs,
     outFile,
   });
 
@@ -376,7 +389,7 @@ async function runCodex(prompt, { threadName, marker } = {}) {
     if (/usage limit|rate limit|too many requests|quota/i.test(blob)) {
       return { ok: false, error: 'codex usage limit', usageLimited: true };
     }
-    if (res.timedOut) return { ok: false, error: `codex timed out after ${CODEX_TIMEOUT_MS}ms` };
+    if (res.timedOut) return { ok: false, error: `codex timed out after ${timeoutMs}ms` };
     if (res.code != null && res.code !== 0) {
       return { ok: false, error: `codex exited ${res.code}: ${res.stderr.slice(0, 300)}` };
     }
@@ -567,10 +580,21 @@ async function draftOne(row, settings = { autoPost: true }) {
     return;
   }
   const { data: comments } = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=30`);
+  const commentList = Array.isArray(comments) ? comments : [];
 
-  const prompt = await buildDraftPrompt(issue, Array.isArray(comments) ? comments : []);
-  const result = await draftWithValidation(prompt, claimed);
-  if (!result) return; // failure paths handled inside
+  // Fast interim arm: get a concise, valid proposal armed in ~1 min so the
+  // sniper always has ammunition, then let the full deep draft replace it.
+  let interimArmed = false;
+  if (FAST_INTERIM_ARM && !DRY_RUN) {
+    interimArmed = await armInterim(claimed, n, issue, commentList, settings);
+  }
+
+  const prompt = await buildDraftPrompt(issue, commentList);
+  const result = await draftWithValidation(prompt, claimed, { keepArmedOnFail: interimArmed });
+  if (!result) {
+    if (interimArmed) log(`#${n} full draft did not complete — interim remains armed`);
+    return; // failure paths handled inside (or interim left armed)
+  }
 
   const { body, sessionId } = result;
 
@@ -586,49 +610,149 @@ async function draftOne(row, settings = { autoPost: true }) {
     return;
   }
 
-  // Arm: drafting → armed. The sniper stages it and posts on Help Wanted.
-  const armed = await updateProposal(
-    claimed.id,
-    {
-      state: 'armed',
-      body,
-      last_error: null,
-      draft_attempts: (claimed.draft_attempts || 0) + 1,
-      codex_session_id: sessionId,
-    },
-    { requireState: 'drafting' },
-  );
-  if (!armed) {
-    log(`#${n} arm skipped — row changed under us (manual edit?)`);
-    return;
-  }
-  const issueUrl = `https://github.com/${REPO}/issues/${n}`;
-  log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
-  // Keep the ping short — no full proposal in Telegram. Just the issue, a size
-  // hint, and the resume command to open it in the extension/terminal.
-  await notify(
-    `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
-      `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
-    { level: 'verbose' },
-  );
-
-  // Fast path: if Help Wanted is already on the issue, the sniper intentionally
-  // ignores the stale label event, so post directly.
-  // Direct-post is POSTING, so it obeys the "Auto-post on Help Wanted" toggle —
-  // even though drafting itself is gated by the separate "Auto-pilot" toggle.
-  const hasHW = labelNames(issue.labels).includes(TRIGGER);
-  if (DIRECT_POST && hasHW && settings.autoPost) {
-    await directPost(armed, issue, body);
-  }
+  const armed = await finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed);
+  if (!armed) return;
 
   if (ENRICH) {
     await enrichOne(armed.id, n, body);
   }
 }
 
+// Build the concise first-pass prompt (no permalinks / investigation) from the
+// interim template.
+async function buildInterimPrompt(issue, comments) {
+  const template = await readFile(INTERIM_PROMPT_FILE, 'utf8');
+  const commentText = (comments || [])
+    .slice(0, 10)
+    .map((c) => `--- comment by ${c.user?.login || '?'} ---\n${c.body || ''}`)
+    .join('\n\n');
+  const issueBlock =
+    `Issue #${issue.number}: ${issue.title}\n\n${issue.body || '(no description)'}\n` +
+    (commentText ? `\n### Existing comments\n\n${commentText}\n` : '');
+  return template.replace('<<<ISSUE>>>', issueBlock);
+}
+
+// Draft a concise proposal fast, validate, and arm it (drafting → armed).
+// Direct-posts immediately if Help Wanted is already present. Returns true when
+// an interim body is armed. Never throws — a failure just falls through to the
+// full pass, i.e. today's behavior.
+async function armInterim(claimed, n, issue, comments, settings) {
+  try {
+    const prompt = await buildInterimPrompt(issue, comments);
+    const draft = await runCodex(prompt, {
+      threadName: `tasker-${n}-interim`,
+      marker: `Issue #${n}:`,
+      model: INTERIM_CODEX_MODEL,
+      timeoutMs: INTERIM_TIMEOUT_MS,
+    });
+    if (!draft.ok) {
+      log(`⏭️  #${n} interim skipped: ${draft.error}`);
+      return false;
+    }
+    const problems = await validateProposal(draft.body);
+    if (problems.length) {
+      log(`⏭️  #${n} interim discarded — validation failed: ${problems.join('; ')}`);
+      return false;
+    }
+    const armed = await updateProposal(
+      claimed.id,
+      { state: 'armed', body: draft.body, last_error: null, codex_session_id: draft.sessionId },
+      { requireState: 'drafting' },
+    );
+    if (!armed) {
+      log(`#${n} interim arm skipped — row changed under us`);
+      return false;
+    }
+    log(`⚡ #${n} interim armed (${draft.body.length} chars) — full draft continuing`);
+    // If Help Wanted is already present the sniper ignores the stale label, so
+    // post the interim now to be in the race; the full draft edits it later.
+    const hasHW = labelNames(issue.labels).includes(TRIGGER);
+    if (DIRECT_POST && hasHW && settings.autoPost) {
+      await directPost(armed, issue, draft.body);
+    }
+    return true;
+  } catch (e) {
+    log(`interim #${n} errored (continuing to full): ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+}
+
+// Put the full draft where it belongs given the row's current state, and notify.
+// Returns the row (for the enrich pass) or null when nothing further should run.
+async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed) {
+  const issueUrl = `https://github.com/${REPO}/issues/${n}`;
+
+  if (!interimArmed) {
+    // Original path: arm drafting → armed, direct-post if Help Wanted present.
+    const armed = await updateProposal(
+      claimed.id,
+      {
+        state: 'armed',
+        body,
+        last_error: null,
+        draft_attempts: (claimed.draft_attempts || 0) + 1,
+        codex_session_id: sessionId,
+      },
+      { requireState: 'drafting' },
+    );
+    if (!armed) {
+      log(`#${n} arm skipped — row changed under us (manual edit?)`);
+      return null;
+    }
+    log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
+    await notify(
+      `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
+        `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
+      { level: 'verbose' },
+    );
+    const hasHW = labelNames(issue.labels).includes(TRIGGER);
+    if (DIRECT_POST && hasHW && settings.autoPost) {
+      await directPost(armed, issue, body);
+    }
+    return armed;
+  }
+
+  // Interim already in place — replace its body with the full draft, wherever
+  // the interim now lives (still armed, or already posted by the sniper).
+  const current = await supabaseRequest(
+    `proposals?${new URLSearchParams({ id: `eq.${claimed.id}`, user_id: `eq.${SUPABASE_USER_ID}`, select: '*' })}`,
+  );
+  const row = Array.isArray(current) ? current[0] : null;
+  if (!row) return null;
+
+  if (row.state === 'armed') {
+    const updated = await updateProposal(
+      claimed.id,
+      { state: 'armed', body, last_error: null, codex_session_id: sessionId },
+      { requireState: 'armed' },
+    );
+    if (updated) log(`📝 #${n} full draft swapped into the armed interim (${body.length} chars)`);
+    return updated || row;
+  }
+  if (row.state === 'posted' && row.github_comment_id) {
+    const { status } = await gh(`/repos/${REPO}/issues/comments/${row.github_comment_id}`, {
+      method: 'PATCH',
+      body: { body },
+    });
+    if (status === 200) {
+      await updateProposal(claimed.id, { codex_session_id: sessionId });
+      log(`📝 #${n} full draft edited into the posted interim comment (proposal-police may flag it)`);
+      await notify(`📝 Upgraded ${REPO}#${n} from interim to full draft on the posted comment.${resumeHint(sessionId)}`, { level: 'verbose' });
+    } else {
+      log(`#${n} full-draft comment edit failed (${status}) — interim stays posted`);
+    }
+    return row;
+  }
+  log(`#${n} full draft ready but row is '${row.state}' — leaving interim in place`);
+  return row;
+}
+
 // Draft, validate, and retry once with validator feedback. Returns
 // { body, sessionId } on success, or null after handling the failure path.
-async function draftWithValidation(prompt, row) {
+// When keepArmedOnFail is set (an interim proposal is already armed), failures
+// leave the row untouched — the interim stays armed rather than dropping to
+// draft/queued — so we never lose an armable proposal to a slow/failed full pass.
+async function draftWithValidation(prompt, row, { keepArmedOnFail = false } = {}) {
   const n = row.issue_number;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const draft = await runCodex(
@@ -638,16 +762,24 @@ async function draftWithValidation(prompt, row) {
     if (!draft.ok) {
       if (draft.usageLimited) {
         backoffUntil = Date.now() + 15 * 60_000;
-        await updateProposal(row.id, { state: 'queued', last_error: 'Codex usage limit; will retry.' });
-        log(`⏸️  #${n} Codex usage-limited — re-queued, backing off 15m`);
-        await notify(`⏸️ Codex usage limit hit while drafting ${REPO}#${n}; re-queued.`);
+        if (keepArmedOnFail) {
+          log(`⏸️  #${n} full draft usage-limited — interim stays armed, backing off 15m`);
+        } else {
+          await updateProposal(row.id, { state: 'queued', last_error: 'Codex usage limit; will retry.' });
+          log(`⏸️  #${n} Codex usage-limited — re-queued, backing off 15m`);
+          await notify(`⏸️ Codex usage limit hit while drafting ${REPO}#${n}; re-queued.`);
+        }
         return null;
       }
       // A timeout won't get better on retry — it'll just burn another full
       // CODEX_TIMEOUT_MS. Treat it as terminal (drop to draft) rather than
       // re-queueing for up to MAX_DRAFT_ATTEMPTS.
       const isTimeout = /timed out/i.test(draft.error);
-      await failDraft(row, draft.error, { terminal: isTimeout });
+      if (keepArmedOnFail) {
+        log(`#${n} full draft failed (${draft.error}) — interim stays armed`);
+      } else {
+        await failDraft(row, draft.error, { terminal: isTimeout });
+      }
       return null;
     }
     const problems = await validateProposal(draft.body);
@@ -655,12 +787,16 @@ async function draftWithValidation(prompt, row) {
     log(`⚠️  #${n} validation failed (attempt ${attempt}): ${problems.join('; ')}`);
     row._lastProblems = problems.map((p) => `- ${p}`).join('\n');
     if (attempt === 2) {
-      await updateProposal(row.id, {
-        state: 'draft',
-        body: draft.body, // keep the best attempt for a human to rescue
-        last_error: `Auto-draft failed validation: ${problems.join('; ')}`.slice(0, 300),
-      });
-      await notify(`⚠️ Auto-draft for ${REPO}#${n} failed validation — needs a human.\nhttps://github.com/${REPO}/issues/${n}`);
+      if (keepArmedOnFail) {
+        log(`#${n} full draft failed validation twice — interim stays armed`);
+      } else {
+        await updateProposal(row.id, {
+          state: 'draft',
+          body: draft.body, // keep the best attempt for a human to rescue
+          last_error: `Auto-draft failed validation: ${problems.join('; ')}`.slice(0, 300),
+        });
+        await notify(`⚠️ Auto-draft for ${REPO}#${n} failed validation — needs a human.\nhttps://github.com/${REPO}/issues/${n}`);
+      }
       return null;
     }
   }

@@ -211,6 +211,10 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       FAKE_CODEX_DIR: codexDir,
       TELEGRAM_BOT_TOKEN: '',
       TELEGRAM_CHAT_ID: '',
+      // Default OFF so the existing scenarios keep testing the single full-draft
+      // flow deterministically (the interim would arm first and race their
+      // "wait until armed" checks). The interim path has its own scenario.
+      FAST_INTERIM_ARM: 'false',
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -360,6 +364,33 @@ await runScenario({
     assert.equal(state.commentPatches[0].id, 555);
     assert.match(state.commentPatches[0].body, /enriched/, 'enriched body not sent');
     await deadline(() => state.rows.get('r4')?.enriched_at != null, 2000, 'enriched_at not set');
+  },
+});
+
+// ── scenario 4b: fast interim arms + posts, full draft upgrades the comment ───
+await runScenario({
+  name: 'interim-arm-then-upgrade',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, FAST_INTERIM_ARM: 'true' },
+  // Help Wanted already present, so the interim direct-posts, then the full
+  // draft edits that posted comment (the #96742 race-a-slow-draft path).
+  issue: baseIssue({ number: 90014, labels: [{ name: 'Help Wanted' }] }),
+  // 1st call = interim (posted), 2nd call = full draft (edits the comment).
+  cannedProposals: [
+    GOOD_PROPOSAL.replace('I think we should', 'As a fast first pass, I think we should'),
+    GOOD_PROPOSAL.replace('I think we should', 'After deep investigation, I think we should'),
+  ],
+  seedRows: [
+    { id: 'r14', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90014, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline, output }) => {
+    // Interim arms fast and direct-posts (HW already present).
+    await deadline(() => state.commentPosts.length === 1, 6000, 'interim never direct-posted');
+    assert.match(state.commentPosts[0].body, /fast first pass/, 'posted body was not the interim');
+    assert.match(output.join(''), /interim armed/, 'no interim-armed log');
+    // Full draft then edits the posted comment to the deep version.
+    await deadline(() => state.commentPatches.length > 0, 8000, 'full draft never upgraded the comment');
+    assert.match(state.commentPatches.at(-1).body, /deep investigation/, 'comment not upgraded to the full draft');
+    assert.equal(state.commentPosts.length, 1, 'more than one comment was posted');
   },
 });
 
