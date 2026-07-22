@@ -59,6 +59,22 @@ const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated t
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
 const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 75); // past the second boundary after HW
 const POST_LATENCY_COMP_CAP_MS = int('POST_LATENCY_COMP_CAP_MS', 12); // max send-early compensation; 0 disables
+// ── advanced: pre-boundary fire (opt-in, account-risky) ──────────────────────
+// Insert order within a GitHub second tracks POST ARRIVAL, but created_at is
+// stamped near processing-COMPLETION (arrival + server processing). So a POST
+// that arrives a few hundred ms BEFORE the target-second boundary still stamps
+// INSIDE the target second (processing carries it forward) while claiming an
+// earlier slot than comments that arrived at the boundary. The rival bots that
+// consistently insert ahead of us do exactly this. The risk: on a fast
+// processing day the carry is small and the stamp lands in the Help Wanted
+// second (renders ABOVE the label — a visible rule violation). Mitigations:
+// (1) earliness is capped to a conservative fraction of MEASURED processing, so
+// it auto-shrinks when processing is fast; (2) one `-1s` stamp disables the
+// whole thing for the session and alerts. Set POST_EARLY_FIRE_MS=0 to revert to
+// pure boundary alignment.
+const POST_EARLY_FIRE_MS = int('POST_EARLY_FIRE_MS', 250); // desired pre-boundary lead
+const POST_EARLY_FIRE_CAP_MS = int('POST_EARLY_FIRE_CAP_MS', 500); // hard ceiling regardless of samples
+const POST_EARLY_SAFETY_FRACTION = 0.35; // lead ≤ this × min recent processing proxy
 const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 // Before posting, look up the real Help Wanted event time so a boundary-crossing
 // detection doesn't anchor the post a full second late. Bounded so a slow lookup
@@ -215,6 +231,37 @@ function latencyCompMs() {
   if (POST_LATENCY_COMP_CAP_MS <= 0 || !rttSamples.length) return 0;
   const minRtt = Math.min(...rttSamples.map((s) => s.ms));
   return Math.max(0, Math.min(POST_LATENCY_COMP_CAP_MS, Math.floor(minRtt * 0.4)));
+}
+
+// Server-processing proxy = fire-POST round trip minus the network round trip.
+// A conservative UNDER-estimate of how far processing carries the stamp past
+// arrival, so bounding the pre-boundary lead by it keeps the stamp legal.
+const postProcSamples = []; // { at, ms }
+function notePostProc(postMs) {
+  if (!Number.isFinite(postMs) || postMs <= 0) return;
+  const minRtt = rttSamples.length ? Math.min(...rttSamples.map((s) => s.ms)) : 0;
+  const proc = Math.max(0, postMs - minRtt); // subtract full RTT, not one-way — deliberately conservative
+  const now = Date.now();
+  postProcSamples.push({ at: now, ms: proc });
+  while (postProcSamples.length && (postProcSamples.length > 20 || now - postProcSamples[0].at > 600_000)) {
+    postProcSamples.shift();
+  }
+}
+
+// One `-1s` stamp (posted in the Help Wanted second, renders above the label)
+// trips this for the rest of the session — a single visible violation is
+// recoverable, a pattern gets the account banned.
+let earlyFireDisabled = false;
+function earlyFireMs() {
+  if (earlyFireDisabled || POST_EARLY_FIRE_MS <= 0) return 0;
+  let early = Math.min(POST_EARLY_FIRE_MS, POST_EARLY_FIRE_CAP_MS);
+  if (postProcSamples.length >= 3) {
+    const minProc = Math.min(...postProcSamples.map((s) => s.ms));
+    early = Math.min(early, Math.floor(minProc * POST_EARLY_SAFETY_FRACTION));
+  } else {
+    early = Math.min(early, 150); // conservative until this session has measured processing
+  }
+  return Math.max(0, early);
 }
 
 // ── dedicated fire connection ────────────────────────────────────────────────
@@ -1106,17 +1153,24 @@ function computePostDelay(ctx) {
   // the comment is stamped on ARRIVAL, so arrival ≈ send + one-way still lands
   // past the boundary. See latencyCompMs.
   const compMs = latencyCompMs();
-  if (!ctx) return { delayMs: 0, compMs };
+  // Pre-boundary lead: aim arrival BEFORE the boundary and let processing carry
+  // the stamp into the target second (see earlyFireMs). 0 = pure boundary align.
+  const earlyMs = earlyFireMs();
+  if (!ctx) return { delayMs: 0, compMs, earlyMs };
   const hwMs = Number.isFinite(ctx.hwEventMs) ? ctx.hwEventMs : ctx.detectDateMs;
   if (Number.isFinite(hwMs)) {
-    const target = (Math.floor(hwMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS - compMs;
+    const target = (Math.floor(hwMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS - compMs - earlyMs;
     const serverNow = serverNowLowerBound();
-    if (serverNow !== null) return { delayMs: clamp(target - serverNow, 0, MAX_POST_DELAY_MS), compMs };
+    if (serverNow !== null) return { delayMs: clamp(target - serverNow, 0, MAX_POST_DELAY_MS), compMs, earlyMs };
   }
   // No usable server clock sample — conservatively sleep one full second past
   // the local detection time.
   const base = Number.isFinite(ctx.detectLocalMs) ? ctx.detectLocalMs : Date.now();
-  return { delayMs: clamp(base + 1000 + POST_BOUNDARY_MARGIN_MS - compMs - Date.now(), 0, MAX_POST_DELAY_MS), compMs };
+  return {
+    delayMs: clamp(base + 1000 + POST_BOUNDARY_MARGIN_MS - compMs - earlyMs - Date.now(), 0, MAX_POST_DELAY_MS),
+    compMs,
+    earlyMs,
+  };
 }
 
 async function fire(n, issue, via, ctx) {
@@ -1150,11 +1204,11 @@ async function fire(n, issue, via, ctx) {
     }
   }
 
-  const { delayMs, compMs } = computePostDelay(ctx);
+  const { delayMs, compMs, earlyMs } = computePostDelay(ctx);
 
   if (DRY_RUN) {
     log(
-      `🧪 DRY_RUN: would wait ${delayMs}ms (comp=${compMs}ms) for the second boundary, then POST proposal to #${n} ` +
+      `🧪 DRY_RUN: would wait ${delayMs}ms (comp=${compMs}ms early=${earlyMs}ms) for the second boundary, then POST proposal to #${n} ` +
         `(via ${via}, ${body.length} chars)${title}`,
     );
     await notify(`🧪 [dry-run] would snipe #${n}${title}\n${issueUrl}`);
@@ -1224,6 +1278,7 @@ async function fire(n, issue, via, ctx) {
   const hotPathMs = performance.now() - fireStartedAt;
 
   if (status === 201 && data?.html_url) {
+    notePostProc(postMs); // feed the early-fire safety bound
     // Calibration: which second did GitHub stamp the comment in, relative to
     // the target (the second after Help Wanted)? 0s = perfect, -1s = same
     // second as the label (renders above it — raise the margin), +1s = a full
@@ -1233,14 +1288,26 @@ async function fire(n, issue, via, ctx) {
       : NaN;
     const stampMs = Date.parse(data.created_at || '');
     let stampInfo = '';
+    let deltaS = NaN;
     if (Number.isFinite(hwGuessMs) && Number.isFinite(stampMs)) {
-      const deltaS = (stampMs - (Math.floor(hwGuessMs / 1000) + 1) * 1000) / 1000;
+      deltaS = (stampMs - (Math.floor(hwGuessMs / 1000) + 1) * 1000) / 1000;
       stampInfo = ` stamp=${deltaS >= 0 ? '+' : ''}${deltaS}s-vs-target`;
     }
     log(
         `✅ sniped #${n} via ${via} → ${data.html_url} ` +
-        `[claim=${claimLabel} wait=${delayMs}ms comp=${compMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms${stampInfo}]`,
+        `[claim=${claimLabel} wait=${delayMs}ms comp=${compMs}ms early=${earlyMs}ms post=${postMs.toFixed(1)}ms hotPath=${hotPathMs.toFixed(1)}ms${stampInfo}]`,
     );
+    // A stamp BEFORE the target second means the comment landed in the Help
+    // Wanted second and renders above the label — a visible rule violation.
+    // Retreat: disable pre-boundary fire for the rest of the session and alert.
+    if (Number.isFinite(deltaS) && deltaS < 0 && earlyMs > 0 && !earlyFireDisabled) {
+      earlyFireDisabled = true;
+      log(`🚨 #${n} stamped ${deltaS}s (in the Help Wanted second) — pre-boundary fire DISABLED for this session`);
+      void notify(
+        `🚨 ${REPO}#${n} posted in the Help Wanted second (renders ABOVE the label — rule violation).\n` +
+          `Pre-boundary fire auto-disabled for the session; review the comment.\n${data.html_url}`,
+      );
+    }
     if (POST_MORTEM_DELAY_MS > 0) {
       setTimeout(() => void racePostMortem(n, data.id), POST_MORTEM_DELAY_MS);
     }

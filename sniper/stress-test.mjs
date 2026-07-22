@@ -117,6 +117,10 @@ const worker = spawn(process.execPath, ['sniper.mjs'], {
     // External assertion below keeps testing the fleet case (boot-staged old
     // rows, which never go hot). The hot path is verified live by the 🔥 log.
     HOT_ARMED_WINDOW_MS: '0',
+    // Pre-boundary fire deliberately posts BEFORE the boundary; disable it so
+    // the boundary-alignment invariant below still tests the core guarantee.
+    // The early-fire path is exercised live and logged (early=/stamp=).
+    POST_EARLY_FIRE_MS: '0',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
