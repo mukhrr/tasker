@@ -35,6 +35,8 @@
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { request as httpsRequest, Agent as HttpsAgent } from 'node:https';
+import { request as httpRequest, Agent as HttpAgent } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -213,6 +215,86 @@ function latencyCompMs() {
   if (POST_LATENCY_COMP_CAP_MS <= 0 || !rttSamples.length) return 0;
   const minRtt = Math.min(...rttSamples.map((s) => s.ms));
   return Math.max(0, Math.min(POST_LATENCY_COMP_CAP_MS, Math.floor(minRtt * 0.4)));
+}
+
+// ── dedicated fire connection ────────────────────────────────────────────────
+// The race POST must never pay a TLS handshake or queue behind tight-poll
+// traffic multiplexed on the shared fetch pool inside the target second. It
+// gets its own keep-alive agent — a single reserved socket — pre-warmed with a
+// cheap request whenever a race locks on (the ≤15s tight window keeps it live).
+// Protocol-aware so the stress test's plain-http mock exercises the same lane.
+const FIRE_TLS = !API.startsWith('http:');
+const fireRequest = FIRE_TLS ? httpsRequest : httpRequest;
+const fireAgent = new (FIRE_TLS ? HttpsAgent : HttpAgent)({
+  keepAlive: true,
+  maxSockets: 1,
+  keepAliveMsecs: 20_000,
+});
+let fireWarmedAt = 0;
+function warmFireSocket() {
+  if (Date.now() - fireWarmedAt < 8_000) return; // one warm per lock is enough
+  fireWarmedAt = Date.now();
+  const t0 = Date.now();
+  const req = fireRequest(
+    `${API}/rate_limit`,
+    {
+      agent: fireAgent,
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'tasker-sniper',
+      },
+    },
+    (res) => {
+      res.resume();
+      res.on('end', () => noteRtt(Date.now() - t0));
+    },
+  );
+  req.on('error', () => {
+    fireWarmedAt = 0; // failed warm — allow an immediate retry
+  });
+  req.end();
+}
+
+// POST the race comment over the dedicated warm socket. Returns gh()-shaped
+// {status, data}; the caller falls back to gh() (which owns rate-limit
+// interpretation) on transport errors and 403/429, where nothing was created.
+function firePostComment(pathname, bodyObj) {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(bodyObj);
+    requestTimes.push(Date.now()); // honest budget accounting
+    const req = fireRequest(
+      `${API}${pathname}`,
+      {
+        method: 'POST',
+        agent: fireAgent,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'tasker-sniper',
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => {
+          noteServerDate(res.headers.date);
+          let data = null;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text || null;
+          }
+          resolve({ status: res.statusCode, data });
+        });
+      },
+    );
+    req.on('error', (e) => resolve({ status: 0, data: null, error: e.message }));
+    req.end(payload);
+  });
 }
 
 // ── clock calibration burst ──────────────────────────────────────────────────
@@ -923,7 +1005,10 @@ function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'loca
         ? `🔥 #${n} hot-armed — own label poll until ${new Date(hotUntil).toISOString()}`
         : `👁  #${n} watching`,
   );
-  if (mode === 'tight') void calibrateClock('lock');
+  if (mode === 'tight') {
+    void calibrateClock('lock');
+    warmFireSocket();
+  }
   if (mode === 'tight' && source === 'cloud') void preClaimCloudProposal(n);
   void tick(n);
 }
@@ -934,6 +1019,7 @@ function upgradeToTight(n, st) {
   log(`⚡ #${n} "${LOCK_NAME}" seen → tight-polling for "${TRIGGER_NAME}"`);
   if (st.source === 'cloud') void preClaimCloudProposal(n);
   void calibrateClock('tight'); // pin the second boundary before the fire matters
+  warmFireSocket();
 }
 
 async function tick(n) {
@@ -1123,10 +1209,17 @@ async function fire(n, issue, via, ctx) {
   }
 
   const postStartedAt = performance.now();
-  const { status, data, rateLimited, retryAt } = await gh(`/repos/${REPO}/issues/${n}/comments`, {
-    method: 'POST',
-    body: { body },
-  });
+  // Dedicated warm socket first. On a transport error or 403/429 (nothing was
+  // created), retry once through gh(), which owns rate-limit interpretation —
+  // so the existing retry flow below still sees rateLimited/retryAt.
+  let postRes = await firePostComment(`/repos/${REPO}/issues/${n}/comments`, { body });
+  if (postRes.status === 0 || postRes.status === 403 || postRes.status === 429) {
+    postRes = await gh(`/repos/${REPO}/issues/${n}/comments`, {
+      method: 'POST',
+      body: { body },
+    });
+  }
+  const { status, data, rateLimited, retryAt } = postRes;
   const postMs = performance.now() - postStartedAt;
   const hotPathMs = performance.now() - fireStartedAt;
 
