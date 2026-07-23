@@ -80,6 +80,13 @@ const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 // detection doesn't anchor the post a full second late. Bounded so a slow lookup
 // falls back to the detection time instead of stalling the fire.
 const HW_ANCHOR_TIMEOUT_MS = int('HW_ANCHOR_TIMEOUT_MS', 500);
+// How often, during the tight window, to pre-fetch the real Help Wanted event
+// time from the /events endpoint (whose created_at is the TRUE label time, not
+// the ~1s-lagged labels-list appearance the tight poll sees). Pre-fetching from
+// the moment we lock lets the events resource index the event by fire time, so
+// we anchor on the real second instead of the lagged one (#96842: real HW :54,
+// labels-list showed it :55, so we targeted :56 and lost by a second).
+const ANCHOR_POLL_INTERVAL_MS = int('ANCHOR_POLL_INTERVAL_MS', 250);
 // Freshly-armed issues are HOT: the drafter reacts to Bug/Daily triage, so
 // External→Help Wanted often lands within minutes of arming (#96604: armed 31s
 // before HW). The shared discovery scan catches External ~1-2s late, which with
@@ -166,6 +173,8 @@ const consumedLockEvents = new Map(); // issue number -> External event timestam
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
 const preClaimed = new Set(); // issues whose armed→posting claim already happened at lock time
 const preClaimPromises = new Map(); // issue -> in-flight pre-claim; fire() awaits instead of racing it
+const hwEventAnchors = new Map(); // issue -> real HW labeled-event ms, pre-fetched during the tight window
+const hwAnchorPolling = new Set(); // issues with an active anchor poll (dedupe)
 let lastStaleRecoveryAt = 0;
 let backoffUntil = 0;
 const requestTimes = []; // GitHub request timestamps within the last 60s (budget window)
@@ -1031,6 +1040,53 @@ async function getRecentLabelEvent(n, label, after, issueUpdatedAt, memo = check
   return latest;
 }
 
+// One fresh read of the /events endpoint for the newest Help Wanted labeled
+// event ≥ START. Conditional (etag) so pre-HW polls are cheap 304s, and the
+// event's REAL created_at is returned the moment the resource reflects it.
+async function pollHwAnchorOnce(n) {
+  if (budgetExhausted()) return null; // never spend the anchor poll into a secondary-limit 403
+  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=30`, {
+    useEtag: true,
+    key: `anchor-events-${n}`,
+  });
+  if (status !== 200 || !Array.isArray(data)) return null; // 304 (unchanged) or transient
+  let latest = null;
+  for (const e of data) {
+    if (e?.event !== 'labeled' || e?.label?.name?.toLowerCase() !== TRIGGER) continue;
+    const t = Date.parse(e.created_at || '');
+    if (Number.isFinite(t) && t >= START && (latest === null || t > latest)) latest = t;
+  }
+  return latest;
+}
+
+// Poll the real HW event time throughout the tight window so fire() has an
+// accurate anchor ready instead of a rushed fire-time lookup. Stops when the
+// anchor is found, the issue posts, or the tight window ends.
+function startHwAnchorPoll(n) {
+  if (ANCHOR_POLL_INTERVAL_MS <= 0 || hwAnchorPolling.has(n)) return; // 0 disables (stress test)
+  hwAnchorPolling.add(n);
+  const step = async () => {
+    const st = tracked.get(n);
+    if (posted.has(n) || hwEventAnchors.has(n) || !st || st.mode !== 'tight' || Date.now() > st.tightUntil + 3000) {
+      hwAnchorPolling.delete(n);
+      return;
+    }
+    try {
+      const ts = await pollHwAnchorOnce(n);
+      if (Number.isFinite(ts)) {
+        hwEventAnchors.set(n, ts);
+        log(`⚓ #${n} HW anchor pre-fetched: ${new Date(ts).toISOString()}`);
+        hwAnchorPolling.delete(n);
+        return;
+      }
+    } catch {
+      /* transient — retry next tick */
+    }
+    setTimeout(step, ANCHOR_POLL_INTERVAL_MS);
+  };
+  void step();
+}
+
 // ── per-issue tracker: slow until `External`, then tight until `Help Wanted` ──
 function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'local', hotUntil = 0 } = {}) {
   if (posted.has(n)) return;
@@ -1062,6 +1118,7 @@ function track(n, { isWatch = false, mode = 'slow', issue = null, source = 'loca
   if (mode === 'tight') {
     void calibrateClock('lock');
     warmFireSocket();
+    startHwAnchorPoll(n);
   }
   if (mode === 'tight' && source === 'cloud') void preClaimCloudProposal(n);
   void tick(n);
@@ -1074,6 +1131,7 @@ function upgradeToTight(n, st) {
   if (st.source === 'cloud') void preClaimCloudProposal(n);
   void calibrateClock('tight'); // pin the second boundary before the fire matters
   warmFireSocket();
+  startHwAnchorPoll(n);
 }
 
 async function tick(n) {
@@ -1184,6 +1242,7 @@ async function fire(n, issue, via, ctx) {
   if (posted.has(n)) return;
   const fireStartedAt = performance.now();
   posted.add(n);
+  hwAnchorPolling.delete(n); // stop the anchor poll; we're firing now
   tracked.delete(n);
 
   const body = await bodyFor(n);
@@ -1197,6 +1256,17 @@ async function fire(n, issue, via, ctx) {
   // labeled-event time now; it overlaps the boundary wait in the common case and
   // rescues the boundary-crossing case. Falls back to detectDateMs if the lookup
   // is missing or slower than HW_ANCHOR_TIMEOUT_MS, so it's never worse than before.
+  // Prefer the anchor pre-fetched during the tight window (accurate, already in
+  // hand). Fall back to a bounded fire-time lookup only if the pre-fetch hadn't
+  // landed yet — never worse than before.
+  if (!Number.isFinite(ctx?.hwEventMs) && hwEventAnchors.has(n)) {
+    const evAt = hwEventAnchors.get(n);
+    const detectSec = Number.isFinite(ctx?.detectDateMs) ? Math.floor(ctx.detectDateMs / 1000) * 1000 : null;
+    if (detectSec !== null && evAt < detectSec) {
+      log(`⚓ #${n} anchored on pre-fetched HW event ${new Date(evAt).toISOString()} (${detectSec - evAt}ms before our detected second)`);
+    }
+    ctx = { ...ctx, hwEventMs: evAt };
+  }
   if (!Number.isFinite(ctx?.hwEventMs)) {
     const evAt = await Promise.race([
       getRecentLabelEvent(n, TRIGGER, START, issue?.updated_at, fireEventChecks).catch(() => null),
@@ -1210,6 +1280,8 @@ async function fire(n, issue, via, ctx) {
       ctx = { ...ctx, hwEventMs: evAt };
     }
   }
+  hwEventAnchors.delete(n); // consumed
+  etags.delete(`anchor-events-${n}`);
 
   const { delayMs, compMs, earlyMs } = computePostDelay(ctx);
 

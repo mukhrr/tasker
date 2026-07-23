@@ -113,6 +113,10 @@ const worker = spawn(process.execPath, ['sniper.mjs'], {
     FIRE_FRESH_MS: '1000',
     REQUEST_BUDGET_PER_MIN: '100000', // aggressive test intervals must not self-throttle
     POST_MORTEM_DELAY_MS: '0',
+    // The tight-window HW-anchor pre-fetch adds concurrent /events polls that
+    // perturb this compressed-time mock and its `eventRequests <= 3` bound; it
+    // doesn't gate firing (the tight poll does). Off here, verified live (⚓ log).
+    ANCHOR_POLL_INTERVAL_MS: '0',
     // The freshly-armed hot label poll is disabled so the no-polling-before-
     // External assertion below keeps testing the fleet case (boot-staged old
     // rows, which never go hot). The hot path is verified live by the 🔥 log.
