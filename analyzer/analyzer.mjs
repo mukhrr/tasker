@@ -87,19 +87,140 @@ function log(msg) {
   console.log(`${new Date().toISOString()} ${msg}`);
 }
 
-async function notify(text) {
+async function notify(text, { replyMarkup } = {}) {
   if (!TG_TOKEN || !TG_CHAT) return;
   try {
     const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT, text, disable_web_page_preview: true }),
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text,
+        disable_web_page_preview: true,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) log(`telegram err: ${res.status}`);
   } catch (e) {
     log(`telegram err: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+// Inline keyboard for a review "kept" ping: a callback button that queues the
+// deep analysis (handled by the getUpdates listener) + a plain link to the issue.
+function runAnalysisButtons(n, issueUrl) {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🔬 Run deep analysis', callback_data: `run:${n}` },
+        { text: 'View issue', url: issueUrl },
+      ],
+    ],
+  };
+}
+
+// ── Telegram callback listener (Run-analysis button) ─────────────────────────
+// Only the daemon long-polls getUpdates (the sniper/drafter are send-only), so
+// there's no multi-consumer conflict. Runs independently of the analysis `busy`
+// lock — a press just queues an analysis_requests row the main loop then claims.
+let tgOffset = 0;
+async function tgGetUpdates(offset, timeoutSec) {
+  const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/getUpdates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ offset, timeout: timeoutSec, allowed_updates: ['callback_query'] }),
+    signal: AbortSignal.timeout((timeoutSec + 10) * 1000),
+  });
+  const j = await res.json().catch(() => null);
+  return j?.ok && Array.isArray(j.result) ? j.result : [];
+}
+async function tgApi(method, body) {
+  return fetch(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+}
+
+async function queueAnalysisFromTelegram(n) {
+  // Upsert to queued (mirror the extension's "Run Claude analysis" / re-run).
+  await supabaseRequest(`analysis_requests?on_conflict=user_id,repo_owner,repo_name,issue_number`, {
+    method: 'POST',
+    body: {
+      user_id: SUPABASE_USER_ID,
+      repo_owner: REPO_OWNER,
+      repo_name: REPO_NAME,
+      issue_number: n,
+      state: 'queued',
+      last_error: null,
+      result_summary: null,
+      stash_ref: null,
+    },
+    prefer: 'resolution=merge-duplicates,return=representation',
+  });
+}
+
+async function handleTgUpdate(u) {
+  const cb = u.callback_query;
+  if (!cb) return;
+  const chatId = cb.message?.chat?.id;
+  if (String(chatId) !== String(TG_CHAT)) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: 'Not authorized' });
+    return; // security: only act on our own chat
+  }
+  const m = (cb.data || '').match(/^run:(\d+)$/);
+  if (!m) {
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
+    return;
+  }
+  const n = parseInt(m[1], 10);
+  try {
+    await queueAnalysisFromTelegram(n);
+    log(`📲 queued deep analysis for #${n} via Telegram button`);
+    await tgApi('answerCallbackQuery', { callback_query_id: cb.id, text: `Queued deep analysis for #${n} ✓` });
+    // Replace the button so it can't be pressed twice; leave a link to the issue.
+    await tgApi('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: cb.message.message_id,
+      reply_markup: { inline_keyboard: [[{ text: `✅ Deep analysis queued for #${n}`, url: `https://github.com/${REPO}/issues/${n}` }]] },
+    });
+  } catch (e) {
+    await tgApi('answerCallbackQuery', {
+      callback_query_id: cb.id,
+      text: `Failed to queue: ${(e instanceof Error ? e.message : String(e)).slice(0, 80)}`,
+    });
+  }
+}
+
+async function tgUpdatesLoop() {
+  if (!TG_TOKEN || !TG_CHAT) return; // no bot configured
+  try {
+    // Drain updates pending at boot so a restart doesn't re-fire an old press.
+    const stale = await tgGetUpdates(0, 0);
+    if (stale.length) tgOffset = stale[stale.length - 1].update_id + 1;
+  } catch {
+    /* ignore */
+  }
+  log('📲 Telegram Run-analysis button listener active');
+  const poll = async () => {
+    try {
+      const updates = await tgGetUpdates(tgOffset, 25);
+      for (const u of updates) {
+        tgOffset = u.update_id + 1;
+        try {
+          await handleTgUpdate(u);
+        } catch (e) {
+          log(`tg update failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } catch {
+      /* transient (network / 409) — retry */
+    }
+    setTimeout(poll, 500);
+  };
+  void poll();
 }
 
 async function supabaseRequest(pathname, { method = 'GET', body, prefer } = {}) {
@@ -751,7 +872,8 @@ async function processReview(proposal) {
         `${REPO}#${n}${title}\n` +
         `${issueUrl}\n\n` +
         `MelvinBot posted no proposal, so ours stands alone. It's armed and will be posted when the issue opens to contributors.\n` +
-        `Next: run a deep Claude analysis to verify it, in the extension.`,
+        `Tap below to run a deep Claude analysis and verify it.`,
+      { replyMarkup: runAnalysisButtons(n, issueUrl) },
     );
     return;
   }
@@ -799,7 +921,8 @@ async function processReview(proposal) {
         `${issueUrl}\n\n` +
         `Why: ${reason}\n` +
         `It's armed and will be posted when the issue opens to contributors.\n` +
-        `Next: run a deep Claude analysis to verify it, in the extension.`,
+        `Tap below to run a deep Claude analysis and verify it.`,
+      { replyMarkup: runAnalysisButtons(n, issueUrl) },
     );
   }
 }
@@ -866,6 +989,7 @@ async function main() {
   } catch (e) {
     log(`orphan sweep failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+  void tgUpdatesLoop(); // listen for the "Run deep analysis" button
   void loop();
 }
 
