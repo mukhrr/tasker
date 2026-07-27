@@ -260,12 +260,31 @@ async function gh(pathname, { method = 'GET', body } = {}) {
   return { status: res.status, data };
 }
 
+// Kill a child AND its whole process tree. claude spawns MCP servers
+// (playwright/chrome-devtools/context7) as grandchildren; a plain child.kill
+// only reaps claude and ORPHANS those helpers — they piled up across days of
+// timed-out/canceled runs and spiked CPU (2026-07-27). Because run() spawns
+// detached (own process group = pid), signalling -pid reaps the whole group.
+function killTree(child) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL'); // negative pid = the process group
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 function run(cmd, args, { cwd, env, timeoutMs, input, onChild } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
       env: env || process.env,
       stdio: [input != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      detached: true, // own process group so killTree() can reap MCP/child processes
     });
     if (onChild) onChild(child);
     let stdout = '';
@@ -274,11 +293,7 @@ function run(cmd, args, { cwd, env, timeoutMs, input, onChild } = {}) {
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* gone */
-          }
+          killTree(child);
         }, timeoutMs)
       : null;
     child.stdout.on('data', (c) => (stdout += c.toString()));
@@ -542,11 +557,7 @@ async function processRequest(req) {
             canceled = true;
             clearInterval(cancelWatch);
             log(`🚫 #${n} run claim lost (row is '${state}') — killing claude`);
-            try {
-              claudeChild?.kill('SIGKILL');
-            } catch {
-              /* already gone */
-            }
+            killTree(claudeChild); // reap claude + its MCP children, not just claude
           }
         } catch {
           /* transient; retry next tick */
@@ -970,6 +981,23 @@ async function loop() {
   setTimeout(() => void loop(), POLL_INTERVAL_MS);
 }
 
+// A fresh daemon means any of OUR prior claude runs and their MCP helpers are
+// orphaned (e.g. after a `kickstart` restart, which SIGKILLs the daemon without
+// reaping the tree). Reap them at boot so they never accumulate. Targeted and
+// safe: only our analysis runs (claude -p with our --mcp-config) and MCP/
+// playwright helpers with NO live parent (ppid=1) — never the user's own
+// interactive `claude` sessions or their live MCP children.
+async function reapOrphanProcesses() {
+  const script =
+    "for p in $(pgrep -f 'claude -p .*analyzer/repro-mcp' 2>/dev/null); do kill -9 \"$p\" 2>/dev/null; done; " +
+    'sleep 1; ' +
+    "for p in $(pgrep -f 'mcp|playwright' 2>/dev/null); do " +
+    "  pp=$(ps -o ppid= -p \"$p\" 2>/dev/null | tr -d ' '); " +
+    '  [ "$pp" = "1" ] && kill -9 "$p" 2>/dev/null; ' +
+    'done; true';
+  await run('bash', ['-c', script], { timeoutMs: 20_000 });
+}
+
 async function main() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_USER_ID) {
     console.error('analyzer requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_USER_ID (see .env.example)');
@@ -988,6 +1016,11 @@ async function main() {
     await recoverOrphanedRuns();
   } catch (e) {
     log(`orphan sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await reapOrphanProcesses(); // kill leaked claude/MCP processes from a dead daemon
+  } catch (e) {
+    log(`process reap failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   void tgUpdatesLoop(); // listen for the "Run deep analysis" button
   void loop();
