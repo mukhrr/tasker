@@ -844,14 +844,15 @@ async function claimNextReview() {
   }
 }
 
-async function disarmDuplicate(id, reason) {
-  // State-guarded: never clobber a proposal the sniper already moved to posting/posted.
+async function deleteDuplicate(id) {
+  // A Melvin-dup has no value — clear it from the DB entirely (like the
+  // extension's "Clear draft"), rather than leaving a dead draft row.
+  // State-guarded to `armed`: never delete a proposal the sniper already moved
+  // to posting/posted. Safe against re-drafting: dups are reviewed inside the
+  // 24h window, so the issue is still on the sniper's seeded recent page and
+  // won't be re-queued.
   const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' });
-  const rows = await supabaseRequest(`proposals?${q}`, {
-    method: 'PATCH',
-    body: { state: 'draft', last_error: `Dropped: duplicate of MelvinBot's proposal — ${reason}`.slice(0, 300) },
-    prefer: 'return=representation',
-  });
+  const rows = await supabaseRequest(`proposals?${q}`, { method: 'DELETE', prefer: 'return=representation' });
   return Array.isArray(rows) && rows.length > 0;
 }
 
@@ -912,17 +913,17 @@ async function processReview(proposal) {
   const { verdict, reason } = parseReview(finalText);
 
   if (verdict === 'DUPLICATE') {
-    if (await disarmDuplicate(proposal.id, reason)) {
-      log(`🗑️  #${n} dropped — duplicate of MelvinBot: ${reason}`);
+    if (await deleteDuplicate(proposal.id)) {
+      log(`🗑️  #${n} cleared from DB — duplicate of MelvinBot: ${reason}`);
       await notify(
-        `🗑️ Proposal dropped — same as MelvinBot's\n` +
+        `🗑️ Proposal cleared — same as MelvinBot's\n` +
           `${REPO}#${n}${title}\n` +
           `${issueUrl}\n\n` +
           `Why: ${reason}\n` +
-          `It won't be armed or posted — no point competing with an identical proposal.`,
+          `Removed from Tasker — no point competing with an identical proposal.`,
       );
     } else {
-      log(`#${n} dup verdict but no longer armed (posted/disarmed) — left as-is`);
+      log(`#${n} dup verdict but no longer armed (posted/changed) — left as-is`);
     }
   } else {
     log(`🔬 #${n} distinct from MelvinBot — kept armed: ${reason}`);
