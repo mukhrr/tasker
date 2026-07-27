@@ -87,13 +87,17 @@ const HW_ANCHOR_TIMEOUT_MS = int('HW_ANCHOR_TIMEOUT_MS', 500);
 // we anchor on the real second instead of the lagged one (#96842: real HW :54,
 // labels-list showed it :55, so we targeted :56 and lost by a second).
 const ANCHOR_POLL_INTERVAL_MS = int('ANCHOR_POLL_INTERVAL_MS', 250);
-// Freshly-armed issues are HOT: the drafter reacts to Bug/Daily triage, so
-// External→Help Wanted often lands within minutes of arming (#96604: armed 31s
-// before HW). The shared discovery scan catches External ~1-2s late, which with
-// a 1s External→HW gap leaves no calibration runway and a rushed fire. Recent
-// arms get their own label poll instead, which catches External and upgrades to
-// tight with full runway. Capped, and expires back to the shared detector.
-const HOT_ARMED_WINDOW_MS = int('HOT_ARMED_WINDOW_MS', 15 * 60_000);
+// Freshly-armed issues used to be HOT: External→Help Wanted landed ~1s apart, so
+// a per-issue label poll caught External and upgraded to tight with runway.
+// DEAD as of the 2026-07-25 Melvin flow change: MelvinBot now posts its own
+// proposal on External, a Contributor-Plus reviews it, and Help Wanted only
+// lands (if at all) minutes-to-hours later when the C+ opens the issue to
+// contributors. So catching External fast no longer predicts HW — the hot poll
+// is pure budget waste. Disabled by default (0). The shared discovery loop's
+// `direct-hw-event` branch is now the racer: it fires the instant HW appears on
+// an armed issue, whenever the C+ applies it, with a real events-anchor. Set
+// HOT_ARMED_WINDOW_MS>0 only if the fast External→HW flow ever returns.
+const HOT_ARMED_WINDOW_MS = int('HOT_ARMED_WINDOW_MS', 0);
 const HOT_ARMED_MAX = int('HOT_ARMED_MAX', 3); // max concurrent hot label polls
 // Must be well under the External→Help Wanted gap (observed as tight as ~1s) so
 // we catch External BEFORE HW and tight-poll through the transition — anchoring

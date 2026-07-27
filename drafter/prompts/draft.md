@@ -44,6 +44,26 @@ the investigation using the local checkout:
 Take the time to get this right rather than racing — but stay grounded in files
 you have actually read. A wrong-but-fast proposal loses the bounty anyway.
 
+## Beat the bot: you are competing against MelvinBot's own proposal
+
+Expensify's flow changed: **MelvinBot now posts its OWN analysis/proposal on the
+issue first, and a Contributor-Plus (C+) reviews it before deciding whether to
+open the issue to contributors.** Melvin's comment is included in the issue block
+below (look for a comment by `MelvinBot` / `melvin-bot` titled `## Issue Analysis`
+or `## Proposal`, often hedged with a confidence note). Your proposal is only
+worth posting if it is CLEARLY better than Melvin's. So:
+- **Read Melvin's proposal first.** Identify its root cause and fix.
+- **Go deeper or correct it.** If Melvin is vague or hedged ("medium
+  confidence"), pin down the exact offending lines with a permalink and a precise
+  mechanism it lacks. If Melvin is wrong, say what it missed and why your root
+  cause is correct (with evidence). If Melvin is right but shallow, add the
+  concrete fix, the regression analysis, and the SHA-pinned evidence it omitted.
+- **Never restate Melvin's proposal.** A proposal that merely echoes the bot adds
+  nothing and will be ignored. Your edge is depth, precision, and verification
+  the bot didn't do.
+Do not name or disparage the bot in the proposal itself — just be visibly more
+rigorous. The C+ is comparing you to Melvin; win on substance.
+
 Follow the **expensify-proposal-writer** skill exactly. Read these files first and
 apply them as your instructions and rubric:
 
