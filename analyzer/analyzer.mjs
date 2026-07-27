@@ -60,6 +60,22 @@ const REPRO_MCP_CONFIG = path.join(HERE, 'repro-mcp.json');
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 15_000);
 const PROMPT_FILE = path.join(HERE, 'prompts', 'analyze.md');
 
+// ── Melvin-review gate ────────────────────────────────────────────────────────
+// After the drafter arms an auto proposal, the local Claude CLI compares it to
+// MelvinBot's own proposal (posted on the issue) and either disarms duplicates
+// (armed → draft, so the sniper won't race them) or keeps + Telegram-flags the
+// distinct ones as worth a deep analysis. Pure text judgment — no repo work.
+// Fail-open throughout: any error/timeout leaves the proposal armed.
+const REVIEW_ENABLED = /^(1|true|yes|on)$/i.test(process.env.REVIEW_ENABLED ?? 'true');
+const REVIEW_TIMEOUT_MS = int('REVIEW_TIMEOUT_MS', 5 * 60_000);
+// How long after arming to wait for Melvin before treating "no Melvin proposal"
+// as "Melvin won't post" (→ we're the only proposal → keep + flag).
+const REVIEW_MELVIN_GRACE_MS = int('REVIEW_MELVIN_GRACE_MS', 10 * 60_000);
+// Don't review a stale backlog — only proposals armed within this window.
+const REVIEW_MAX_AGE_MS = int('REVIEW_MAX_AGE_MS', 24 * 60 * 60_000);
+const REVIEW_PROMPT_FILE = path.join(HERE, 'prompts', 'review.md');
+let reviewDisabled = false; // set if the reviewed_at column is missing (pre-migration)
+
 let busy = false;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -624,6 +640,149 @@ async function recoverOrphanedRuns() {
   }
 }
 
+// ── Melvin-review gate ────────────────────────────────────────────────────────
+// Melvin's login is "MelvinBot" (proposal author) or "melvin-bot[bot]"; match
+// either, and only comments that read like a proposal/analysis.
+function findMelvinProposal(comments) {
+  const isMelvin = (login) => /^melvin/i.test(login || '');
+  const looksLikeProposal = (body) =>
+    /##\s*(Proposal|Issue Analysis)\b|What is the root cause/i.test(body || '');
+  const hits = (comments || []).filter((c) => isMelvin(c.user?.login) && looksLikeProposal(c.body));
+  return hits.length ? hits[hits.length - 1].body : null; // newest
+}
+
+function parseReview(text) {
+  const v = text.match(/===\s*VERDICT\s*===\s*([\s\S]*?)(?====\s*REASON\s*===|$)/i);
+  const r = text.match(/===\s*REASON\s*===\s*([\s\S]*)$/i);
+  // Default DISTINCT (fail-open: keep armed) unless the model clearly says DUPLICATE.
+  const verdict = /DUPLICATE/i.test(v?.[1] || '') ? 'DUPLICATE' : 'DISTINCT';
+  const reason = (r?.[1] || '').trim().replace(/\s+/g, ' ').slice(0, 200) || '(no reason given)';
+  return { verdict, reason };
+}
+
+async function buildReviewPrompt(issue, n, ourBody, melvinBody) {
+  const tmpl = await readFile(REVIEW_PROMPT_FILE, 'utf8');
+  const issueBlock = issue ? `#${n}: ${issue.title}\n\n${issue.body || '(no description)'}` : `#${n}`;
+  return tmpl
+    .replace('<<<ISSUE>>>', issueBlock)
+    .replace('<<<PROPOSAL>>>', ourBody || '(empty)')
+    .replace('<<<MELVIN>>>', melvinBody || '(none)');
+}
+
+// Poll for one armed+auto+unreviewed proposal and atomically claim it by
+// stamping reviewed_at. Returns the claimed row, or null (nothing to do / lost
+// the claim race). Disables itself if the reviewed_at column isn't there yet.
+async function claimNextReview() {
+  if (reviewDisabled) return null;
+  try {
+    const q = new URLSearchParams({
+      select: 'id,issue_number,body,created_at',
+      user_id: `eq.${SUPABASE_USER_ID}`,
+      repo_owner: `ilike.${REPO_OWNER}`,
+      repo_name: `ilike.${REPO_NAME}`,
+      state: 'eq.armed',
+      origin: 'eq.auto',
+      reviewed_at: 'is.null',
+      created_at: `gte.${new Date(Date.now() - REVIEW_MAX_AGE_MS).toISOString()}`,
+      order: 'created_at.desc',
+      limit: '1',
+    });
+    const rows = await supabaseRequest(`proposals?${q}`);
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const cand = rows[0];
+    const cq = new URLSearchParams({
+      id: `eq.${cand.id}`,
+      user_id: `eq.${SUPABASE_USER_ID}`,
+      reviewed_at: 'is.null', // atomic: only one claimer wins
+    });
+    const claimed = await supabaseRequest(`proposals?${cq}`, {
+      method: 'PATCH',
+      body: { reviewed_at: new Date().toISOString() },
+      prefer: 'return=representation',
+    });
+    return Array.isArray(claimed) && claimed[0] ? { ...cand, ...claimed[0] } : null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/reviewed_at/.test(msg) && /(column|does not exist|42703|PGRST)/i.test(msg)) {
+      reviewDisabled = true;
+      log('⚠️ Melvin-review disabled — proposals.reviewed_at missing (apply migration 016, then restart)');
+      return null;
+    }
+    throw e;
+  }
+}
+
+async function disarmDuplicate(id, reason) {
+  // State-guarded: never clobber a proposal the sniper already moved to posting/posted.
+  const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' });
+  const rows = await supabaseRequest(`proposals?${q}`, {
+    method: 'PATCH',
+    body: { state: 'draft', last_error: `Dropped: duplicate of MelvinBot's proposal — ${reason}`.slice(0, 300) },
+    prefer: 'return=representation',
+  });
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function processReview(proposal) {
+  const n = proposal.issue_number;
+  log(`🔎 #${n} reviewing auto-draft vs MelvinBot`);
+  const issueRes = await gh(`/repos/${REPO}/issues/${n}`);
+  const issue = issueRes.status === 200 ? issueRes.data : null;
+  if (issue && issue.state !== 'open') {
+    log(`#${n} review skipped — issue not open (${issue.state}); leaving as-is`);
+    return;
+  }
+  const commentsRes = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=100`);
+  const melvin = findMelvinProposal(Array.isArray(commentsRes.data) ? commentsRes.data : []);
+
+  if (!melvin) {
+    const ageMs = Date.now() - Date.parse(proposal.created_at || '');
+    if (ageMs < REVIEW_MELVIN_GRACE_MS) {
+      // Melvin may still post — un-claim and retry on a later tick.
+      await updateProposalRow(proposal.id, { reviewed_at: null });
+      log(`⏭️  #${n} review deferred — no MelvinBot proposal yet (within grace)`);
+      return;
+    }
+    log(`🔬 #${n} kept armed — MelvinBot posted no proposal (we stand alone)`);
+    await notify(`🔬 ${REPO}#${n}: no MelvinBot proposal — ours stands alone. Worth a deep Claude analysis (Run in the extension).`);
+    return;
+  }
+
+  const prompt = await buildReviewPrompt(issue, n, proposal.body || '', melvin);
+  const args = ['-p', '--output-format', 'json']; // no tool use → no --dangerously-skip-permissions
+  if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
+  const res = await run(CLAUDE_BIN, args, {
+    cwd: APP_REPO_DIR,
+    env: claudeEnv(),
+    timeoutMs: REVIEW_TIMEOUT_MS,
+    input: prompt,
+  });
+  if (res.timedOut || res.code !== 0) {
+    log(`#${n} review inconclusive (${res.timedOut ? 'timeout' : `exit ${res.code}`}) — leaving armed`);
+    return; // fail-open
+  }
+  let finalText = res.stdout.trim();
+  try {
+    const j = JSON.parse(finalText);
+    if (typeof j.result === 'string') finalText = j.result;
+  } catch {
+    /* plain-text fallback */
+  }
+  const { verdict, reason } = parseReview(finalText);
+
+  if (verdict === 'DUPLICATE') {
+    if (await disarmDuplicate(proposal.id, reason)) {
+      log(`🗑️  #${n} dropped — duplicate of MelvinBot: ${reason}`);
+      await notify(`🗑️ ${REPO}#${n}: dropped auto-proposal — same as MelvinBot's (${reason}). Not raced.`);
+    } else {
+      log(`#${n} dup verdict but no longer armed (posted/disarmed) — left as-is`);
+    }
+  } else {
+    log(`🔬 #${n} distinct from MelvinBot — kept armed: ${reason}`);
+    await notify(`🔬 ${REPO}#${n}: our proposal beats MelvinBot's (${reason}). Armed. Worth a deep Claude analysis (Run in the extension).`);
+  }
+}
+
 // ── main loop ────────────────────────────────────────────────────────────────
 async function tick() {
   if (busy) return;
@@ -637,10 +796,22 @@ async function tick() {
     limit: '1',
   });
   const rows = await supabaseRequest(`analysis_requests?${q}`);
-  if (!Array.isArray(rows) || rows.length === 0) return;
+  if (Array.isArray(rows) && rows.length > 0) {
+    busy = true;
+    try {
+      await processRequest(rows[0]);
+    } finally {
+      busy = false;
+    }
+    return;
+  }
+  // No heavy analysis queued — spend the idle tick on one Melvin-review.
+  if (!REVIEW_ENABLED) return;
+  const proposal = await claimNextReview();
+  if (!proposal) return;
   busy = true;
   try {
-    await processRequest(rows[0]);
+    await processReview(proposal);
   } finally {
     busy = false;
   }
@@ -667,7 +838,7 @@ async function main() {
   }
   log(
     `analyzer up — repo=${REPO} checkout=${APP_REPO_DIR} claude=${CLAUDE_BIN}${CLAUDE_MODEL ? ` model=${CLAUDE_MODEL}` : ''} ` +
-      `poll=${POLL_INTERVAL_MS}ms telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} github=${GITHUB_TOKEN ? 'token' : 'anon'}`,
+      `poll=${POLL_INTERVAL_MS}ms review=${REVIEW_ENABLED ? 'on' : 'off'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} github=${GITHUB_TOKEN ? 'token' : 'anon'}`,
   );
   try {
     await recoverOrphanedRuns();

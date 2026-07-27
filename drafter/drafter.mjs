@@ -97,12 +97,13 @@ const INTERIM_PROMPT_FILE = process.env.INTERIM_PROMPT_FILE || path.join(HERE, '
 // Fast interim arm: a concise, valid proposal armed in ~1 min right after
 // queueing, so the sniper always has ammunition even when Help Wanted lands
 // minutes after queue — before the ~4-min deep draft is ready (missed
-// #96732/#96742 entirely). The full draft then replaces the body: a silent swap
-// while still armed, or a comment edit if the sniper already posted the interim
-// (which proposal-police stamps "edited" — the accepted cost of racing a slow
-// draft). Disable with FAST_INTERIM_ARM=false. Costs one extra Codex call per
-// issue; INTERIM_CODEX_MODEL can point it at a faster/cheaper model.
-const FAST_INTERIM_ARM = bool('FAST_INTERIM_ARM', true);
+// #96732/#96742 entirely). The full draft then replaces the body.
+// RETIRED by default as of the 2026-07-25 Melvin flow change: Help Wanted now
+// lands hours after queue (C+ review gate), so there's ample time for the full
+// deep draft before any race — and the Melvin-review gate compares only the
+// full draft. The interim's extra Codex call is now pure cost. Re-enable with
+// FAST_INTERIM_ARM=true only if the fast External→HW flow returns.
+const FAST_INTERIM_ARM = bool('FAST_INTERIM_ARM', false);
 const INTERIM_TIMEOUT_MS = int('INTERIM_TIMEOUT_MS', 120_000);
 const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 
