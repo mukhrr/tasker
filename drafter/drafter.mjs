@@ -78,6 +78,17 @@ const MAX_CONCURRENT_DRAFTS = int('MAX_CONCURRENT_DRAFTS', 3);
 const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
 const STALE_SWEEP_MS = int('STALE_SWEEP_MS', 60_000);
 const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
+// Wasted-draft telemetry: since the 2026-07-25 Melvin flow change, many
+// auto-drafted issues never get Help Wanted (the C+ takes the PR route), so the
+// deep draft's Codex quota is spent for nothing. This periodic report measures
+// the waste from DB state alone (no GitHub calls): `posted` = HW arrived and we
+// raced it; an auto proposal still `armed` well past typical C+ review almost
+// certainly never got HW. Informs whether to gate drafting on HW/solicitation.
+const WASTE_REPORT_INTERVAL_MS = int('WASTE_REPORT_INTERVAL_MS', 60 * 60_000); // hourly
+const WASTE_REPORT_ENABLED = bool('WASTE_REPORT_ENABLED', true);
+// Armed-and-open this long with no HW ⇒ counted as "likely wasted" (C+ review
+// rarely runs past this; tune if the real distribution differs).
+const WASTE_STALE_ARMED_MS = int('WASTE_STALE_ARMED_MS', 24 * 60 * 60_000);
 
 const DRAFT_PROMPT_FILE = process.env.DRAFT_PROMPT_FILE || path.join(HERE, 'prompts', 'draft.md');
 const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'prompts', 'enrich.md');
@@ -98,6 +109,7 @@ const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
+let lastWasteReportAt = 0;
 let draftsInFlight = 0; // concurrent draftOne calls, capped at MAX_CONCURRENT_DRAFTS
 const dryRunSeen = new Set(); // issues already dry-drafted this process (no re-loop)
 
@@ -969,6 +981,69 @@ async function recoverStaleDrafting() {
   }
 }
 
+// ── wasted-draft telemetry ─────────────────────────────────────────────────────
+// Aggregate the outcome of auto-drafted proposals from DB state alone, over 24h
+// and 7d trailing windows, and log (+ Telegram) the Help-Wanted reach rate. No
+// GitHub calls: `posted` means HW arrived and the sniper raced it; `armed` past
+// WASTE_STALE_ARMED_MS with the issue still tracked means HW almost certainly
+// never came (wasted deep draft); `draft` is a validation/again failure.
+async function wasteReport(force = false) {
+  if (!WASTE_REPORT_ENABLED) return;
+  if (!force && Date.now() - lastWasteReportAt < WASTE_REPORT_INTERVAL_MS) return;
+  lastWasteReportAt = Date.now();
+  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+  const query = new URLSearchParams({
+    user_id: `eq.${SUPABASE_USER_ID}`,
+    repo_owner: `ilike.${REPO_OWNER}`,
+    repo_name: `ilike.${REPO_NAME}`,
+    origin: 'eq.auto',
+    created_at: `gte.${since7d}`,
+    select: 'state,created_at',
+  });
+  let rows;
+  try {
+    rows = await supabaseRequest(`proposals?${query}`);
+  } catch (e) {
+    log(`waste report query failed: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  if (!Array.isArray(rows)) return;
+
+  const now = Date.now();
+  const day = now - 24 * 60 * 60_000;
+  const bucket = (list) => {
+    const b = { drafted: 0, posted: 0, armedPending: 0, armedWasted: 0, dropped: 0, queuedOrDrafting: 0 };
+    for (const r of list) {
+      const ageMs = now - Date.parse(r.created_at || '');
+      switch (r.state) {
+        case 'posted': b.drafted++; b.posted++; break;
+        case 'armed':
+          b.drafted++;
+          if (ageMs > WASTE_STALE_ARMED_MS) b.armedWasted++;
+          else b.armedPending++;
+          break;
+        case 'draft': b.drafted++; b.dropped++; break; // validation/fail drop-outs
+        default: b.queuedOrDrafting++; break; // in-flight, not yet an outcome
+      }
+    }
+    return b;
+  };
+  const fmt = (b, label) => {
+    const resolved = b.posted + b.armedWasted + b.dropped; // outcomes we can call
+    const reach = resolved ? Math.round((b.posted / resolved) * 100) : 0;
+    return (
+      `${label}: ${b.drafted} drafted | ✅ ${b.posted} posted (HW reached) | ` +
+      `🗑️ ${b.armedWasted} armed-no-HW | ⏳ ${b.armedPending} armed-pending | ` +
+      `⚠️ ${b.dropped} dropped | HW-reach ${reach}% of resolved`
+    );
+  };
+  const d = bucket(rows.filter((r) => Date.parse(r.created_at || '') >= day));
+  const w = bucket(rows);
+  const line = `📊 auto-draft waste report\n  ${fmt(d, '24h')}\n  ${fmt(w, '7d ')}`;
+  log(line.replace(/\n\s*/g, ' | '));
+  await notify(line, { level: 'verbose' });
+}
+
 // ── main loop ────────────────────────────────────────────────────────────────
 // Both toggles in one read: `autopilot_enabled` (the "Auto-pilot" checkbox) gates
 // DRAFTING; `proposal_auto_post` (the "Auto-post on Help Wanted" checkbox + the
@@ -991,6 +1066,7 @@ async function tick() {
   if (!AUTOPILOT_ENABLED) return; // Railway master switch — idle when off
   if (Date.now() < backoffUntil) return;
   await recoverStaleDrafting();
+  void wasteReport(); // throttled internally; DB-only, safe to call every tick
   const slots = MAX_CONCURRENT_DRAFTS - draftsInFlight;
   if (slots <= 0) return; // all drafting slots busy — check again next poll
   const settings = await fetchSettings();
@@ -1054,6 +1130,7 @@ async function main() {
       `concurrency=${MAX_CONCURRENT_DRAFTS} ` +
       `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
   );
+  void wasteReport(true).catch(() => {}); // one report at boot; then hourly from the loop
   void loop();
 }
 
