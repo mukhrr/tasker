@@ -6,16 +6,17 @@ This is a pure text judgment. Do NOT run any commands, do NOT open files, do NOT
 
 Output one verdict:
 
-- **DUPLICATE** — ours shares Melvin's root cause AND offers no materially better or more actionable fix, and no stronger evidence. It would add nothing a reviewer would act on. (If ours just restates, lightly rewords, or re-orders Melvin's same root cause + same fix → DUPLICATE.)
-- **DISTINCT** — ours is worth posting because at least one is clearly true:
-  - it identifies a **different root cause** (and its reasoning is plausible), OR
-  - same root cause but a **materially better / more concrete fix** (names the exact function/component, a real diff, a correctness or regression consideration Melvin lacked), OR
-  - it brings **stronger evidence** Melvin omitted (SHA-pinned permalinks to the exact offending lines, git-history/regression finding, similar-case analysis).
+The bar is deliberately strict: **DISTINCT requires a genuinely different root cause OR a materially better fix. Nothing else counts.**
+
+- **DUPLICATE** — ours reaches the **same root cause AND the same (or not-materially-better) fix** as Melvin. Adding more does NOT make it distinct: SHA-pinned permalinks, git-history/regression citations, similar-case notes, a code diff, cleaner structure, more detail, or better wording are **evidence and polish, not a different proposal**. If the cause and the fix match Melvin's, it is a DUPLICATE no matter how much better-supported or better-written ours is.
+- **DISTINCT** — ours is worth posting only if at least one is clearly true:
+  - it identifies a **genuinely different root cause** (plausibly reasoned), OR
+  - for the same root cause, it proposes a **materially better fix** — a different or better approach, a correct fix where Melvin's is wrong, or a concrete actionable fix where Melvin's is vague / hand-wavy / "escalate to backend". Naming the *same* change Melvin already named — just with a diff or citations attached — is NOT a better fix.
 
 Bias notes:
 - **If MelvinBot did not post a proposal** (the Melvin section below says "(none)"), the verdict is **DISTINCT** — we would be the only substantive proposal.
-- When genuinely on the fence between the two, prefer **DISTINCT** (a marginal extra proposal costs little; wrongly dropping a better one costs the bounty). Reserve DUPLICATE for clear echoes.
-- Judge substance, not length or polish. A longer proposal that says the same thing is still a DUPLICATE.
+- When the root cause AND the fix are essentially the same, choose **DUPLICATE** — even if ours is longer, better-cited, better-argued, or better-written. Only a real difference in the *cause* or the *fix* earns DISTINCT.
+- Judge the cause and the fix, not length, evidence, or polish. A better-supported version of Melvin's same proposal is still a DUPLICATE.
 
 ## Output contract
 
