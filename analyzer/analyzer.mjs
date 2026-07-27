@@ -725,9 +725,11 @@ async function disarmDuplicate(id, reason) {
 
 async function processReview(proposal) {
   const n = proposal.issue_number;
+  const issueUrl = `https://github.com/${REPO}/issues/${n}`;
   log(`🔎 #${n} reviewing auto-draft vs MelvinBot`);
   const issueRes = await gh(`/repos/${REPO}/issues/${n}`);
   const issue = issueRes.status === 200 ? issueRes.data : null;
+  const title = issue?.title ? ` — ${issue.title}` : '';
   if (issue && issue.state !== 'open') {
     log(`#${n} review skipped — issue not open (${issue.state}); leaving as-is`);
     return;
@@ -744,7 +746,13 @@ async function processReview(proposal) {
       return;
     }
     log(`🔬 #${n} kept armed — MelvinBot posted no proposal (we stand alone)`);
-    await notify(`🔬 ${REPO}#${n}: no MelvinBot proposal — ours stands alone. Worth a deep Claude analysis (Run in the extension).`);
+    await notify(
+      `🔬 Proposal kept — ours is the only one\n` +
+        `${REPO}#${n}${title}\n` +
+        `${issueUrl}\n\n` +
+        `MelvinBot posted no proposal, so ours stands alone. It's armed and will be posted when the issue opens to contributors.\n` +
+        `Next: run a deep Claude analysis to verify it, in the extension.`,
+    );
     return;
   }
 
@@ -773,13 +781,26 @@ async function processReview(proposal) {
   if (verdict === 'DUPLICATE') {
     if (await disarmDuplicate(proposal.id, reason)) {
       log(`🗑️  #${n} dropped — duplicate of MelvinBot: ${reason}`);
-      await notify(`🗑️ ${REPO}#${n}: dropped auto-proposal — same as MelvinBot's (${reason}). Not raced.`);
+      await notify(
+        `🗑️ Proposal dropped — same as MelvinBot's\n` +
+          `${REPO}#${n}${title}\n` +
+          `${issueUrl}\n\n` +
+          `Why: ${reason}\n` +
+          `It won't be armed or posted — no point competing with an identical proposal.`,
+      );
     } else {
       log(`#${n} dup verdict but no longer armed (posted/disarmed) — left as-is`);
     }
   } else {
     log(`🔬 #${n} distinct from MelvinBot — kept armed: ${reason}`);
-    await notify(`🔬 ${REPO}#${n}: our proposal beats MelvinBot's (${reason}). Armed. Worth a deep Claude analysis (Run in the extension).`);
+    await notify(
+      `🔬 Proposal kept — beats MelvinBot's\n` +
+        `${REPO}#${n}${title}\n` +
+        `${issueUrl}\n\n` +
+        `Why: ${reason}\n` +
+        `It's armed and will be posted when the issue opens to contributors.\n` +
+        `Next: run a deep Claude analysis to verify it, in the extension.`,
+    );
   }
 }
 
