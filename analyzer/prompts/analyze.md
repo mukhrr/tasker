@@ -9,6 +9,13 @@ you learned.
 - **Never commit, push, branch, or touch git history.** Leave your changes as
   uncommitted working-tree edits — the harness stashes them afterwards.
 - Do not create PRs, issues, or new GitHub comments.
+- **NEVER run lint, type-check, build, or formatting.** No `npm run lint`,
+  `eslint`, `prettier`, `tsc`, `npm run typecheck`, `npm run build`, or any
+  whole-project static check — they are slow, unnecessary here (your fix is
+  stashed, never committed), and will blow the time budget. Your only sanctioned
+  command runs are: the reproduction itself, and the **single targeted repro
+  Jest test** for the red/green check (`npx jest <that one test file>`) — never
+  the full suite. Verify code by reading it, not by compiling it.
 - Keep changes minimal and surgical: the smallest complete fix plus (if the repo
   convention calls for it) a focused test. No drive-by refactors.
 - Ground every claim in this checkout. Before citing a path or line, open it.

@@ -6,7 +6,10 @@ the expensify-proposal-writer skill. Now revise it based on this instruction:
 > include some code diffs
 
 You have the Expensify/App repository checked out at the current working directory —
-use `git log`, `rg`, and file reads to check similar cases and history. Keep the same
+use `git log`, `rg`, and file reads to check similar cases and history. Investigation
+is READ-ONLY: **never** run lint, `eslint`, `prettier`, `tsc`, `npm run typecheck`,
+`npm run build`, tests/`jest`, or any whole-project check — this is a proposal, not
+shippable code, and those are slow and pointless here. Keep the same
 three-section template structure and all the skill's rules: SHA-pinned GitHub
 permalinks (`https://github.com/Expensify/App/blob/<sha>/<path>#L<start>-L<end>`,
 resolved via `git rev-parse origin/main`), first-person plain English, and keep any

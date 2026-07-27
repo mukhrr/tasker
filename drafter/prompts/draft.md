@@ -22,6 +22,17 @@ Web search is only for external context (platform docs, RFCs) — never for
 finding or confirming code that lives in this repository. Reach for the local
 files first, every time.
 
+## NEVER run lint, type-check, build, tests, or formatting
+
+You are writing a PROPOSAL, not shipping code — nothing you produce is committed
+or executed. So your investigation is **read-only**: `rg`, `git log`/`git show`/
+`git blame`, and reading files. **Never** run `npm run lint`, `eslint`,
+`prettier`, `tsc`, `npm run typecheck`, `npm run build`, `npm test`/`jest`, or
+any whole-project check or install. They are enormous and slow in this repo,
+add nothing to a proposal, and will blow your time budget. Confirm your
+suggested change is sound by *reading* the code and its callers, not by
+compiling or testing it.
+
 ## Make the proposal deep and defensible — this is the one and only pass
 
 Do not settle for the first idea. This single pass must be thorough, so invest in
