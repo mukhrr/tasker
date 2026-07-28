@@ -1118,7 +1118,12 @@ export class StatusWidget {
     } else if (st === 'canceled') {
       line.textContent = '🚫 Canceled — re-run anytime.';
     } else if (st === 'running') {
-      line.textContent = 'Claude is reproducing and fixing locally — result lands here and on Telegram.';
+      // The daemon publishes its phase — claude's session ending is only the
+      // first stage; red/green, browser replay, stashing and the proposal update
+      // follow and can take minutes. Naming the phase stops that looking stuck.
+      line.textContent =
+        this.analysis?.progress ??
+        'Claude is reproducing and fixing locally — result lands here and on Telegram.';
     } else if (st === 'queued') {
       line.textContent = 'Waiting for the analyzer daemon on your Mac to pick this up.';
     } else {
@@ -1210,7 +1215,9 @@ export class StatusWidget {
         }
         if (changed) this.render();
       })();
-    }, 15000);
+      // 8s: phase markers (Verifying → Stashing → Updating) change on that order
+      // of time, so a 15s poll made the widget lag a phase behind.
+    }, 8000);
   }
 
   private stopAnalysisPoll(): void {

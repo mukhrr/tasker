@@ -120,6 +120,8 @@ export interface AnalysisRequest {
   result_summary: string | null;
   stash_ref: string | null;
   claude_session_id?: string | null;
+  /** Live phase of a running analysis (e.g. "🧪 Verifying the fix…"); cleared when it ends. */
+  progress?: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;

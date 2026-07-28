@@ -404,6 +404,15 @@ function claudeEnv() {
   return env;
 }
 
+// A run has several phases AFTER claude's session ends (red/green jest, browser
+// replay, stashing, proposal update) — that tail can take minutes, so a widget
+// showing a flat "Analyzing…" looks stuck once the session itself is visibly
+// done. Publish the current phase so the UI can name it. Fire-and-forget and
+// state-filtered: a phase write must never fail a run or resurrect a canceled row.
+function setPhase(reqId, phase) {
+  void updateRequest(reqId, { progress: phase }, { requireState: 'running' }).catch(() => {});
+}
+
 // ── request lifecycle ────────────────────────────────────────────────────────
 async function updateProposalRow(id, values) {
   const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}` });
@@ -552,11 +561,12 @@ async function processRequest(req) {
   const claimed = await updateRequest(req.id, { state: 'running' }, { requireState: 'queued' });
   if (!claimed) return;
   log(`🔬 #${n} analysis starting`);
+  setPhase(req.id, 'Preparing the checkout…');
 
   const fail = async (error) => {
     log(`❌ #${n} analysis failed: ${error}`);
     // State-filtered: a cancel that landed meanwhile must not be overwritten.
-    const row = await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500) }, { requireState: 'running' });
+    const row = await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500), progress: null }, { requireState: 'running' });
     if (row) await notify(`⚠️ Claude analysis for ${REPO}#${n} failed: ${String(error).slice(0, 200)}`);
   };
 
@@ -614,6 +624,7 @@ async function processRequest(req) {
     // shelling out to the CLI. Additive to the App repo's own MCP config.
     if (existsSync(REPRO_MCP_CONFIG)) args.push('--mcp-config', REPRO_MCP_CONFIG);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
+    setPhase(req.id, 'Claude is reproducing and fixing…');
     void captureSessionEarly(req.id, n); // surface the resumable session id right away
 
     // Watch for the row changing state under us and kill the in-flight claude
@@ -699,6 +710,7 @@ async function processRequest(req) {
 
     // Red/green verification runs BEFORE stashing, while the fix is in the tree.
     let verification = null;
+    setPhase(req.id, '🧪 Verifying the fix (red/green tests)…');
     try {
       verification = await redGreenCheck(n, files, overlap);
       if (verification) log(`🧪 #${n} ${verification}`);
@@ -709,6 +721,7 @@ async function processRequest(req) {
     // Browser-level verdict rides alongside the Jest one — either can skip
     // independently; a combined line reads "✅ ...; 🌐 ...".
     let browserVerification = null;
+    setPhase(req.id, '🌐 Verifying in the browser (replay)…');
     try {
       browserVerification = await browserRedGreenCheck(n, files, overlap);
       if (browserVerification) log(`🌐 #${n} ${browserVerification}`);
@@ -720,6 +733,7 @@ async function processRequest(req) {
 
     let stashRef = null;
     if (files.length) {
+      setPhase(req.id, '📦 Stashing the local fix…');
       const stash = await git(['stash', 'push', '-u', '-m', `tasker-analysis-#${n}`, '--', ...files]);
       if (stash.code === 0) {
         stashRef = `tasker-analysis-#${n}`;
@@ -732,6 +746,7 @@ async function processRequest(req) {
     // Push the updated proposal to where it lives: the posted GitHub comment,
     // else the Supabase draft/armed body (state-filtered; never mid-post).
     let proposalNote = 'proposal unchanged';
+    if (updatedProposal) setPhase(req.id, '📝 Updating the proposal…');
     if (updatedProposal && proposal) {
       if (proposal.github_comment_id && GITHUB_TOKEN) {
         const upd = await gh(`/repos/${REPO}/issues/comments/${proposal.github_comment_id}`, {
@@ -819,7 +834,7 @@ async function processRequest(req) {
     const resultSummary = `${summary}\n\n[${verificationNote}${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
     const doneRow = await updateRequest(
       req.id,
-      { state: 'done', result_summary: resultSummary, stash_ref: stashRef, claude_session_id: claudeSessionId, last_error: null },
+      { state: 'done', result_summary: resultSummary, stash_ref: stashRef, claude_session_id: claudeSessionId, last_error: null, progress: null },
       { requireState: 'running' },
     );
     if (!doneRow) {
