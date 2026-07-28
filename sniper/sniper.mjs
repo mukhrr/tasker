@@ -50,9 +50,15 @@ const TRIGGER_NAME = process.env.LABEL_TRIGGER || 'Help Wanted';
 const LOCK = LOCK_NAME.toLowerCase();
 const TRIGGER = TRIGGER_NAME.toLowerCase();
 
-// One shared recent-open-issues request stays below GitHub's 5,000/hour primary
-// limit. It catches both External → Help Wanted and direct Help Wanted changes.
-const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 900);
+// One shared recent-open-issues request (etag'd — mostly cheap 304s) stays well
+// below GitHub's 5,000/hour primary limit. It catches both External → Help
+// Wanted and direct Help Wanted changes. Since the 2026-07-25 Melvin flow, Help
+// Wanted is a human C+ click at an unpredictable time (hours after External), so
+// this shared scan — not the retired tight/hot path — is what races it via
+// direct-hw-event. Tightened 900→400ms (~150 req/min, budget is 500) to shave
+// ~500ms off HW detection latency (#97159 landed +3s vs webhook bots at +1s;
+// the ~1s label-propagation lag is the remaining floor polling can't beat).
+const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 400);
 const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 50); // poll once External is seen
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
