@@ -1096,7 +1096,9 @@ export class StatusWidget {
       cancelBtn.addEventListener('click', () => void this.cancelAnalysis());
       row.appendChild(cancelBtn);
     }
-    if (!inFlight && this.analysis?.claude_session_id) {
+    // Show the session-copy button whenever a session id exists — including mid-run
+    // (the daemon captures it at analysis start), so you can resume/attach live.
+    if (this.analysis?.claude_session_id) {
       row.appendChild(
         this.makeCopyButton(
           this.analysis.claude_session_id,

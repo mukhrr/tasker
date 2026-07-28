@@ -18,7 +18,7 @@
  *         node --env-file=.env analyzer.mjs
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir, open } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -317,6 +317,55 @@ function git(args, opts = {}) {
   return run('git', args, { cwd: APP_REPO_DIR, timeoutMs: 60_000, ...opts });
 }
 
+// Claude writes its session file to ~/.claude/projects/<slug>/<session-id>.jsonl
+// from session START (the id is the filename), so we can surface the resumable
+// session the moment analysis begins — not only when claude exits. This watches
+// for the NEW session file whose prompt contains "issue #<n>" (disambiguates
+// from any interactive claude the user has open in the same checkout) and writes
+// claude_session_id onto the running row, so the widget can show a copy button
+// during "Analyzing…". Best-effort; the end-of-run JSON id is the fallback.
+async function captureSessionEarly(reqId, n) {
+  const slug = APP_REPO_DIR.replace(/\//g, '-'); // /Users/x/Documents/App → -Users-x-Documents-App
+  const dir = path.join(homedir(), '.claude', 'projects', slug);
+  let before;
+  try {
+    before = new Set(await readdir(dir));
+  } catch {
+    return; // project dir not created yet / unreadable
+  }
+  const marker = `issue #${n}`;
+  const deadline = Date.now() + 25_000;
+  while (Date.now() < deadline) {
+    let files = [];
+    try {
+      files = await readdir(dir);
+    } catch {
+      /* transient */
+    }
+    for (const f of files) {
+      if (!f.endsWith('.jsonl') || before.has(f)) continue;
+      let head = '';
+      try {
+        const fh = await open(path.join(dir, f), 'r');
+        const buf = Buffer.alloc(64 * 1024);
+        const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+        await fh.close();
+        head = buf.toString('utf8', 0, bytesRead);
+      } catch {
+        continue;
+      }
+      if (head.includes(marker)) {
+        const sid = f.replace(/\.jsonl$/, '');
+        // requireState running: don't write onto a canceled/re-queued row.
+        await updateRequest(reqId, { claude_session_id: sid }, { requireState: 'running' }).catch(() => {});
+        log(`🔖 #${n} session ${sid} (captured at start)`);
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 // Claude runs model-authored commands with permissions skipped, on content that
 // includes untrusted issue text — keep Tasker's secrets out of its environment.
 function claudeEnv() {
@@ -537,6 +586,7 @@ async function processRequest(req) {
     // shelling out to the CLI. Additive to the App repo's own MCP config.
     if (existsSync(REPRO_MCP_CONFIG)) args.push('--mcp-config', REPRO_MCP_CONFIG);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
+    void captureSessionEarly(req.id, n); // surface the resumable session id right away
 
     // Watch for the row changing state under us and kill the in-flight claude
     // when it does. Not just 'canceled': a Cancel followed by a fast Re-run can
