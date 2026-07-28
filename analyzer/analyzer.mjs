@@ -278,7 +278,15 @@ function killTree(child) {
   }
 }
 
-function run(cmd, args, { cwd, env, timeoutMs, input, onChild } = {}) {
+// `resolveOnJson` (used for `claude -p --output-format json`): finish as soon as
+// stdout holds the complete result object, instead of waiting for the process to
+// exit. claude keeps its MCP servers (playwright/chrome-devtools/context7/
+// repro-mcp) alive after printing the result, so the process can linger for the
+// full timeout with the work already DONE — the row stays 'running', the widget
+// shows "Analyzing…" forever, and the finished analysis is finally discarded as
+// a timeout (seen on #97156: SUMMARY emitted at 07:09, process still alive
+// 20+ min later). Same fix the drafter already has for codex (runCodexProcess).
+function run(cmd, args, { cwd, env, timeoutMs, input, onChild, resolveOnJson = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
@@ -290,22 +298,42 @@ function run(cmd, args, { cwd, env, timeoutMs, input, onChild } = {}) {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let settled = false;
+    let lingerTimer = null;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (lingerTimer) clearTimeout(lingerTimer);
+      resolve(r);
+    };
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
           killTree(child);
         }, timeoutMs)
       : null;
-    child.stdout.on('data', (c) => (stdout += c.toString()));
+    child.stdout.on('data', (c) => {
+      stdout += c.toString();
+      if (!resolveOnJson || settled || lingerTimer) return;
+      // Cheap guard first — only attempt a parse once stdout looks terminated.
+      if (!stdout.trimEnd().endsWith('}')) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(stdout.trim());
+      } catch {
+        return; // still streaming
+      }
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.result !== 'string') return;
+      // Result is in hand. Give stderr a beat to flush, then reap the tree.
+      lingerTimer = setTimeout(() => {
+        killTree(child);
+        finish({ code: 0, stdout, stderr, timedOut: false, lingered: true });
+      }, 500);
+    });
     child.stderr.on('data', (c) => (stderr += c.toString()));
-    child.on('error', (e) => {
-      if (timer) clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: `${stderr}\n${e.message}`, timedOut });
-    });
-    child.on('close', (code) => {
-      if (timer) clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
-    });
+    child.on('error', (e) => finish({ code: -1, stdout, stderr: `${stderr}\n${e.message}`, timedOut }));
+    child.on('close', (code) => finish({ code, stdout, stderr, timedOut }));
     if (input != null) {
       child.stdin.write(input);
       child.stdin.end();
@@ -622,6 +650,7 @@ async function processRequest(req) {
         env: claudeEnv(),
         timeoutMs: CLAUDE_TIMEOUT_MS,
         input: prompt,
+        resolveOnJson: true, // don't wait on lingering MCP servers once the result lands
         onChild: (c) => {
           claudeChild = c;
         },
@@ -629,6 +658,7 @@ async function processRequest(req) {
     } finally {
       clearInterval(cancelWatch);
     }
+    if (res.lingered) log(`⏭️  #${n} result received — reaped lingering claude/MCP instead of waiting for exit`);
     if (canceled) {
       // Park whatever partial work exists so the checkout is clean again. The
       // row was moved out of 'running' externally (canceled, or already
