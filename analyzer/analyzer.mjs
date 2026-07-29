@@ -1084,12 +1084,19 @@ async function loop() {
 // playwright helpers with NO live parent (ppid=1) — never the user's own
 // interactive `claude` sessions or their live MCP children.
 async function reapOrphanProcesses() {
+  // ONLY our own analysis runs. Each is spawned detached, so it leads its own
+  // process group and its MCP servers inherit that group — killing the group
+  // (-PID) reaps the whole tree precisely.
+  //
+  // Deliberately NO global "orphaned mcp/playwright" sweep: the user runs their
+  // own interactive claude sessions (often several, for days) in this same
+  // checkout, and a broad `pgrep -f 'mcp|playwright'` + ppid==1 rule can match
+  // THEIR MCP servers during an npm-exec reparent — killing tools out from under
+  // a live session and making it respawn them (CPU churn). Ours are identifiable
+  // by the analyzer's own --mcp-config path; nothing else is safe to assume.
   const script =
-    "for p in $(pgrep -f 'claude -p .*analyzer/repro-mcp' 2>/dev/null); do kill -9 \"$p\" 2>/dev/null; done; " +
-    'sleep 1; ' +
-    "for p in $(pgrep -f 'mcp|playwright' 2>/dev/null); do " +
-    "  pp=$(ps -o ppid= -p \"$p\" 2>/dev/null | tr -d ' '); " +
-    '  [ "$pp" = "1" ] && kill -9 "$p" 2>/dev/null; ' +
+    "for p in $(pgrep -f 'claude -p .*analyzer/repro-mcp' 2>/dev/null); do " +
+    '  kill -9 -"$p" 2>/dev/null || kill -9 "$p" 2>/dev/null; ' +
     'done; true';
   await run('bash', ['-c', script], { timeoutMs: 20_000 });
 }
