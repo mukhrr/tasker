@@ -515,7 +515,15 @@ async function syncArmedProposals() {
   // sniper kept INSERTing `queued` rows nothing would ever draft, and the widget
   // rendered them as "A proposal is being written…" forever. Mirror it here so
   // the switch actually stops the pipeline at its source.
-  autoPilotEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.autopilot_enabled !== false;
+  const autoPilotNow = !Array.isArray(settingsRows) || settingsRows[0]?.autopilot_enabled !== false;
+  if (autoPilotNow !== autoPilotEnabled) {
+    log(
+      autoPilotNow
+        ? '🧠 Auto-pilot ON — queueing label-matched issues for the drafter again'
+        : '⏸️  Auto-pilot OFF — no longer queueing issues for drafting',
+    );
+  }
+  autoPilotEnabled = autoPilotNow;
   // Follow the extension's watched groups / excluded labels when it has synced
   // them; otherwise stay on the env defaults.
   applyWatchConfig(Array.isArray(settingsRows) ? settingsRows[0] : null);
