@@ -744,10 +744,22 @@ async function processRequest(req) {
     }
 
     // Push the updated proposal to where it lives: the posted GitHub comment,
-    // else the Supabase draft/armed body (state-filtered; never mid-post).
+    // the Supabase draft/armed body (state-filtered; never mid-post), or — when
+    // the row is still mid-auto-pipeline (queued/drafting, i.e. Codex hasn't
+    // armed a draft yet) — arm/post Claude's own reproduced-and-VERIFIED
+    // proposal directly, since it supersedes an unfinished Codex draft. That
+    // write is itself state-filtered: Codex's ~4 min draft commonly finishes
+    // long before Claude's ~20-40 min deep analysis does, so if Codex already
+    // armed or posted by the time we get here, we defer to it instead of
+    // clobbering a live posted comment's row.
     let proposalNote = 'proposal unchanged';
     if (updatedProposal) setPhase(req.id, '📝 Updating the proposal…');
-    if (updatedProposal && proposal) {
+    const hasHW = (issue.labels || [])
+      .map((l) => (typeof l === 'string' ? l : l?.name || '').toLowerCase())
+      .includes('help wanted');
+    const codexStillPending = proposal?.state === 'queued' || proposal?.state === 'drafting';
+
+    if (updatedProposal && proposal && !codexStillPending) {
       if (proposal.github_comment_id && GITHUB_TOKEN) {
         const upd = await gh(`/repos/${REPO}/issues/comments/${proposal.github_comment_id}`, {
           method: 'PATCH',
@@ -770,10 +782,7 @@ async function processRequest(req) {
       // An armed proposal on an issue that ALREADY has Help Wanted will never
       // be fired by the sniper (it ignores stale label events) — post it here,
       // like the no-proposal path does. ("Post now" was retired from the UI.)
-      const hwNow = (issue.labels || [])
-        .map((l) => (typeof l === 'string' ? l : l?.name || '').toLowerCase())
-        .includes('help wanted');
-      if (hwNow && GITHUB_TOKEN && proposal.state === 'armed' && !proposal.github_comment_id) {
+      if (hasHW && GITHUB_TOKEN && proposal.state === 'armed' && !proposal.github_comment_id) {
         const bodyToPost = updatedProposal || proposal.body;
         const claim = await supabaseRequest(
           `proposals?${new URLSearchParams({ id: `eq.${proposal.id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' })}`,
@@ -790,14 +799,48 @@ async function processRequest(req) {
           }
         }
       }
+    } else if (updatedProposal && proposal && codexStillPending) {
+      // Codex hasn't produced an armable draft yet — Claude's own verified
+      // proposal supersedes whatever it was mid-writing. State-filtered to
+      // queued/drafting so a Codex draft that finished in the meantime wins.
+      if (hasHW && GITHUB_TOKEN) {
+        const claimed = await supabaseRequest(
+          `proposals?${new URLSearchParams({ id: `eq.${proposal.id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'in.(queued,drafting)' })}`,
+          { method: 'PATCH', body: { state: 'posting' }, prefer: 'return=representation' },
+        );
+        if (Array.isArray(claimed) && claimed.length) {
+          const post = await gh(`/repos/${REPO}/issues/${n}/comments`, { method: 'POST', body: { body: updatedProposal } });
+          if (post.status === 201 && post.data?.id) {
+            await updateProposalRow(proposal.id, {
+              state: 'posted',
+              body: updatedProposal,
+              github_comment_id: post.data.id,
+              posted_at: new Date().toISOString(),
+              last_error: null,
+            });
+            proposalNote = "posted Claude's proposal (Help Wanted already present; Codex draft superseded)";
+          } else {
+            await updateProposalRow(proposal.id, { state: 'armed', body: updatedProposal, last_error: `analyzer post failed: ${post.status}` });
+            proposalNote = `Claude's proposal claimed but post failed (${post.status}) — left armed`;
+          }
+        } else {
+          proposalNote = "Codex armed/posted its draft first — Claude's proposal was not applied";
+        }
+      } else {
+        const armed = await supabaseRequest(
+          `proposals?${new URLSearchParams({ id: `eq.${proposal.id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'in.(queued,drafting)' })}`,
+          { method: 'PATCH', body: { state: 'armed', body: updatedProposal, last_error: null }, prefer: 'return=representation' },
+        );
+        proposalNote =
+          Array.isArray(armed) && armed.length
+            ? "armed Claude's proposal — the sniper posts it when Help Wanted lands (Codex draft superseded)"
+            : "Codex armed/posted its draft first — Claude's proposal was not applied";
+      }
     } else if (updatedProposal) {
       // No proposal exists yet — the analysis IS the proposal. Post it right
       // away when Help Wanted is already on the issue; otherwise save it as an
       // ARMED row so the sniper fires it at the second boundary the moment
       // Help Wanted lands (posting pre-HW would violate the posting rule).
-      const hasHW = (issue.labels || [])
-        .map((l) => (typeof l === 'string' ? l : l?.name || '').toLowerCase())
-        .includes('help wanted');
       const upsert = (fields) =>
         supabaseRequest('proposals?on_conflict=user_id,repo_owner,repo_name,issue_number', {
           method: 'POST',
