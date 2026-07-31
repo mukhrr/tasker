@@ -286,5 +286,6 @@ export type IssueLabelsResponse = MessageResponse<string[]>;
 export type ProposalResponse = MessageResponse<Proposal | null>;
 
 export type AutoPostResponse = MessageResponse<{ enabled: boolean }>;
+export type AutoPilotResponse = MessageResponse<{ enabled: boolean }>;
 
 export type AnalysisResponse = MessageResponse<AnalysisRow | null>;

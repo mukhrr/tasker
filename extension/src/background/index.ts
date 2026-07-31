@@ -989,17 +989,20 @@ async function handleGetAutoPilot(): Promise<MessageResponse<{ enabled: boolean 
 async function handleSetAutoPilot(enabled: boolean): Promise<MessageResponse<{ enabled: boolean }>> {
   await chrome.storage.local.set({ [AUTOPILOT_KEY]: enabled });
 
+  // The servers (drafter + sniper) read this from Supabase, so a failed mirror
+  // means the toggle looks off locally while both keep running. Surface that
+  // instead of silently succeeding.
   try {
     const supabase = getSupabaseClient();
     const { data: session } = await supabase.auth.getSession();
     const userId = session.session?.user?.id;
-    if (userId) {
-      await supabase
-        .from('user_settings')
-        .upsert({ id: userId, autopilot_enabled: enabled }, { onConflict: 'id' });
-    }
+    if (!userId) return { ok: false, error: 'Not signed in — Auto-pilot not changed on the server' };
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert({ id: userId, autopilot_enabled: enabled }, { onConflict: 'id' });
+    if (error) return { ok: false, error: `Auto-pilot not saved to server: ${error.message}` };
   } catch (e) {
-    console.warn('[tasker] mirror autopilot to server failed', e);
+    return { ok: false, error: `Auto-pilot not saved to server: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   return { ok: true, data: { enabled } };

@@ -158,6 +158,10 @@ const ENV_EXCLUDE_LABELS = new Set(
 let activeWatchGroups = ENV_WATCH_GROUPS;
 let activeExcludeLabels = ENV_EXCLUDE_LABELS;
 let watchConfigSource = ENV_WATCH_GROUPS.length ? 'env' : 'none';
+// Mirrors user_settings.autopilot_enabled (the extension's "Auto-pilot" switch).
+// Refreshed on every cloud sync; defaults to on until the first sync lands so a
+// transient Supabase blip never silently stops queueing.
+let autoPilotEnabled = true;
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -500,12 +504,18 @@ async function syncArmedProposals() {
   }
 
   const settingsQuery = new URLSearchParams({
-    select: 'proposal_auto_post,watched_label_groups,excluded_labels',
+    select: 'proposal_auto_post,autopilot_enabled,watched_label_groups,excluded_labels',
     id: `eq.${SUPABASE_USER_ID}`,
     limit: '1',
   });
   const settingsRows = await supabaseRequest(`user_settings?${settingsQuery}`);
   const autoPostEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.proposal_auto_post !== false;
+  // The extension's "Auto-pilot" checkbox gates DRAFTING. The drafter already
+  // honors it, but this queueing loop did not — so with auto-pilot off the
+  // sniper kept INSERTing `queued` rows nothing would ever draft, and the widget
+  // rendered them as "A proposal is being written…" forever. Mirror it here so
+  // the switch actually stops the pipeline at its source.
+  autoPilotEnabled = !Array.isArray(settingsRows) || settingsRows[0]?.autopilot_enabled !== false;
   // Follow the extension's watched groups / excluded labels when it has synced
   // them; otherwise stay on the env defaults.
   applyWatchConfig(Array.isArray(settingsRows) ? settingsRows[0] : null);
@@ -721,8 +731,11 @@ async function releasePreClaim(n) {
 }
 
 // ── auto-draft: queue label-matched issues for the drafter worker ─────────────
+// autoPilotEnabled mirrors the extension's "Auto-pilot" switch: with it off the
+// drafter drafts nothing, so queueing here would only pile up `queued` rows that
+// never advance (and that the widget renders as "a proposal is being written").
 function autoDraftEnabled() {
-  return AUTO_DRAFT && CLOUD_MODE && activeWatchGroups.length > 0;
+  return AUTO_DRAFT && CLOUD_MODE && autoPilotEnabled && activeWatchGroups.length > 0;
 }
 
 // Extension-identical matching: AND within a group, OR across groups, and drop

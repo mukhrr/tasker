@@ -10,6 +10,7 @@ import type {
   IssueLabelsResponse,
   ProposalResponse,
   AutoPostResponse,
+  AutoPilotResponse,
   AnalysisResponse,
 } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
@@ -60,6 +61,7 @@ export class StatusWidget {
   private analysisBusy = false;
   private analysisPollTimer: number | null = null;
   private autoPostEnabled = true;
+  private autoPilotEnabled = true;
 
   constructor(owner: string, repo: string, number: number, mode: WidgetMode = 'issue', linkedIssueNumbers: number[] = []) {
     this.owner = owner;
@@ -125,12 +127,13 @@ export class StatusWidget {
   }
 
   private async initIssue() {
-    const [taskRes, statusesRes, labelsRes, proposalRes, autoPostRes, analysisRes] = await Promise.all([
+    const [taskRes, statusesRes, labelsRes, proposalRes, autoPostRes, autoPilotRes, analysisRes] = await Promise.all([
       sendMessage<TaskResponse>({ type: 'QUERY_TASK', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
       sendMessage<IssueLabelsResponse>({ type: 'QUERY_ISSUE_LABELS', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<ProposalResponse>({ type: 'QUERY_PROPOSAL', owner: this.owner, repo: this.repo, number: this.number }),
       sendMessage<AutoPostResponse>({ type: 'GET_AUTOPOST' }),
+      sendMessage<AutoPilotResponse>({ type: 'GET_AUTOPILOT' }),
       sendMessage<AnalysisResponse>({ type: 'QUERY_ANALYSIS', owner: this.owner, repo: this.repo, number: this.number }),
     ]);
 
@@ -155,6 +158,10 @@ export class StatusWidget {
 
     if (autoPostRes.ok && autoPostRes.data) {
       this.autoPostEnabled = autoPostRes.data.enabled;
+    }
+
+    if (autoPilotRes.ok && autoPilotRes.data) {
+      this.autoPilotEnabled = autoPilotRes.data.enabled;
     }
 
     if (analysisRes.ok) {
@@ -577,14 +584,25 @@ export class StatusWidget {
       // Server-owned: the sniper queued this issue and the drafter is writing
       // the body. Show a read-only status; never expose the editable draft UI,
       // which would let a Save clobber the in-flight server state.
-      const label = state === 'queued' ? 'Queued for auto-drafting…' : 'Auto-drafting proposal…';
+      // With Auto-pilot off the drafter writes nothing, so a `queued` row is
+      // stalled rather than in progress — say so instead of promising a
+      // proposal that will never be written.
+      const stalled = state === 'queued' && !this.autoPilotEnabled;
+      const label = stalled
+        ? 'Waiting — Auto-pilot is off'
+        : state === 'queued'
+          ? 'Queued for auto-drafting…'
+          : 'Auto-drafting proposal…';
+      const sub = stalled
+        ? 'No proposal is being written. Turn on Auto-pilot in the popup, or Cancel to edit a draft yourself.'
+        : 'A proposal is being written and will arm automatically.';
       const statusEl = document.createElement('div');
       statusEl.className = 'proposal-status';
       statusEl.innerHTML = `
-        <span class="check">🤖</span>
+        <span class="check">${stalled ? '⏸️' : '🤖'}</span>
         <div>
           <div class="proposal-status-line">${this.escapeHtml(label)}</div>
-          <div class="proposal-status-sub">A proposal is being written and will arm automatically.</div>
+          <div class="proposal-status-sub">${this.escapeHtml(sub)}</div>
         </div>
       `;
       body.appendChild(statusEl);
