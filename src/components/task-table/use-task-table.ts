@@ -251,6 +251,18 @@ export function useTaskTable(userId: string) {
     [tasksCrud]
   );
 
+  const handleResetStaleTimer = useCallback(
+    async (id: string) => {
+      try {
+        await tasksCrud.resetStaleTimer(id);
+        toast.success('Highlight cleared — 3-day timer reset');
+      } catch {
+        toast.error('Failed to clear highlight');
+      }
+    },
+    [tasksCrud]
+  );
+
   const handleSyncTask = useCallback(
     async (id: string) => {
       if (!hasApiKey) {
@@ -304,6 +316,7 @@ export function useTaskTable(userId: string) {
 
     // Archive
     handleArchiveTask,
+    handleResetStaleTimer,
 
     // CRUD
     handleAddTask,

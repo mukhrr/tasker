@@ -32,6 +32,7 @@ interface TaskRowProps {
     | 'handleDeleteTask'
     | 'handleSyncTask'
     | 'handleArchiveTask'
+    | 'handleResetStaleTimer'
     | 'deleteConfirmId'
     | 'setDeleteConfirmId'
     | 'addStatus'
@@ -120,6 +121,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
           isSyncing={isSyncing}
           isConfirmingDelete={isConfirmingDelete}
           isArchived={task.archived}
+          isStale={Boolean(staleRowBg)}
           onSync={() => ctx.handleSyncTask(task.id)}
           onDelete={() => {
             ctx.handleDeleteTask(task.id);
@@ -128,6 +130,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
           onRequestDelete={() => ctx.setDeleteConfirmId(task.id)}
           onCancelDelete={() => ctx.setDeleteConfirmId(null)}
           onArchive={() => ctx.handleArchiveTask(task.id, !task.archived)}
+          onClearHighlight={() => ctx.handleResetStaleTimer(task.id)}
         />
       </td>
     </tr>

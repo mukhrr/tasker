@@ -234,6 +234,28 @@ export function useTasks<T extends TaskListItem = Task>(
     }
   };
 
+  // Clears the stale-row highlight by restarting the 3-day timer that drives it
+  // (getStaleRowBg colors a row once status_changed_at is 3+ days old). Writing
+  // "now" is the same thing a real status change writes, so the row un-highlights
+  // immediately and highlights again in 3 days if the status still hasn't moved —
+  // this acknowledges the nag, it doesn't disable it.
+  const resetStaleTimer = async (id: string) => {
+    const status_changed_at = new Date().toISOString();
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? ({ ...t, status_changed_at } as T) : t))
+    );
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ status_changed_at })
+      .eq('id', id);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
   const archiveTask = async (id: string, archived: boolean) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? ({ ...t, archived } as T) : t))
@@ -259,6 +281,7 @@ export function useTasks<T extends TaskListItem = Task>(
     deleteTask,
     syncTask,
     archiveTask,
+    resetStaleTimer,
     refetch: fetchTasks,
   };
 }

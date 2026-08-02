@@ -8,6 +8,7 @@ import {
   Archive,
   ArchiveRestore,
   MoreHorizontal,
+  TimerReset,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -22,21 +23,26 @@ export function TaskRowActions({
   isSyncing,
   isConfirmingDelete,
   isArchived,
+  isStale,
   onSync,
   onDelete,
   onRequestDelete,
   onCancelDelete,
   onArchive,
+  onClearHighlight,
 }: {
   taskId: string;
   isSyncing: boolean;
   isConfirmingDelete: boolean;
   isArchived: boolean;
+  /** Row is currently stale-highlighted — only then is clearing it meaningful. */
+  isStale: boolean;
   onSync: () => void;
   onDelete: () => void;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onArchive: () => void;
+  onClearHighlight: () => void;
 }) {
   if (isConfirmingDelete) {
     return (
@@ -73,6 +79,12 @@ export function TaskRowActions({
               className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`}
             />
             Sync
+          </DropdownMenuItem>
+        )}
+        {isStale && !isArchived && (
+          <DropdownMenuItem onClick={onClearHighlight}>
+            <TimerReset className="h-3.5 w-3.5" />
+            Clear highlight
           </DropdownMenuItem>
         )}
         <DropdownMenuItem render={<Link href={`/tasks/${taskId}`} />}>
