@@ -745,6 +745,10 @@ async function handleEnqueueAutoDraft(
         issue_number: number,
         state: 'queued',
         origin: 'auto',
+        // Explicit per-issue request: the drafter honors these even when the
+        // Auto-pilot master switch is off (which only pauses the sniper's
+        // automatic label-matched queue).
+        force_draft: true,
         draft_attempts: 0,
         last_error: null,
       },
@@ -789,7 +793,9 @@ async function handleCancelAutoDraft(
 
   const { data, error } = await supabase
     .from('proposals')
-    .update({ state: 'draft', origin: 'manual', last_error: null })
+    // Cancel revokes the explicit request too, so a later re-queue of this row
+    // can't resurrect a force-draft the user already called off.
+    .update({ state: 'draft', origin: 'manual', force_draft: false, last_error: null })
     .eq('id', existing.id)
     .select()
     .single();

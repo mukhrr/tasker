@@ -584,17 +584,20 @@ export class StatusWidget {
       // Server-owned: the sniper queued this issue and the drafter is writing
       // the body. Show a read-only status; never expose the editable draft UI,
       // which would let a Save clobber the in-flight server state.
-      // With Auto-pilot off the drafter writes nothing, so a `queued` row is
-      // stalled rather than in progress — say so instead of promising a
-      // proposal that will never be written.
-      const stalled = state === 'queued' && !this.autoPilotEnabled;
+      // With Auto-pilot off the drafter skips the sniper's automatic queue, so
+      // such a `queued` row is stalled rather than in progress — say so instead
+      // of promising a proposal that will never be written. A row the user asked
+      // for by hand (force_draft) is exempt: the drafter always honors those, so
+      // it really is being written.
+      const stalled =
+        state === 'queued' && !this.autoPilotEnabled && !this.proposal?.force_draft;
       const label = stalled
         ? 'Waiting — Auto-pilot is off'
         : state === 'queued'
           ? 'Queued for auto-drafting…'
           : 'Auto-drafting proposal…';
       const sub = stalled
-        ? 'No proposal is being written. Turn on Auto-pilot in the popup, or Cancel to edit a draft yourself.'
+        ? 'Auto-queued while Auto-pilot is off, so nothing is writing it. Cancel, then 🤖 Run Auto-pilot to draft just this issue.'
         : 'A proposal is being written and will arm automatically.';
       const statusEl = document.createElement('div');
       statusEl.className = 'proposal-status';

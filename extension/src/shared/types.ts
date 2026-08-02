@@ -99,6 +99,9 @@ export interface Proposal {
   state: ProposalState;
   github_comment_id: number | null;
   codex_session_id?: string | null;
+  // True when a per-issue "Run Auto-pilot" click asked for this draft by hand.
+  // The drafter honors these even with the Auto-pilot master switch off.
+  force_draft?: boolean | null;
   last_error: string | null;
   posted_at: string | null;
   created_at: string;

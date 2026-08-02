@@ -1071,7 +1071,11 @@ async function tick() {
   const slots = MAX_CONCURRENT_DRAFTS - draftsInFlight;
   if (slots <= 0) return; // all drafting slots busy — check again next poll
   const settings = await fetchSettings();
-  if (!settings.autoPilot) return; // "Auto-pilot" checkbox off — draft nothing
+  // The "Auto-pilot" checkbox gates AUTOMATIC drafting — the stream of issues the
+  // sniper queues off label matches. It does NOT gate an explicit per-issue "Run
+  // Auto-pilot" click, which sets force_draft: a human asking for one proposal is
+  // always honored, or the button would silently queue work nothing picks up.
+  const forceOnly = !settings.autoPilot;
 
   const query = new URLSearchParams({
     // Only the columns draftOne needs — the drafter writes the body, it never
@@ -1089,8 +1093,12 @@ async function tick() {
     order: 'created_at.desc',
     limit: String(slots),
   });
+  if (forceOnly) query.set('force_draft', 'eq.true');
   const rows = await supabaseRequest(`proposals?${query}`);
   if (!Array.isArray(rows) || rows.length === 0) return;
+  if (forceOnly) {
+    log(`▶️  Auto-pilot off — drafting ${rows.length} explicitly requested issue(s): ${rows.map((r) => `#${r.issue_number}`).join(', ')}`);
+  }
   // Fire drafts without awaiting so the poll loop keeps running and can fill
   // freed slots. The queued→drafting claim is atomic (state-filtered PATCH), so
   // a row can never be drafted twice even if it were fetched twice.
