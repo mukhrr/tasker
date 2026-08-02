@@ -13,6 +13,7 @@ import { NoteCell } from './cells/note-cell';
 import { HighlightText } from './highlight-text';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TaskRowActions } from './task-row-actions';
+import { Checkbox } from '@/components/ui/checkbox';
 import type { Task } from '@/types/database';
 import type { ColumnKey } from './column-config';
 import type { TaskTableContext } from './use-task-table';
@@ -33,6 +34,8 @@ interface TaskRowProps {
     | 'handleSyncTask'
     | 'handleArchiveTask'
     | 'handleResetStaleTimer'
+    | 'isSelected'
+    | 'toggleSelected'
     | 'deleteConfirmId'
     | 'setDeleteConfirmId'
     | 'addStatus'
@@ -46,8 +49,18 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
 
   const staleRowBg = getStaleRowBg(ctx.statuses, task.status, task.status_changed_at);
 
+  const selected = ctx.isSelected(task.id);
+
   return (
-    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}>
+    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''} ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}>
+      <td className="w-10 px-3 py-2 sm:px-4">
+        <Checkbox
+          checked={selected}
+          onCheckedChange={() => ctx.toggleSelected(task.id)}
+          aria-label={`Select ${task.issue_title || task.issue_url}`}
+        />
+      </td>
+
       {/* Issue column (always first) */}
       <td className="min-w-[300px] max-w-[450px] px-3 py-2 sm:px-4">
         {isSyncing && !task.issue_title ? (

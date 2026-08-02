@@ -225,6 +225,42 @@ export function useTasks<T extends TaskListItem = Task>(
     }
   };
 
+  // Bulk counterpart of updateTask: one PATCH filtered by `in`, not N round
+  // trips, so a 50-row status change is a single request and a single realtime
+  // burst. Same status_changed_at bookkeeping as the single-row path.
+  const updateTasks = async (ids: string[], updates: Partial<Task>) => {
+    if (ids.length === 0) return;
+    const patch: Partial<Task> = { ...updates };
+    if ('status' in patch) {
+      patch.status_changed_at = new Date().toISOString();
+    }
+
+    const targeted = new Set(ids);
+    setTasks((prev) =>
+      prev.map((t) => (targeted.has(t.id) ? ({ ...t, ...patch } as T) : t))
+    );
+
+    const { error } = await supabase.from('tasks').update(patch).in('id', ids);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  const deleteTasks = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const targeted = new Set(ids);
+    setTasks((prev) => prev.filter((t) => !targeted.has(t.id)));
+
+    const { error } = await supabase.from('tasks').delete().in('id', ids);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
   const deleteTask = async (id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
     const { error } = await supabase.from('tasks').delete().eq('id', id);
@@ -278,7 +314,9 @@ export function useTasks<T extends TaskListItem = Task>(
     syncingTaskIds,
     addTask,
     updateTask,
+    updateTasks,
     deleteTask,
+    deleteTasks,
     syncTask,
     archiveTask,
     resetStaleTimer,

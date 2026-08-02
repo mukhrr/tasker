@@ -168,6 +168,85 @@ export function useTaskTable(userId: string) {
     return sorted;
   }, [tasksCrud.tasks, statusesCrud.statuses, activeTab, search, sortConfig, filters]);
 
+  // ── Bulk selection ──────────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Selection is scoped to what's on screen. Without this, selecting rows and
+  // then switching tab/filter/search would keep invisible rows selected and a
+  // later bulk action would silently edit tasks the user can no longer see.
+  const visibleSelectedIds = useMemo(
+    () => filteredTasks.filter((t) => selectedIds.has(t.id)).map((t) => t.id),
+    [filteredTasks, selectedIds]
+  );
+
+  const selectedCount = visibleSelectedIds.length;
+  const allVisibleSelected =
+    filteredTasks.length > 0 && selectedCount === filteredTasks.length;
+
+  const isSelected = useCallback(
+    (id: string) => selectedIds.has(id),
+    [selectedIds]
+  );
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const allSelected = filteredTasks.every((t) => prev.has(t.id));
+      return allSelected ? new Set() : new Set(filteredTasks.map((t) => t.id));
+    });
+  }, [filteredTasks]);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // ── Bulk handlers ───────────────────────────────────────────────────────
+  const bulkNoun = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
+
+  const handleBulkUpdate = useCallback(
+    async (updates: Partial<Task>, description: string) => {
+      const ids = visibleSelectedIds;
+      if (ids.length === 0) return;
+      try {
+        await tasksCrud.updateTasks(ids, updates);
+        toast.success(`${description} for ${bulkNoun(ids.length)}`);
+        clearSelection();
+      } catch {
+        toast.error(`Failed to update ${bulkNoun(ids.length)}`);
+      }
+    },
+    [tasksCrud, visibleSelectedIds, clearSelection]
+  );
+
+  const handleBulkStatusChange = useCallback(
+    (statusKey: string) => {
+      const matched = statusesCrud.statuses.find((s) => s.key === statusKey);
+      return handleBulkUpdate(
+        { status: statusKey, status_group: matched?.group_name ?? 'todo' },
+        `Status set to ${matched?.label ?? statusKey}`
+      );
+    },
+    [handleBulkUpdate, statusesCrud.statuses]
+  );
+
+  const handleBulkDelete = useCallback(async () => {
+    const ids = visibleSelectedIds;
+    if (ids.length === 0) return;
+    try {
+      await tasksCrud.deleteTasks(ids);
+      toast.success(`Deleted ${bulkNoun(ids.length)}`);
+      clearSelection();
+    } catch {
+      toast.error(`Failed to delete ${bulkNoun(ids.length)}`);
+    }
+  }, [tasksCrud, visibleSelectedIds, clearSelection]);
+
   // Handlers
   const handleSync = useCallback(async () => {
     if (!hasApiKey) {
@@ -317,6 +396,17 @@ export function useTaskTable(userId: string) {
     // Archive
     handleArchiveTask,
     handleResetStaleTimer,
+
+    // Bulk selection + actions
+    selectedCount,
+    allVisibleSelected,
+    isSelected,
+    toggleSelected,
+    toggleSelectAll,
+    clearSelection,
+    handleBulkUpdate,
+    handleBulkStatusChange,
+    handleBulkDelete,
 
     // CRUD
     handleAddTask,
