@@ -46,7 +46,7 @@ export function Navbar({ user }: { user: User }) {
 
   return (
     <nav className="border-b">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div className="flex h-14 items-center justify-between px-4 sm:px-6 lg:px-10">
         <div className="flex items-center gap-3 sm:gap-6">
           <Link href="/" className="flex items-center gap-2">
             <Image
