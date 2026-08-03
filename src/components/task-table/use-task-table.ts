@@ -213,9 +213,37 @@ export function useTaskTable(userId: string) {
     async (updates: Partial<Task>, description: string) => {
       const ids = visibleSelectedIds;
       if (ids.length === 0) return;
+
+      // Snapshot the prior values before the write so the toast can offer Undo.
+      // A status change also restamps status_changed_at, so carry that field
+      // along or undoing the status would silently leave the stale-highlight
+      // timer reset.
+      const fields = Object.keys(updates) as (keyof Task)[];
+      const restoreFields =
+        'status' in updates ? [...fields, 'status_changed_at' as const] : fields;
+      const targeted = new Set(ids);
+      const snapshots = tasksCrud.tasks
+        .filter((t) => targeted.has(t.id))
+        .map((t) => ({
+          id: t.id,
+          values: Object.fromEntries(
+            restoreFields.map((f) => [f, t[f]])
+          ) as Partial<Task>,
+        }));
+
       try {
         await tasksCrud.updateTasks(ids, updates);
-        toast.success(`${description} for ${bulkNoun(ids.length)}`);
+        toast.success(`${description} for ${bulkNoun(ids.length)}`, {
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              void tasksCrud
+                .restoreTasks(snapshots)
+                .then(() => toast.success(`Undid ${description.toLowerCase()}`))
+                .catch(() => toast.error('Undo failed'));
+            },
+          },
+        });
         clearSelection();
       } catch {
         toast.error(`Failed to update ${bulkNoun(ids.length)}`);

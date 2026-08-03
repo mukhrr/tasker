@@ -248,6 +248,37 @@ export function useTasks<T extends TaskListItem = Task>(
     }
   };
 
+  // Undo for a bulk edit. Each row gets its own prior values back, so this
+  // can't go through updateTasks (one value for everyone). Rows that shared
+  // the same prior values are restored together, so undoing a 50-row change
+  // is typically one or two PATCHes rather than 50.
+  const restoreTasks = async (
+    snapshots: { id: string; values: Partial<Task> }[]
+  ) => {
+    if (snapshots.length === 0) return;
+
+    const byId = new Map(snapshots.map((s) => [s.id, s.values]));
+    setTasks((prev) =>
+      prev.map((t) => (byId.has(t.id) ? ({ ...t, ...byId.get(t.id) } as T) : t))
+    );
+
+    const groups = new Map<string, { values: Partial<Task>; ids: string[] }>();
+    for (const snapshot of snapshots) {
+      const key = JSON.stringify(snapshot.values);
+      const existing = groups.get(key);
+      if (existing) existing.ids.push(snapshot.id);
+      else groups.set(key, { values: snapshot.values, ids: [snapshot.id] });
+    }
+
+    for (const { values, ids } of groups.values()) {
+      const { error } = await supabase.from('tasks').update(values).in('id', ids);
+      if (error) {
+        await fetchTasks();
+        throw error;
+      }
+    }
+  };
+
   const deleteTasks = async (ids: string[]) => {
     if (ids.length === 0) return;
     const targeted = new Set(ids);
@@ -315,6 +346,7 @@ export function useTasks<T extends TaskListItem = Task>(
     addTask,
     updateTask,
     updateTasks,
+    restoreTasks,
     deleteTask,
     deleteTasks,
     syncTask,

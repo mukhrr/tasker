@@ -52,6 +52,7 @@ export function BulkActionsBar({
 }) {
   const [statusOpen, setStatusOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
 
   if (selectedCount === 0) return null;
 
@@ -143,29 +144,50 @@ export function BulkActionsBar({
         className="h-8 text-sm"
       />
 
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-2"
-        onClick={() =>
-          onUpdate(
-            { archived: !isArchivedView },
-            isArchivedView ? 'Restored' : 'Archived'
-          )
-        }
-      >
-        {isArchivedView ? (
-          <>
-            <ArchiveRestore className="h-3.5 w-3.5" />
-            Unarchive
-          </>
-        ) : (
-          <>
-            <Archive className="h-3.5 w-3.5" />
-            Archive
-          </>
-        )}
-      </Button>
+      {/* Archiving in bulk empties the view under the user, so it confirms
+          first — the Undo in the success toast is the second net. */}
+      {confirmingArchive ? (
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            onClick={() => {
+              setConfirmingArchive(false);
+              onUpdate(
+                { archived: !isArchivedView },
+                isArchivedView ? 'Restored' : 'Archived'
+              );
+            }}
+          >
+            {isArchivedView ? 'Unarchive' : 'Archive'} {selectedCount}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmingArchive(false)}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          onClick={() => setConfirmingArchive(true)}
+        >
+          {isArchivedView ? (
+            <>
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              Unarchive
+            </>
+          ) : (
+            <>
+              <Archive className="h-3.5 w-3.5" />
+              Archive
+            </>
+          )}
+        </Button>
+      )}
 
       {confirmingDelete ? (
         <div className="flex items-center gap-1.5">
