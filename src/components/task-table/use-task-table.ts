@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
 import { useStatuses } from '@/hooks/use-statuses';
-import { getStatusGroup } from '@/lib/status';
+import { getStatusGroup, getStaleDays } from '@/lib/status';
 import type { Task, TaskStatusGroup } from '@/types/database';
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import {
@@ -132,7 +132,9 @@ export function useTaskTable(userId: string) {
           t.note?.toLowerCase().includes(q) ||
           t.repo_owner?.toLowerCase().includes(q) ||
           t.repo_name?.toLowerCase().includes(q) ||
-          `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase().includes(q) ||
+          `${t.repo_owner}/${t.repo_name}#${t.issue_number}`
+            .toLowerCase()
+            .includes(q) ||
           `#${t.issue_number}`.includes(q)
       );
     }
@@ -166,7 +168,14 @@ export function useTaskTable(userId: string) {
     });
 
     return sorted;
-  }, [tasksCrud.tasks, statusesCrud.statuses, activeTab, search, sortConfig, filters]);
+  }, [
+    tasksCrud.tasks,
+    statusesCrud.statuses,
+    activeTab,
+    search,
+    sortConfig,
+    filters,
+  ]);
 
   // ── Bulk selection ──────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -220,7 +229,9 @@ export function useTaskTable(userId: string) {
       // timer reset.
       const fields = Object.keys(updates) as (keyof Task)[];
       const restoreFields =
-        'status' in updates ? [...fields, 'status_changed_at' as const] : fields;
+        'status' in updates
+          ? [...fields, 'status_changed_at' as const]
+          : fields;
       const targeted = new Set(ids);
       const snapshots = tasksCrud.tasks
         .filter((t) => targeted.has(t.id))
@@ -360,9 +371,14 @@ export function useTaskTable(userId: string) {
 
   const handleResetStaleTimer = useCallback(
     async (id: string) => {
+      // Read the window before the write, since resetStaleTimer mutates in place.
+      // An unknown key falls back to the default window.
+      const days = getStaleDays(
+        tasksCrud.tasks.find((t) => t.id === id)?.status ?? ''
+      );
       try {
         await tasksCrud.resetStaleTimer(id);
-        toast.success('Highlight cleared — 3-day timer reset');
+        toast.success(`Highlight cleared — ${days}-day timer reset`);
       } catch {
         toast.error('Failed to clear highlight');
       }

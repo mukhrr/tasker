@@ -10,16 +10,22 @@ const supabase = createClient();
 // Minimal row shape the hook needs: realtime merge (id) + repo/issue dedup keys.
 type TaskListItem = Pick<
   Task,
-  'id' | 'issue_url' | 'repo_owner' | 'repo_name' | 'issue_number' | 'created_at'
+  | 'id'
+  | 'issue_url'
+  | 'repo_owner'
+  | 'repo_name'
+  | 'issue_number'
+  | 'created_at'
 >;
 
 // Deduplicate by repo+issue number (keep the first — most recent by created_at)
 export function dedupeTasks<T extends TaskListItem>(rows: T[]): T[] {
   const seen = new Set<string>();
   return rows.filter((t) => {
-    const key = t.repo_owner && t.repo_name && t.issue_number
-      ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
-      : t.issue_url.toLowerCase();
+    const key =
+      t.repo_owner && t.repo_name && t.issue_number
+        ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
+        : t.issue_url.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -47,7 +53,7 @@ export function useTasks<T extends TaskListItem = Task>(
       .order('created_at', { ascending: false });
 
     // Rows match T because `columns` covers it (or is '*'); the client is untyped
-    setTasks(dedupeTasks(((data as unknown as T[]) ?? [])));
+    setTasks(dedupeTasks((data as unknown as T[]) ?? []));
     setLoading(false);
   }, [userId, columns]);
 
@@ -271,7 +277,10 @@ export function useTasks<T extends TaskListItem = Task>(
     }
 
     for (const { values, ids } of groups.values()) {
-      const { error } = await supabase.from('tasks').update(values).in('id', ids);
+      const { error } = await supabase
+        .from('tasks')
+        .update(values)
+        .in('id', ids);
       if (error) {
         await fetchTasks();
         throw error;
@@ -301,11 +310,12 @@ export function useTasks<T extends TaskListItem = Task>(
     }
   };
 
-  // Clears the stale-row highlight by restarting the 3-day timer that drives it
-  // (getStaleRowBg colors a row once status_changed_at is 3+ days old). Writing
-  // "now" is the same thing a real status change writes, so the row un-highlights
-  // immediately and highlights again in 3 days if the status still hasn't moved —
-  // this acknowledges the nag, it doesn't disable it.
+  // Clears the stale-row highlight by restarting the timer that drives it
+  // (getStaleRowBg colors a row once status_changed_at is older than that
+  // status's window — 3 days by default, 7 for awaiting_payment). Writing "now"
+  // is the same thing a real status change writes, so the row un-highlights
+  // immediately and highlights again a window later if the status still hasn't
+  // moved — this acknowledges the nag, it doesn't disable it.
   const resetStaleTimer = async (id: string) => {
     const status_changed_at = new Date().toISOString();
     setTasks((prev) =>

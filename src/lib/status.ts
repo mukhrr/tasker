@@ -70,9 +70,25 @@ export function getStatusColor(colorName: string): StatusColorConfig {
   return STATUS_COLORS[colorName] ?? STATUS_COLORS.gray;
 }
 
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Returns a row background class if status hasn't changed for 3+ days */
+const DEFAULT_STALE_DAYS = 3;
+
+/**
+ * Statuses where sitting still is expected for longer than the default, so
+ * highlighting at 3 days would just be noise. Payouts routinely take about a
+ * week, so awaiting_payment only counts as stale after 7.
+ */
+const STALE_DAYS_BY_STATUS: Record<string, number> = {
+  awaiting_payment: 7,
+};
+
+/** Days a status may sit unchanged before its row gets highlighted. */
+export function getStaleDays(statusKey: string): number {
+  return STALE_DAYS_BY_STATUS[statusKey] ?? DEFAULT_STALE_DAYS;
+}
+
+/** Returns a row background class if status hasn't changed for its stale window */
 export function getStaleRowBg(
   statuses: UserStatus[],
   statusKey: string,
@@ -80,7 +96,7 @@ export function getStaleRowBg(
 ): string {
   if (!statusChangedAt) return '';
   const elapsed = Date.now() - new Date(statusChangedAt).getTime();
-  if (elapsed < THREE_DAYS_MS) return '';
+  if (elapsed < getStaleDays(statusKey) * DAY_MS) return '';
   const status = getStatusByKey(statuses, statusKey);
   if (!status) return '';
   return getStatusColor(status.color).rowBg;
