@@ -564,6 +564,18 @@ export class StatusWidget {
     return this.mode === 'issue';
   }
 
+  /**
+   * Reason text when the analyzer's review gate dropped this proposal as a
+   * MelvinBot duplicate, else null. Keyed off the marker the daemon writes into
+   * last_error (analyzer.mjs MELVIN_DUP_PREFIX).
+   */
+  private melvinDuplicateReason(): string | null {
+    const err = this.proposal?.last_error ?? '';
+    const prefix = 'melvin-duplicate:';
+    if (!err.toLowerCase().startsWith(prefix)) return null;
+    return err.slice(prefix.length).trim() || 'Same root cause and fix.';
+  }
+
   private renderProposalPanel(): void {
     if (!this.isProposalPanelEligible()) return;
 
@@ -685,6 +697,20 @@ export class StatusWidget {
       section.appendChild(body);
       this.root.appendChild(section);
       return;
+    }
+
+    // The review gate disarmed this one as a copy of MelvinBot's proposal. Say
+    // so — otherwise a draft that silently stopped being armed reads as a bug.
+    const dupReason = this.melvinDuplicateReason();
+    if (dupReason) {
+      const dup = document.createElement('div');
+      dup.className = 'proposal-notice dup';
+      dup.innerHTML = `
+        <div><strong>🗑️ Cleared — same fix as MelvinBot's</strong></div>
+        <div class="proposal-status-sub">${this.escapeHtml(dupReason)}</div>
+        <div class="proposal-status-sub">Not armed, so it won't be posted. Arm it anyway if you disagree.</div>
+      `;
+      body.appendChild(dup);
     }
 
     // Run Auto-pilot — hand the whole draft→validate→arm→post flow to the
@@ -1732,6 +1758,17 @@ export class StatusWidget {
         background: #21262d;
         color: #8b949e;
         border: 1px solid #3d444d;
+      }
+      .proposal-notice.dup {
+        background: #fff8c5;
+        color: #7d4e00;
+        border: 1px solid #d4a72c66;
+        margin-bottom: 6px;
+      }
+      .tasker-root.dark .proposal-notice.dup {
+        background: #2d2611;
+        color: #d29922;
+        border: 1px solid #d2992244;
       }
 
       .proposal-status.posted {

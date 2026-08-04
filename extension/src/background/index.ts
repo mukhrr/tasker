@@ -597,7 +597,7 @@ async function handleSaveProposal(owner: string, repo: string, number: number, b
   // changes after Help Wanted fires are too late and would cause confusion.
   const { data: existing } = await supabase
     .from('proposals')
-    .select('id, state')
+    .select('id, state, last_error')
     .eq('user_id', session.session.user.id)
     .ilike('repo_owner', owner)
     .ilike('repo_name', repo)
@@ -621,6 +621,12 @@ async function handleSaveProposal(owner: string, repo: string, number: number, b
         issue_number: number,
         body,
         state: existing?.state === 'armed' ? 'armed' : 'draft',
+        // A hand-edited body is no longer the text the review gate judged, so
+        // retire the Melvin-duplicate marker (and its badge) along with it.
+        // Other last_error values are left alone.
+        ...(existing?.last_error?.toLowerCase().startsWith('melvin-duplicate:')
+          ? { last_error: null }
+          : {}),
       },
       { onConflict: 'user_id,repo_owner,repo_name,issue_number' }
     )

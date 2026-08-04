@@ -982,15 +982,25 @@ async function claimNextReview() {
   }
 }
 
-async function deleteDuplicate(id) {
-  // A Melvin-dup has no value — clear it from the DB entirely (like the
-  // extension's "Clear draft"), rather than leaving a dead draft row.
-  // State-guarded to `armed`: never delete a proposal the sniper already moved
-  // to posting/posted. Safe against re-drafting: dups are reviewed inside the
-  // 24h window, so the issue is still on the sniper's seeded recent page and
-  // won't be re-queued.
+// Marker prefix on last_error identifying a proposal the review gate dropped as
+// a MelvinBot duplicate. The extension keys its badge off this exact string.
+const MELVIN_DUP_PREFIX = 'melvin-duplicate:';
+
+async function markDuplicate(id, reason) {
+  // Disarm the dup rather than deleting it. Deleting left the widget in its
+  // pristine "no proposal yet" state, which is indistinguishable from the
+  // drafter never having run — the user couldn't tell a dropped duplicate from
+  // a broken pipeline. Keeping the row (body intact) lets the widget say why it
+  // was dropped, and lets the user re-arm by hand if the verdict was wrong.
+  // State-guarded to `armed`: never touch a proposal the sniper already moved
+  // to posting/posted. Keeping the row also blocks re-drafting outright, since
+  // the sniper's enqueue is insert-if-absent.
   const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' });
-  const rows = await supabaseRequest(`proposals?${q}`, { method: 'DELETE', prefer: 'return=representation' });
+  const rows = await supabaseRequest(`proposals?${q}`, {
+    method: 'PATCH',
+    body: { state: 'draft', last_error: `${MELVIN_DUP_PREFIX} ${reason}`.trim() },
+    prefer: 'return=representation',
+  });
   return Array.isArray(rows) && rows.length > 0;
 }
 
@@ -1051,14 +1061,15 @@ async function processReview(proposal) {
   const { verdict, reason } = parseReview(finalText);
 
   if (verdict === 'DUPLICATE') {
-    if (await deleteDuplicate(proposal.id)) {
-      log(`🗑️  #${n} cleared from DB — duplicate of MelvinBot: ${reason}`);
+    if (await markDuplicate(proposal.id, reason)) {
+      log(`🗑️  #${n} disarmed — duplicate of MelvinBot: ${reason}`);
       await notify(
         `🗑️ Proposal cleared — same as MelvinBot's\n` +
           `${REPO}#${n}${title}\n` +
           `${issueUrl}\n\n` +
           `Why: ${reason}\n` +
-          `Removed from Tasker — no point competing with an identical proposal.`,
+          `Disarmed, so it won't be posted — no point competing with an identical proposal. ` +
+          `The draft is still on the issue in Tasker if you disagree.`,
       );
     } else {
       log(`#${n} dup verdict but no longer armed (posted/changed) — left as-is`);
