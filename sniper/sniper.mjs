@@ -1419,7 +1419,16 @@ async function fire(n, issue, via, ctx) {
       );
     }
     if (POST_MORTEM_DELAY_MS > 0) {
-      setTimeout(() => void racePostMortem(n, data.id), POST_MORTEM_DELAY_MS);
+      // Carry the fire-time measurements forward. Without them the post-mortem
+      // could only guess at what made us late, and it guessed wrong — see the
+      // attribution block in racePostMortem.
+      const timing = {
+        detectDateMs: ctx && Number.isFinite(ctx.detectDateMs) ? ctx.detectDateMs : NaN,
+        claimMs: typeof claimMs === 'number' ? claimMs : NaN,
+        postMs,
+        hotPathMs,
+      };
+      setTimeout(() => void racePostMortem(n, data.id, timing), POST_MORTEM_DELAY_MS);
     }
     // The Telegram ping races the Supabase bookkeeping instead of waiting
     // behind it — the user rushing in to edit the placeholder gets the URL
@@ -1504,7 +1513,7 @@ function parseLinkHeader(link) {
   return rels;
 }
 
-async function racePostMortem(n, commentId) {
+async function racePostMortem(n, commentId, timing = {}) {
   try {
     const first = await gh(`/repos/${REPO}/issues/${n}/timeline?per_page=100`);
     if (first.status !== 200 || !Array.isArray(first.data)) {
@@ -1555,11 +1564,31 @@ async function racePostMortem(n, commentId) {
     const aheadList = ahead
       .map((c) => `${c.user?.login || '?'} +${Math.round((Date.parse(c.created_at) - hwMs) / 1000)}s`)
       .join(', ');
+    // Attribute a slow race to whichever stage actually cost the most, using the
+    // fire-time measurements. This used to be a fixed string keyed only on
+    // deltaS that blamed detection and explicitly cleared the POST — on #97930
+    // it printed "not slow POST" when post=1823ms was the largest single cost
+    // of a 2514ms hot path, pointing at the wrong thing entirely.
+    let attribution = '';
+    if (deltaS >= 2) {
+      const stages = [
+        ['detection', Number.isFinite(timing.detectDateMs) ? timing.detectDateMs - hwMs : NaN],
+        ['claim', timing.claimMs],
+        ['POST', timing.postMs],
+      ].filter(([, ms]) => Number.isFinite(ms) && ms >= 0);
+      if (stages.length) {
+        const worst = stages.reduce((a, b) => (b[1] > a[1] ? b : a));
+        const detail = stages.map(([k, ms]) => `${k}=${Math.round(ms)}ms`).join(' ');
+        attribution = ` ⚠️ ≥2s after HW — ${worst[0]} dominated (${detail})`;
+      } else {
+        attribution = ' ⚠️ ≥2s after HW — no fire-time timings available';
+      }
+    }
     const report =
       `🔬 #${n} race: "${TRIGGER_NAME}" @ ${hw.created_at} → own comment +${deltaS}s, ` +
       `position ${ahead.length + 1}/${postHw.length + 1} post-HW` +
       (sameSecond ? ' ⚠️ same second as the label — may render above it' : '') +
-      (deltaS >= 2 ? ' ⚠️ ≥2s after HW — likely late detection/anchor, not slow POST' : '') +
+      attribution +
       (ahead.length ? ` — ahead: ${aheadList}` : '');
     log(report);
     await notify(report, { level: 'verbose' }); // still in the Railway logs; Telegram only when TELEGRAM_VERBOSE

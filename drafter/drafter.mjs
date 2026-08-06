@@ -374,7 +374,13 @@ async function runCodex(prompt, { threadName, marker, model = CODEX_MODEL, timeo
   // (it assigns an auto-incrementing name), but we read the real id back either
   // way, so this just helps if a future Codex honors it.
   if (threadName) args.push('-c', `thread_name=${JSON.stringify(threadName)}`);
-  args.push(prompt);
+  // Feed the prompt over stdin ('-'), never as an argv element. Linux caps a
+  // single argument at MAX_ARG_STRLEN (128 KiB), so a busy issue used to fail
+  // the spawn outright with E2BIG: #96956 built a 155 KB prompt from 15
+  // comments and crash-looped every 30 min for a day, re-queued by the stale
+  // sweeper each time. `codex exec` reads instructions from stdin when the
+  // prompt is `-`, which has no size limit.
+  args.push('-');
 
   // Snapshot session ids so this run's session can be identified afterwards even
   // with other codex runs in flight (see rolloutFiles).
@@ -383,6 +389,7 @@ async function runCodex(prompt, { threadName, marker, model = CODEX_MODEL, timeo
     env: codexSubprocessEnv(),
     timeoutMs,
     outFile,
+    input: prompt,
   });
 
   // Prefer the proposal Codex wrote to --output-last-message. Codex finishes the
@@ -430,14 +437,21 @@ async function runCodex(prompt, { threadName, marker, model = CODEX_MODEL, timeo
 // it would sit until CODEX_TIMEOUT_MS, get SIGKILLed, and the finished draft would
 // be discarded as a "timeout". Once the output file is non-empty we let it flush
 // briefly, then kill the process and resolve — the caller reads the file.
-function runCodexProcess(cmd, args, { env, timeoutMs, outFile } = {}) {
+function runCodexProcess(cmd, args, { env, timeoutMs, outFile, input } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       // env is a complete, pre-scrubbed environment (see codexSubprocessEnv) — do
       // NOT merge process.env back in, or the secrets we removed would return.
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (input != null) {
+      // The watcher below kills Codex the moment the proposal file lands, which
+      // can happen while stdin is still draining — swallow the resulting EPIPE
+      // rather than letting an unhandled 'error' take down the drafter.
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -551,12 +565,35 @@ async function claimQueued(row) {
   return updateProposal(row.id, { state: 'drafting' }, { requireState: 'queued' });
 }
 
+// Comment budget. stdin removed the hard E2BIG ceiling, but an unbounded prompt
+// is still bad input: #96956's 15 comments ran to 154 KB, nearly all of it rival
+// proposals, which crowds the model's context and invites copying them. Oldest
+// first, so MelvinBot's proposal (the one worth beating) always survives.
+const COMMENT_CHAR_CAP = 6_000; // per comment
+const COMMENTS_CHAR_BUDGET = 48_000; // across all of them
+
+function renderComments(comments) {
+  const parts = [];
+  let spent = 0;
+  for (const c of (comments || []).slice(0, 20)) {
+    if (spent >= COMMENTS_CHAR_BUDGET) {
+      parts.push(`--- (${(comments.length - parts.length)} further comment(s) omitted) ---`);
+      break;
+    }
+    const raw = c.body || '';
+    const clipped =
+      raw.length > COMMENT_CHAR_CAP
+        ? `${raw.slice(0, COMMENT_CHAR_CAP)}\n… (comment truncated, ${raw.length - COMMENT_CHAR_CAP} chars omitted)`
+        : raw;
+    parts.push(`--- comment by ${c.user?.login || '?'} ---\n${clipped}`);
+    spent += clipped.length;
+  }
+  return parts.join('\n\n');
+}
+
 async function buildDraftPrompt(issue, comments) {
   const template = await readFile(DRAFT_PROMPT_FILE, 'utf8');
-  const commentText = (comments || [])
-    .slice(0, 20)
-    .map((c) => `--- comment by ${c.user?.login || '?'} ---\n${c.body || ''}`)
-    .join('\n\n');
+  const commentText = renderComments(comments);
   const issueBlock =
     `Issue #${issue.number}: ${issue.title}\n\n${issue.body || '(no description)'}\n` +
     (commentText ? `\n### Existing comments\n\n${commentText}\n` : '');
