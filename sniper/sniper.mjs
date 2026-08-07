@@ -167,13 +167,15 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
 const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
-// Retire proposals that have sat armed this long without Help Wanted. They are
-// the dominant Supabase egress cost: the armed set is re-synced every second and
-// never shrank, so 60 of 79 rows were >7 days old and the sync alone ran at
-// ~46 GB/month against a 5 GB quota. HW-reach is ~11%, so a week-old armed
-// proposal is overwhelmingly one that will never fire. Set 0 to disable.
-const ARMED_EXPIRY_DAYS = int('ARMED_EXPIRY_DAYS', 7);
-const ARMED_EXPIRY_SWEEP_MS = int('ARMED_EXPIRY_SWEEP_MS', 600_000); // 10 min
+// A proposal stays armed until its issue is genuinely dead — closed, or moved
+// to `Internal` (Expensify staff work, so Help Wanted will never come). Age is
+// NOT a reason to disarm: an issue can sit open and eligible for months and
+// still open to contributors. An earlier 7-day cutoff retired 26 hand-written
+// proposals that were still perfectly live, which is exactly the wrong trade.
+const DEAD_LABEL = (process.env.LABEL_DEAD || 'Internal').toLowerCase();
+// The open/Internal check is per-proposal and cached; re-run it this often so a
+// proposal armed weeks ago still notices its issue closing or turning Internal.
+const REVALIDATE_MS = int('REVALIDATE_MS', 6 * 3600_000); // 6h
 const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
 const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
@@ -185,7 +187,7 @@ const tracked = new Map(); // n -> { mode:'slow'|'tight', isWatch, tightUntil, i
 const etags = new Map(); // request key -> last ETag (for conditional GETs)
 const bodies = new Map(); // issue number -> Promise<string>; keeps disk I/O off the fire path
 const cloudProposals = new Map(); // issue number -> armed Supabase proposal
-const validatedCloudProposalIds = new Set(); // GitHub-open check, once per armed lifecycle
+const validatedCloudProposalIds = new Map(); // proposal id -> last GitHub open/Internal check (ms)
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
@@ -198,7 +200,6 @@ const speculativeClaimTried = new Set(); // issues already speculatively claimed
 const hwEventAnchors = new Map(); // issue -> real HW labeled-event ms, pre-fetched during the tight window
 const hwAnchorPolling = new Set(); // issues with an active anchor poll (dedupe)
 let lastStaleRecoveryAt = 0;
-let lastArmedExpiryAt = 0;
 let backoffUntil = 0;
 const requestTimes = []; // GitHub request timestamps within the last 60s (budget window)
 let clockLB = null; // { localMs, serverMs } — lower bound on GitHub's clock
@@ -529,35 +530,6 @@ async function syncArmedProposals() {
     }
   }
 
-  // Retire long-dead armed proposals. Dropped to `draft`, never deleted: the
-  // Codex body survives and the extension can re-arm if the issue does open
-  // later. Filtered on `updated_at` (trigger-maintained), so re-arming or
-  // editing a proposal restarts its clock rather than expiring it immediately.
-  if (ARMED_EXPIRY_DAYS > 0 && Date.now() - lastArmedExpiryAt > ARMED_EXPIRY_SWEEP_MS) {
-    lastArmedExpiryAt = Date.now();
-    const cutoff = new Date(Date.now() - ARMED_EXPIRY_DAYS * 86_400_000).toISOString();
-    const expiryQuery = new URLSearchParams({
-      user_id: `eq.${SUPABASE_USER_ID}`,
-      state: 'eq.armed',
-      updated_at: `lt.${cutoff}`,
-      select: 'issue_number',
-    });
-    const expired = await supabaseRequest(`proposals?${expiryQuery}`, {
-      method: 'PATCH',
-      body: {
-        state: 'draft',
-        last_error: `Auto-disarmed: armed ${ARMED_EXPIRY_DAYS}+ days without "${TRIGGER_NAME}".`,
-      },
-      prefer: 'return=representation',
-    });
-    if (Array.isArray(expired) && expired.length > 0) {
-      log(
-        `🗄️  disarmed ${expired.length} proposal(s) armed >${ARMED_EXPIRY_DAYS}d: ` +
-          expired.slice(0, 10).map((r) => `#${r.issue_number}`).join(', ') +
-          (expired.length > 10 ? `, +${expired.length - 10} more` : ''),
-      );
-    }
-  }
 
   const settingsQuery = new URLSearchParams({
     select: 'proposal_auto_post,autopilot_enabled,watched_label_groups,excluded_labels',
@@ -621,7 +593,10 @@ async function syncArmedProposals() {
     if (!body) continue;
     proposal.body = body; // downstream (claim, fire) reads it off the cached row
 
-    if (!validatedCloudProposalIds.has(proposal.id)) {
+    // Re-check periodically, not once per lifecycle: a proposal can stay armed
+    // for months, and the issue under it can close or turn Internal at any point.
+    const validatedAt = validatedCloudProposalIds.get(proposal.id) || 0;
+    if (Date.now() - validatedAt > REVALIDATE_MS) {
       const retry = cloudValidationBackoff.get(proposal.id);
       if (retry && Date.now() < retry.retryAt) continue;
 
@@ -654,7 +629,20 @@ async function syncArmedProposals() {
         log(`🚫 #${n} is closed — auto-disarmed`);
         continue;
       }
-      validatedCloudProposalIds.add(proposal.id);
+      // `Internal` means Expensify staff took it: Help Wanted is never coming,
+      // so the proposal can never fire no matter how long it waits armed.
+      const labelNames = (data.labels || []).map((l) =>
+        (typeof l === 'string' ? l : l?.name || '').toLowerCase(),
+      );
+      if (labelNames.includes(DEAD_LABEL)) {
+        await updateCloudProposal(proposal.id, {
+          state: 'draft',
+          last_error: `Auto-disarmed because the issue was labelled "${process.env.LABEL_DEAD || 'Internal'}".`,
+        });
+        log(`🚫 #${n} is ${process.env.LABEL_DEAD || 'Internal'} — auto-disarmed`);
+        continue;
+      }
+      validatedCloudProposalIds.set(proposal.id, Date.now());
     }
 
     armedNow.add(n);
