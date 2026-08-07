@@ -167,6 +167,13 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
 const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
+// Retire proposals that have sat armed this long without Help Wanted. They are
+// the dominant Supabase egress cost: the armed set is re-synced every second and
+// never shrank, so 60 of 79 rows were >7 days old and the sync alone ran at
+// ~46 GB/month against a 5 GB quota. HW-reach is ~11%, so a week-old armed
+// proposal is overwhelmingly one that will never fire. Set 0 to disable.
+const ARMED_EXPIRY_DAYS = int('ARMED_EXPIRY_DAYS', 7);
+const ARMED_EXPIRY_SWEEP_MS = int('ARMED_EXPIRY_SWEEP_MS', 600_000); // 10 min
 const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
 const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
@@ -191,6 +198,7 @@ const speculativeClaimTried = new Set(); // issues already speculatively claimed
 const hwEventAnchors = new Map(); // issue -> real HW labeled-event ms, pre-fetched during the tight window
 const hwAnchorPolling = new Set(); // issues with an active anchor poll (dedupe)
 let lastStaleRecoveryAt = 0;
+let lastArmedExpiryAt = 0;
 let backoffUntil = 0;
 const requestTimes = []; // GitHub request timestamps within the last 60s (budget window)
 let clockLB = null; // { localMs, serverMs } — lower bound on GitHub's clock
@@ -521,6 +529,36 @@ async function syncArmedProposals() {
     }
   }
 
+  // Retire long-dead armed proposals. Dropped to `draft`, never deleted: the
+  // Codex body survives and the extension can re-arm if the issue does open
+  // later. Filtered on `updated_at` (trigger-maintained), so re-arming or
+  // editing a proposal restarts its clock rather than expiring it immediately.
+  if (ARMED_EXPIRY_DAYS > 0 && Date.now() - lastArmedExpiryAt > ARMED_EXPIRY_SWEEP_MS) {
+    lastArmedExpiryAt = Date.now();
+    const cutoff = new Date(Date.now() - ARMED_EXPIRY_DAYS * 86_400_000).toISOString();
+    const expiryQuery = new URLSearchParams({
+      user_id: `eq.${SUPABASE_USER_ID}`,
+      state: 'eq.armed',
+      updated_at: `lt.${cutoff}`,
+      select: 'issue_number',
+    });
+    const expired = await supabaseRequest(`proposals?${expiryQuery}`, {
+      method: 'PATCH',
+      body: {
+        state: 'draft',
+        last_error: `Auto-disarmed: armed ${ARMED_EXPIRY_DAYS}+ days without "${TRIGGER_NAME}".`,
+      },
+      prefer: 'return=representation',
+    });
+    if (Array.isArray(expired) && expired.length > 0) {
+      log(
+        `🗄️  disarmed ${expired.length} proposal(s) armed >${ARMED_EXPIRY_DAYS}d: ` +
+          expired.slice(0, 10).map((r) => `#${r.issue_number}`).join(', ') +
+          (expired.length > 10 ? `, +${expired.length - 10} more` : ''),
+      );
+    }
+  }
+
   const settingsQuery = new URLSearchParams({
     select: 'proposal_auto_post,autopilot_enabled,watched_label_groups,excluded_labels',
     id: `eq.${SUPABASE_USER_ID}`,
@@ -551,7 +589,11 @@ async function syncArmedProposals() {
     // every armed body on this 1s tick was the dominant Supabase egress cost.
     // The body is fetched lazily below only when a row is new or its updated_at
     // (trigger-maintained) changes.
-    select: 'id,user_id,repo_owner,repo_name,issue_number,state,updated_at',
+    // Only the three columns anything downstream actually reads. user_id,
+    // repo_owner, repo_name and state are all constants in the filters below —
+    // echoing them back on every row halved this payload for nothing (17.8 KB →
+    // 9.3 KB per sync, at one sync per second).
+    select: 'id,issue_number,updated_at',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${owner}`,
     repo_name: `ilike.${repo}`,
