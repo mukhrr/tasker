@@ -187,6 +187,7 @@ const consumedLockEvents = new Map(); // issue number -> External event timestam
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
 const preClaimed = new Set(); // issues whose armed→posting claim already happened at lock time
 const preClaimPromises = new Map(); // issue -> in-flight pre-claim; fire() awaits instead of racing it
+const speculativeClaimTried = new Set(); // issues already speculatively claimed on an HW sighting (one shot each)
 const hwEventAnchors = new Map(); // issue -> real HW labeled-event ms, pre-fetched during the tight window
 const hwAnchorPolling = new Set(); // issues with an active anchor poll (dedupe)
 let lastStaleRecoveryAt = 0;
@@ -631,6 +632,9 @@ async function syncArmedProposals() {
       cloudValidationBackoff.delete(previous.id);
     }
     cloudProposals.delete(n);
+    // Forget the one-shot speculation marker too, so a proposal that is
+    // disarmed and later re-armed gets its pre-claim optimization back.
+    speculativeClaimTried.delete(n);
     const st = tracked.get(n);
     if (st?.source === 'cloud') tracked.delete(n);
     if (!WATCH.includes(n)) bodies.delete(n);
@@ -1000,9 +1004,30 @@ async function discoverTick() {
         const proposal = cloudProposals.get(n);
         const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
         const after = Number.isFinite(armedAt) ? armedAt : START;
+        // Claim speculatively, overlapping the confirmation round-trip below.
+        // The claim crosses Virginia→Mumbai (~690ms measured) and is only free
+        // when it hides behind the boundary wait — but a late detection leaves
+        // wait=0, putting the whole 690ms in the race (#97930). The lock-time
+        // pre-claim that used to cover this is dead in the Melvin flow, where
+        // Help Wanted trails `External` by hours instead of ~1s.
+        //
+        // One shot per issue: a falsy confirmation means the label predates our
+        // arm, so no future HW event exists to catch and re-speculating on every
+        // comment would just churn the row through `posting`.
+        const speculate =
+          !DRY_RUN && cloudProposals.has(n) && !speculativeClaimTried.has(n) && !preClaimed.has(n);
+        if (speculate) {
+          speculativeClaimTried.add(n);
+          void preClaimCloudProposal(n);
+        }
         const hwEventMs = await getRecentLabelEvent(n, TRIGGER, after, issue.updated_at);
         if (hwEventMs) {
           void fire(n, issue, 'direct-hw-event', { hwEventMs });
+        } else if (speculate) {
+          // Not a fresh event — hand the row straight back to `armed`.
+          const pending = preClaimPromises.get(n);
+          if (pending) await pending.catch(() => {});
+          await releasePreClaim(n);
         }
       }
     }
