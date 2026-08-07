@@ -334,6 +334,23 @@ function warmFireSocket() {
   req.end();
 }
 
+// Keep that reserved socket hot at all times, not just inside a tight window.
+// warmFireSocket() is only called on a tight-window lock, and in the Melvin flow
+// Help Wanted trails `External` by hours with no tight window at all — so by
+// fire time the connection has been idle for hours and the race POST pays a full
+// TCP+TLS handshake. Measured ~665ms of avoidable cost on an otherwise identical
+// request; #98017's POST took 1346ms and dominated the whole hot path.
+// A /rate_limit ping every 15s costs ~4 req/min against a 500/min budget, and
+// each one also feeds noteRtt, sharpening the early-fire safety bound.
+const FIRE_KEEPALIVE_MS = int('FIRE_KEEPALIVE_MS', 15_000);
+function startFireKeepAlive() {
+  if (!CLOUD_MODE || FIRE_KEEPALIVE_MS <= 0) return;
+  setInterval(() => {
+    if (cloudProposals.size > 0) warmFireSocket(); // nothing armed → nothing to race
+  }, FIRE_KEEPALIVE_MS);
+  log(`🔌 fire socket keep-alive every ${FIRE_KEEPALIVE_MS}ms while proposals are armed`);
+}
+
 // POST the race comment over the dedicated warm socket. Returns gh()-shaped
 // {status, data}; the caller falls back to gh() (which owns rate-limit
 // interpretation) on transport errors and 403/429, where nothing was created.
@@ -1754,6 +1771,7 @@ function main() {
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
   if (DISCOVER || CLOUD_MODE) void discoverTick();
   if (CLOUD_MODE) void cloudSyncTick();
+  startFireKeepAlive();
 }
 
 main();
