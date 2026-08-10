@@ -853,7 +853,7 @@ async function draftWithValidation(prompt, row, { keepArmedOnFail = false } = {}
   return null;
 }
 
-async function failDraft(row, error, { terminal = false } = {}) {
+async function failDraft(row, error, { terminal = false, requireState } = {}) {
   const n = row.issue_number;
   const attempts = (row.draft_attempts || 0) + 1;
   if (terminal || attempts >= MAX_DRAFT_ATTEMPTS) {
@@ -861,7 +861,7 @@ async function failDraft(row, error, { terminal = false } = {}) {
       state: 'draft',
       last_error: `${terminal ? 'Auto-draft stopped' : `Auto-draft failed ${attempts}×`}: ${error}`.slice(0, 300),
       draft_attempts: attempts,
-    });
+    }, { requireState });
     log(`❌ #${n} ${terminal ? 'terminal error' : `gave up after ${attempts} attempts`}: ${error}`);
     await notify(`❌ Auto-draft for ${REPO}#${n} stopped (${error.slice(0, 80)}); dropped to draft.`);
   } else {
@@ -869,7 +869,7 @@ async function failDraft(row, error, { terminal = false } = {}) {
       state: 'queued',
       last_error: error.slice(0, 300),
       draft_attempts: attempts,
-    });
+    }, { requireState });
     log(`↻ #${n} draft error (attempt ${attempts}), re-queued: ${error}`);
   }
 }
@@ -1148,7 +1148,22 @@ async function tick() {
   for (const row of rows) {
     draftsInFlight++;
     void draftOne(row, settings)
-      .catch((e) => log(`draft #${row.issue_number} crashed: ${e instanceof Error ? e.message : String(e)}`))
+      .catch(async (e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`draft #${row.issue_number} crashed: ${msg}`);
+        // Count it as an attempt. Errors that escape draftOne — spawn failures
+        // throw synchronously, so E2BIG never reached the paths that call
+        // failDraft — used to leave the row in `drafting` for the stale sweeper
+        // to re-queue with draft_attempts untouched, so MAX_DRAFT_ATTEMPTS could
+        // never trip and #96956 crash-looped every 30 min for a day.
+        // requireState pins it to `drafting`: a crash after the draft already
+        // armed must not drag the row back to queued.
+        try {
+          await failDraft(row, `crashed: ${msg}`, { requireState: 'drafting' });
+        } catch (inner) {
+          log(`draft #${row.issue_number} fail-bookkeeping failed: ${inner instanceof Error ? inner.message : String(inner)}`);
+        }
+      })
       .finally(() => {
         draftsInFlight--;
       });
