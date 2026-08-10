@@ -98,6 +98,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleQueryAnalysis(msg.owner, msg.repo, msg.number);
     case 'CANCEL_ANALYSIS':
       return handleCancelAnalysis(msg.owner, msg.repo, msg.number);
+    case 'UPDATE_ANALYSIS_SUMMARY':
+      return handleUpdateAnalysisSummary(msg.owner, msg.repo, msg.number, msg.summary);
     case 'SYNC_LABEL_CONFIG':
       return handleSyncLabelConfig(msg.watchedLabelGroups, msg.excludedLabels);
     case 'POST_PROPOSAL_NOW':
@@ -948,6 +950,35 @@ async function handleQueryAnalysis(
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: (data as AnalysisRequest) ?? null };
+}
+
+async function handleUpdateAnalysisSummary(
+  owner: string,
+  repo: string,
+  number: number,
+  summary: string,
+): Promise<MessageResponse<AnalysisRequest>> {
+  const validationErr = validateRepoTuple(owner, repo, number);
+  if (validationErr) return { ok: false, error: validationErr };
+  if (summary.length > 4000) return { ok: false, error: 'Summary must be 4,000 characters or fewer' };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data, error } = await supabase
+    .from('analysis_requests')
+    .update({ result_summary: summary.trim() || null })
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .eq('issue_number', number)
+    .eq('state', 'done')
+    .select()
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: 'Only completed analysis summaries can be edited' };
+  return { ok: true, data: data as AnalysisRequest };
 }
 
 // ── Proposal controls shared by the popup, manual post, and Railway worker ──

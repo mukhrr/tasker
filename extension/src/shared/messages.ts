@@ -190,6 +190,14 @@ export interface CancelAnalysisRequest {
   number: number;
 }
 
+export interface UpdateAnalysisSummaryRequest {
+  type: 'UPDATE_ANALYSIS_SUMMARY';
+  owner: string;
+  repo: string;
+  number: number;
+  summary: string;
+}
+
 // Sync the extension's watched label groups + excluded labels to Supabase so the
 // server-side sniper queues auto-drafts by the same config the user edits here.
 export interface SyncLabelConfigRequest {
@@ -253,6 +261,7 @@ export type MessageRequest =
   | RunAnalysisRequest
   | QueryAnalysisRequest
   | CancelAnalysisRequest
+  | UpdateAnalysisSummaryRequest
   | SyncLabelConfigRequest
   | PostProposalNowRequest
   | GetAutoPostRequest

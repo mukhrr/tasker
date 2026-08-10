@@ -59,6 +59,12 @@ export class StatusWidget {
   private destroyed = false;
   private analysis: AnalysisRequest | null = null;
   private analysisBusy = false;
+  private analysisEditing = false;
+  private analysisSummaryDraft = '';
+  // One-shot: focus the summary textarea when the edit is opened, not on every
+  // re-render. The proposal poll re-renders the whole widget when the row
+  // changes state underneath us, which would otherwise yank focus back mid-typing.
+  private analysisFocusPending = false;
   private analysisPollTimer: number | null = null;
   private autoPostEnabled = true;
   private autoPilotEnabled = true;
@@ -1156,10 +1162,59 @@ export class StatusWidget {
     body.appendChild(row);
 
     const line = document.createElement('div');
-    line.className = 'proposal-status-sub';
+    line.className = 'proposal-status-sub analysis-summary';
     if (st === 'done') {
-      const summary = (this.analysis?.result_summary ?? '').slice(0, 240);
-      line.textContent = `✅ ${summary || 'Analysis finished.'}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
+      if (this.analysisEditing) {
+        const textarea = document.createElement('textarea');
+        textarea.className = 'proposal-textarea analysis-summary-input';
+        textarea.rows = 4;
+        textarea.maxLength = 4000;
+        textarea.value = this.analysisSummaryDraft;
+        textarea.setAttribute('aria-label', 'Analysis summary');
+        textarea.addEventListener('input', () => { this.analysisSummaryDraft = textarea.value; });
+        line.appendChild(textarea);
+
+        const editActions = document.createElement('div');
+        editActions.className = 'proposal-actions analysis-edit-actions';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'proposal-btn primary';
+        saveBtn.textContent = this.analysisBusy ? 'Saving…' : 'Save';
+        saveBtn.disabled = this.analysisBusy;
+        saveBtn.addEventListener('click', () => void this.saveAnalysisSummary());
+        const cancelEditBtn = document.createElement('button');
+        cancelEditBtn.className = 'proposal-btn';
+        cancelEditBtn.textContent = 'Cancel';
+        cancelEditBtn.disabled = this.analysisBusy;
+        cancelEditBtn.addEventListener('click', () => {
+          this.analysisEditing = false;
+          this.render();
+        });
+        editActions.append(saveBtn, cancelEditBtn);
+        line.appendChild(editActions);
+        if (this.analysisFocusPending) {
+          this.analysisFocusPending = false;
+          queueMicrotask(() => {
+            textarea.focus();
+            textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+          });
+        }
+      } else {
+        const summaryText = document.createElement('span');
+        const summary = this.analysis?.result_summary ?? '';
+        summaryText.textContent = `✅ ${summary || 'Analysis finished.'}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
+        line.appendChild(summaryText);
+        const editBtn = document.createElement('button');
+        editBtn.className = 'analysis-edit-btn';
+        editBtn.textContent = 'Edit';
+        editBtn.title = 'Edit analysis summary';
+        editBtn.addEventListener('click', () => {
+          this.analysisSummaryDraft = summary;
+          this.analysisEditing = true;
+          this.analysisFocusPending = true;
+          this.render();
+        });
+        line.appendChild(editBtn);
+      }
     } else if (st === 'failed') {
       line.textContent = `⚠️ ${(this.analysis?.last_error ?? 'Analysis failed').slice(0, 240)}`;
     } else if (st === 'canceled') {
@@ -1198,6 +1253,28 @@ export class StatusWidget {
       this.startAnalysisPoll();
     } else {
       this.error = res.error ?? 'Could not queue analysis';
+      setTimeout(() => { this.error = null; this.render(); }, 3000);
+    }
+    this.render();
+  }
+
+  private async saveAnalysisSummary(): Promise<void> {
+    if (this.analysisBusy) return;
+    this.analysisBusy = true;
+    this.render();
+    const res = await sendMessage<AnalysisResponse>({
+      type: 'UPDATE_ANALYSIS_SUMMARY',
+      owner: this.owner,
+      repo: this.repo,
+      number: this.number,
+      summary: this.analysisSummaryDraft,
+    });
+    this.analysisBusy = false;
+    if (res.ok && res.data) {
+      this.analysis = res.data;
+      this.analysisEditing = false;
+    } else {
+      this.error = res.error ?? 'Could not save analysis summary';
       setTimeout(() => { this.error = null; this.render(); }, 3000);
     }
     this.render();
@@ -1719,6 +1796,31 @@ export class StatusWidget {
         opacity: 0.5;
         margin-top: 2px;
       }
+
+      .analysis-summary {
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+      .analysis-edit-btn {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: #58a6ff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+        margin-left: 6px;
+        padding: 0;
+      }
+      .analysis-edit-btn:hover { text-decoration: underline; }
+      .analysis-summary-input {
+        display: block;
+        margin: 0 0 6px;
+        min-height: 72px;
+        opacity: 1;
+        white-space: pre-wrap;
+      }
+      .analysis-edit-actions { margin-bottom: 0; }
 
       .proposal-notice {
         font-size: 11px;
