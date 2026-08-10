@@ -66,7 +66,10 @@ const PROMPT_FILE = path.join(HERE, 'prompts', 'analyze.md');
 // (armed → draft, so the sniper won't race them) or keeps + Telegram-flags the
 // distinct ones as worth a deep analysis. Pure text judgment — no repo work.
 // Fail-open throughout: any error/timeout leaves the proposal armed.
-const REVIEW_ENABLED = /^(1|true|yes|on)$/i.test(process.env.REVIEW_ENABLED ?? 'true');
+// Off by default: the drafter now waits until MelvinBot has posted, so Codex
+// compares against it during the draft itself and a second Claude pass would
+// re-reach the same verdict. REVIEW_ENABLED=true restores the independent check.
+const REVIEW_ENABLED = /^(1|true|yes|on)$/i.test(process.env.REVIEW_ENABLED ?? 'false');
 const REVIEW_TIMEOUT_MS = int('REVIEW_TIMEOUT_MS', 5 * 60_000);
 // How long after arming to wait for Melvin before treating "no Melvin proposal"
 // as "Melvin won't post" (→ we're the only proposal → keep + flag).
@@ -609,11 +612,19 @@ async function processRequest(req) {
           `If you ever see a magic-code prompt, the address was used before: switch to a new suffix. ` +
           `Need a second user? Use another fresh +suffix on the same mailbox.`
         : '(no TEST_ACCOUNT_EMAIL mailbox configured — auth-gated flows cannot be reproduced live; state this when falling back)';
+    // The C+ picks between us and MelvinBot, so the deep analysis needs to see
+    // what it is competing with, not just our own draft.
+    const analysisComments = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=100`);
+    const melvin = findMelvinProposal(
+      Array.isArray(analysisComments.data) ? analysisComments.data : [],
+    );
+
     const prompt = template
       .replaceAll('<<<ISSUE_NUMBER>>>', String(n))
       .replace('<<<TEST_ACCOUNT>>>', testAccount)
       .replace('<<<ISSUE>>>', `#${n}: ${issue.title}\n\n${issue.body || '(no description)'}`)
-      .replace('<<<PROPOSAL>>>', proposal?.body || '(no proposal drafted yet)');
+      .replace('<<<PROPOSAL>>>', proposal?.body || '(no proposal drafted yet)')
+      .replace('<<<MELVIN>>>', melvin || '(MelvinBot has not posted a proposal)');
 
     // json output = the same final text plus metadata — notably session_id,
     // which the widget offers as a copyable `claude --resume` command.
@@ -987,14 +998,11 @@ async function claimNextReview() {
 const MELVIN_DUP_PREFIX = 'melvin-duplicate:';
 
 async function markDuplicate(id, reason) {
-  // Disarm the dup rather than deleting it. Deleting left the widget in its
-  // pristine "no proposal yet" state, which is indistinguishable from the
-  // drafter never having run — the user couldn't tell a dropped duplicate from
-  // a broken pipeline. Keeping the row (body intact) lets the widget say why it
-  // was dropped, and lets the user re-arm by hand if the verdict was wrong.
-  // State-guarded to `armed`: never touch a proposal the sniper already moved
-  // to posting/posted. Keeping the row also blocks re-drafting outright, since
-  // the sniper's enqueue is insert-if-absent.
+  // Disarm rather than delete: deleting left the widget in its pristine "no
+  // proposal yet" state, indistinguishable from the drafter never having run.
+  // Keeping the row lets the widget explain itself and lets the user re-arm if
+  // the verdict was wrong. State-guarded to `armed` so a proposal the sniper
+  // already moved to posting/posted is never touched.
   const q = new URLSearchParams({ id: `eq.${id}`, user_id: `eq.${SUPABASE_USER_ID}`, state: 'eq.armed' });
   const rows = await supabaseRequest(`proposals?${q}`, {
     method: 'PATCH',

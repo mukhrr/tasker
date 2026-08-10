@@ -167,14 +167,12 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
 const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
-// A proposal stays armed until its issue is genuinely dead — closed, or moved
-// to `Internal` (Expensify staff work, so Help Wanted will never come). Age is
-// NOT a reason to disarm: an issue can sit open and eligible for months and
-// still open to contributors. An earlier 7-day cutoff retired 26 hand-written
-// proposals that were still perfectly live, which is exactly the wrong trade.
+// Disarm only on a dead issue — closed, or `Internal` (staff work, so Help
+// Wanted is never coming). Age alone is never a reason: an issue can sit open
+// and eligible for months.
 const DEAD_LABEL = (process.env.LABEL_DEAD || 'Internal').toLowerCase();
-// The open/Internal check is per-proposal and cached; re-run it this often so a
-// proposal armed weeks ago still notices its issue closing or turning Internal.
+// Re-run the dead-issue check this often; a proposal can stay armed for weeks
+// and its issue can die at any point.
 const REVALIDATE_MS = int('REVALIDATE_MS', 6 * 3600_000); // 6h
 const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
@@ -343,14 +341,10 @@ function warmFireSocket() {
   req.end();
 }
 
-// Keep that reserved socket hot at all times, not just inside a tight window.
-// warmFireSocket() is only called on a tight-window lock, and in the Melvin flow
-// Help Wanted trails `External` by hours with no tight window at all — so by
-// fire time the connection has been idle for hours and the race POST pays a full
-// TCP+TLS handshake. Measured ~665ms of avoidable cost on an otherwise identical
-// request; #98017's POST took 1346ms and dominated the whole hot path.
-// A /rate_limit ping every 15s costs ~4 req/min against a 500/min budget, and
-// each one also feeds noteRtt, sharpening the early-fire safety bound.
+// Keep the reserved socket hot continuously, not just inside a tight window.
+// warmFireSocket() only runs on a lock, and Help Wanted now arrives hours after
+// `External` with no lock open — so the race POST was paying a full TCP+TLS
+// handshake (~665ms measured). ~4 req/min against a 500/min budget.
 const FIRE_KEEPALIVE_MS = int('FIRE_KEEPALIVE_MS', 15_000);
 function startFireKeepAlive() {
   if (!CLOUD_MODE || FIRE_KEEPALIVE_MS <= 0) return;
@@ -561,10 +555,9 @@ async function syncArmedProposals() {
     // every armed body on this 1s tick was the dominant Supabase egress cost.
     // The body is fetched lazily below only when a row is new or its updated_at
     // (trigger-maintained) changes.
-    // Only the three columns anything downstream actually reads. user_id,
-    // repo_owner, repo_name and state are all constants in the filters below —
-    // echoing them back on every row halved this payload for nothing (17.8 KB →
-    // 9.3 KB per sync, at one sync per second).
+    // Only what downstream reads. user_id/repo_owner/repo_name/state are all
+    // constants in the filters below — echoing them per row halved the payload
+    // of a once-per-second query for nothing.
     select: 'id,issue_number,updated_at',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${owner}`,
@@ -801,11 +794,12 @@ function autoDraftEnabled() {
 // the issue if it carries ANY excluded label. Runs against the labels already
 // present on the discovery page (no extra request).
 function matchesWatchGroups(labelSet) {
-  // Draft only in the PRE-Help-Wanted window. An issue that already carries
-  // Help Wanted or External is past the point where a pre-armed draft helps the
-  // race — the sniper's job there is to post, not to start drafting. (The manual
-  // "Run Auto-pilot" button bypasses this and can still draft such issues.)
-  if (labelSet.has(TRIGGER) || labelSet.has(LOCK)) return false;
+  // Queue between `External` and Help Wanted. Waiting for External is what lets
+  // the drafter read MelvinBot's proposal (posted shortly after) and beat it in
+  // one pass; Help Wanted is too late to start drafting. "Run Auto-pilot"
+  // bypasses both checks.
+  if (labelSet.has(TRIGGER)) return false;
+  if (!labelSet.has(LOCK)) return false;
   if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
   return activeWatchGroups.some((group) => group.every((label) => labelSet.has(label)));
 }
@@ -1052,15 +1046,12 @@ async function discoverTick() {
         const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
         const after = Number.isFinite(armedAt) ? armedAt : START;
         // Claim speculatively, overlapping the confirmation round-trip below.
-        // The claim crosses Virginia→Mumbai (~690ms measured) and is only free
-        // when it hides behind the boundary wait — but a late detection leaves
-        // wait=0, putting the whole 690ms in the race (#97930). The lock-time
-        // pre-claim that used to cover this is dead in the Melvin flow, where
-        // Help Wanted trails `External` by hours instead of ~1s.
+        // The claim crosses Virginia→Mumbai (~690ms) and only hides behind the
+        // boundary wait when we detected early enough to have one.
         //
         // One shot per issue: a falsy confirmation means the label predates our
-        // arm, so no future HW event exists to catch and re-speculating on every
-        // comment would just churn the row through `posting`.
+        // arm, so no future event exists to catch, and re-speculating on every
+        // comment would churn the row through `posting`.
         const speculate =
           !DRY_RUN && cloudProposals.has(n) && !speculativeClaimTried.has(n) && !preClaimed.has(n);
         if (speculate) {
@@ -1491,9 +1482,8 @@ async function fire(n, issue, via, ctx) {
       );
     }
     if (POST_MORTEM_DELAY_MS > 0) {
-      // Carry the fire-time measurements forward. Without them the post-mortem
-      // could only guess at what made us late, and it guessed wrong — see the
-      // attribution block in racePostMortem.
+      // Carry the fire-time measurements forward; without them racePostMortem
+      // can only guess at what made us late.
       const timing = {
         detectDateMs: ctx && Number.isFinite(ctx.detectDateMs) ? ctx.detectDateMs : NaN,
         claimMs: typeof claimMs === 'number' ? claimMs : NaN,
@@ -1636,11 +1626,9 @@ async function racePostMortem(n, commentId, timing = {}) {
     const aheadList = ahead
       .map((c) => `${c.user?.login || '?'} +${Math.round((Date.parse(c.created_at) - hwMs) / 1000)}s`)
       .join(', ');
-    // Attribute a slow race to whichever stage actually cost the most, using the
-    // fire-time measurements. This used to be a fixed string keyed only on
-    // deltaS that blamed detection and explicitly cleared the POST — on #97930
-    // it printed "not slow POST" when post=1823ms was the largest single cost
-    // of a 2514ms hot path, pointing at the wrong thing entirely.
+    // Name whichever stage actually cost the most, from the fire-time
+    // measurements. A fixed string keyed only on deltaS used to blame detection
+    // and clear the POST even when the POST was the bulk of the hot path.
     let attribution = '';
     if (deltaS >= 2) {
       const stages = [

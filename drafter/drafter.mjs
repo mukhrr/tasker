@@ -71,6 +71,10 @@ const SKILL_NAME = process.env.SKILL_NAME || 'expensify-proposal-writer';
 const SKILL_DIR = path.join(CODEX_HOME, 'skills', SKILL_NAME);
 
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 12000); // 12s — the drafter isn't latency-critical; keeps Supabase egress low
+// Hold an auto-queued issue this long after `External` before drafting, so
+// MelvinBot has posted and Codex can beat it in the same pass. If Melvin hasn't
+// posted by then it never will, and the draft arms as the only proposal.
+const DRAFT_DELAY_MS = int('DRAFT_DELAY_MS', 20 * 60_000);
 // How many issues to draft at once. Codex runs are network-bound, so parallel
 // drafts compress a mass-labeling backlog's wall-clock (~4-5 min per draft
 // serially) without using more plan quota in total.
@@ -374,12 +378,9 @@ async function runCodex(prompt, { threadName, marker, model = CODEX_MODEL, timeo
   // (it assigns an auto-incrementing name), but we read the real id back either
   // way, so this just helps if a future Codex honors it.
   if (threadName) args.push('-c', `thread_name=${JSON.stringify(threadName)}`);
-  // Feed the prompt over stdin ('-'), never as an argv element. Linux caps a
-  // single argument at MAX_ARG_STRLEN (128 KiB), so a busy issue used to fail
-  // the spawn outright with E2BIG: #96956 built a 155 KB prompt from 15
-  // comments and crash-looped every 30 min for a day, re-queued by the stale
-  // sweeper each time. `codex exec` reads instructions from stdin when the
-  // prompt is `-`, which has no size limit.
+  // Prompt over stdin ('-'), never as argv: Linux caps a single argument at
+  // 128 KiB, and a busy issue blows past that (spawn fails with E2BIG before
+  // Codex even starts).
   args.push('-');
 
   // Snapshot session ids so this run's session can be identified afterwards even
@@ -565,9 +566,8 @@ async function claimQueued(row) {
   return updateProposal(row.id, { state: 'drafting' }, { requireState: 'queued' });
 }
 
-// Comment budget. stdin removed the hard E2BIG ceiling, but an unbounded prompt
-// is still bad input: #96956's 15 comments ran to 154 KB, nearly all of it rival
-// proposals, which crowds the model's context and invites copying them. Oldest
+// Comment budget. stdin lifted the hard E2BIG ceiling, but 150 KB of rival
+// proposals still crowds the model's context and invites copying them. Oldest
 // first, so MelvinBot's proposal (the one worth beating) always survives.
 const COMMENT_CHAR_CAP = 6_000; // per comment
 const COMMENTS_CHAR_BUDGET = 48_000; // across all of them
@@ -1108,10 +1108,9 @@ async function tick() {
   const slots = MAX_CONCURRENT_DRAFTS - draftsInFlight;
   if (slots <= 0) return; // all drafting slots busy — check again next poll
   const settings = await fetchSettings();
-  // The "Auto-pilot" checkbox gates AUTOMATIC drafting — the stream of issues the
-  // sniper queues off label matches. It does NOT gate an explicit per-issue "Run
-  // Auto-pilot" click, which sets force_draft: a human asking for one proposal is
-  // always honored, or the button would silently queue work nothing picks up.
+  // The Auto-pilot checkbox gates the automatic stream, not an explicit
+  // per-issue click (force_draft) — otherwise the button would silently queue
+  // work nothing ever picks up.
   const forceOnly = !settings.autoPilot;
 
   const query = new URLSearchParams({
@@ -1130,7 +1129,14 @@ async function tick() {
     order: 'created_at.desc',
     limit: String(slots),
   });
-  if (forceOnly) query.set('force_draft', 'eq.true');
+  if (forceOnly) {
+    query.set('force_draft', 'eq.true');
+  } else if (DRAFT_DELAY_MS > 0) {
+    // created_at is when the sniper saw `External`, so this is "External + delay".
+    // force_draft rows are exempt: an explicit click shouldn't wait 20 minutes.
+    const readyAt = new Date(Date.now() - DRAFT_DELAY_MS).toISOString();
+    query.set('or', `(force_draft.eq.true,created_at.lt.${readyAt})`);
+  }
   const rows = await supabaseRequest(`proposals?${query}`);
   if (!Array.isArray(rows) || rows.length === 0) return;
   if (forceOnly) {

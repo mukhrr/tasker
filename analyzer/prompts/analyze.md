@@ -199,6 +199,14 @@ root cause, what you changed (files), and any caveats.
 
 === PROPOSAL ===
 The full updated proposal markdown, or the single word UNCHANGED.
+
+**No reproduction detail in the proposal.** How you reproduced it is yours, not
+the reader's: leave out repro steps, environment/account setup, seeding or test
+data, Playwright/fast-replay scripts, screenshots of the bug, and any narration
+of what you tried. The C+ already has the repro steps — they are in the issue.
+The proposal contains only root cause, the fix, and evidence for both. Put the
+reproduction story in `=== SUMMARY ===` above, which is for the user alone and
+is never posted to GitHub.
 If the "Current proposal" section below says none exists yet, you MUST output a
 complete NEW proposal (never UNCHANGED) — it will be posted for you (immediately
 if the issue already has Help Wanted, otherwise armed to auto-post the moment
@@ -213,3 +221,12 @@ bare-URL SHA-pinned permalinks on their own lines, small illustrative diff.
 ## Current proposal
 
 <<<PROPOSAL>>>
+
+## MelvinBot's proposal (your competition)
+
+The C+ chooses between this and ours, so yours has to be visibly better. Read it
+first: if it names the same root cause, say what it missed or prove the mechanism
+it only asserts — your verified red/green is the edge it cannot have. If it is
+wrong, show why. Never restate it. If it is absent, ignore this section.
+
+<<<MELVIN>>>
