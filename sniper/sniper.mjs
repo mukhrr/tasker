@@ -167,10 +167,16 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
 const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
-// Disarm only on a dead issue — closed, or `Internal` (staff work, so Help
-// Wanted is never coming). Age alone is never a reason: an issue can sit open
-// and eligible for months.
-const DEAD_LABEL = (process.env.LABEL_DEAD || 'Internal').toLowerCase();
+// A dead issue — closed, `Internal` (staff took it), or `Awaiting Payment` (the
+// work is merged and the payout is pending). Help Wanted is never coming back,
+// so these are never queued, alerted on, or left armed. Age alone is never a
+// reason: an issue can sit open and eligible for months.
+const DEAD_LABELS = new Set(
+  (process.env.LABEL_DEAD || 'Internal,Awaiting Payment')
+    .split(',')
+    .map((l) => l.trim().toLowerCase())
+    .filter(Boolean),
+);
 // Re-run the dead-issue check this often; a proposal can stay armed for weeks
 // and its issue can die at any point.
 const REVALIDATE_MS = int('REVALIDATE_MS', 6 * 3600_000); // 6h
@@ -622,17 +628,18 @@ async function syncArmedProposals() {
         log(`🚫 #${n} is closed — auto-disarmed`);
         continue;
       }
-      // `Internal` means Expensify staff took it: Help Wanted is never coming,
-      // so the proposal can never fire no matter how long it waits armed.
+      // Help Wanted is never coming back on a dead issue, so the proposal can
+      // never fire no matter how long it waits armed.
       const labelNames = (data.labels || []).map((l) =>
         (typeof l === 'string' ? l : l?.name || '').toLowerCase(),
       );
-      if (labelNames.includes(DEAD_LABEL)) {
+      const dead = labelNames.find((l) => DEAD_LABELS.has(l));
+      if (dead) {
         await updateCloudProposal(proposal.id, {
           state: 'draft',
-          last_error: `Auto-disarmed because the issue was labelled "${process.env.LABEL_DEAD || 'Internal'}".`,
+          last_error: `Auto-disarmed because the issue was labelled "${dead}".`,
         });
-        log(`🚫 #${n} is ${process.env.LABEL_DEAD || 'Internal'} — auto-disarmed`);
+        log(`🚫 #${n} is "${dead}" — auto-disarmed`);
         continue;
       }
       validatedCloudProposalIds.set(proposal.id, Date.now());
@@ -800,6 +807,10 @@ function matchesWatchGroups(labelSet) {
   // bypasses both checks.
   if (labelSet.has(TRIGGER)) return false;
   if (!labelSet.has(LOCK)) return false;
+  // A paid-out or Internal issue keeps Bug+Daily+External and loses Help
+  // Wanted, so it matches the groups exactly like a fresh one — and a payment
+  // comment bumps it back onto the discovery page.
+  if ([...labelSet].some((l) => DEAD_LABELS.has(l))) return false;
   if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
   return activeWatchGroups.some((group) => group.every((label) => labelSet.has(label)));
 }
@@ -993,7 +1004,8 @@ async function discoverTick() {
       // never delay a lock or a fire. Armed issues are excluded: they get the
       // snipe notification instead, and their label-event memo must never be
       // consumed by the alert path.
-      if (alertingEnabled() && issueLabels.includes(TRIGGER) && !cloudProposals.has(n)) {
+      const isDead = issueLabels.some((l) => DEAD_LABELS.has(l));
+      if (alertingEnabled() && issueLabels.includes(TRIGGER) && !isDead && !cloudProposals.has(n)) {
         if (!alertSeeded) alerted.add(n);
         else if (!alerted.has(n)) alertCandidates.push(issue);
       }

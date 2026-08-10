@@ -31,6 +31,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = process.env.REPO || 'Expensify/App';
 const [REPO_OWNER, REPO_NAME] = REPO.split('/');
 const TRIGGER = (process.env.LABEL_TRIGGER || 'Help Wanted').toLowerCase();
+// Same list the sniper refuses to queue. Re-checked here because a queued row
+// waits DRAFT_DELAY_MS before drafting, and because rows queued before this
+// check existed are still sitting in the backlog.
+const DEAD_LABELS = new Set(
+  (process.env.LABEL_DEAD || 'Internal,Awaiting Payment')
+    .split(',')
+    .map((l) => l.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -627,6 +636,15 @@ async function draftOne(row, settings = { autoPost: true }) {
       last_error: 'Auto-disarmed: issue is closed.',
     });
     log(`🚫 #${n} closed — dropped to draft`);
+    return;
+  }
+  const dead = labelNames(issue.labels).find((l) => DEAD_LABELS.has(l));
+  if (dead && !claimed.force_draft) {
+    await updateProposal(claimed.id, {
+      state: 'draft',
+      last_error: `Auto-disarmed: issue is labelled "${dead}".`,
+    });
+    log(`🚫 #${n} is "${dead}" — dropped to draft`);
     return;
   }
   const { data: comments } = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=30`);
