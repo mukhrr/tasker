@@ -801,12 +801,11 @@ function autoDraftEnabled() {
 // the issue if it carries ANY excluded label. Runs against the labels already
 // present on the discovery page (no extra request).
 function matchesWatchGroups(labelSet) {
-  // Queue between `External` and Help Wanted. Waiting for External is what lets
-  // the drafter read MelvinBot's proposal (posted shortly after) and beat it in
-  // one pass; Help Wanted is too late to start drafting. "Run Auto-pilot"
-  // bypasses both checks.
+  // Queue as soon as the labels match; the drafter decides when to start. It
+  // waits for `External` (which lands right after MelvinBot posts its proposal,
+  // so it's the cheap signal that there's something to compare against) and
+  // gives up waiting after DRAFT_DELAY_MS. Help Wanted is too late to start.
   if (labelSet.has(TRIGGER)) return false;
-  if (!labelSet.has(LOCK)) return false;
   // A paid-out or Internal issue keeps Bug+Daily+External and loses Help
   // Wanted, so it matches the groups exactly like a fresh one — and a payment
   // comment bumps it back onto the discovery page.

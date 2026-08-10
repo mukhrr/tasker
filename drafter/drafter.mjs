@@ -31,6 +31,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = process.env.REPO || 'Expensify/App';
 const [REPO_OWNER, REPO_NAME] = REPO.split('/');
 const TRIGGER = (process.env.LABEL_TRIGGER || 'Help Wanted').toLowerCase();
+const LOCK = (process.env.LABEL_LOCK || 'External').toLowerCase();
 // Same list the sniper refuses to queue. Re-checked here because a queued row
 // waits DRAFT_DELAY_MS before drafting, and because rows queued before this
 // check existed are still sitting in the backlog.
@@ -80,10 +81,14 @@ const SKILL_NAME = process.env.SKILL_NAME || 'expensify-proposal-writer';
 const SKILL_DIR = path.join(CODEX_HOME, 'skills', SKILL_NAME);
 
 const POLL_INTERVAL_MS = int('POLL_INTERVAL_MS', 12000); // 12s — the drafter isn't latency-critical; keeps Supabase egress low
-// Hold an auto-queued issue this long after `External` before drafting, so
-// MelvinBot has posted and Codex can beat it in the same pass. If Melvin hasn't
-// posted by then it never will, and the draft arms as the only proposal.
-const DRAFT_DELAY_MS = int('DRAFT_DELAY_MS', 20 * 60_000);
+// The sniper queues on labels alone. Drafting starts the moment `External`
+// appears — it lands right after MelvinBot posts, so it's a free signal that
+// there's a proposal to compare against — and this is the cap on how long to
+// wait for it. Past the cap Melvin isn't coming, so draft as the only proposal.
+const DRAFT_DELAY_MS = int('DRAFT_DELAY_MS', 10 * 60_000);
+// Cap the per-tick label lookups so a mass-labeling burst can't spend the
+// GitHub budget deciding what to draft. Unchecked rows just wait a poll.
+const MAX_LABEL_CHECKS_PER_TICK = int('MAX_LABEL_CHECKS_PER_TICK', 8);
 // How many issues to draft at once. Codex runs are network-bound, so parallel
 // drafts compress a mass-labeling backlog's wall-clock (~4-5 min per draft
 // serially) without using more plan quota in total.
@@ -1118,6 +1123,33 @@ async function fetchSettings() {
   };
 }
 
+// Pick which queued rows to draft now. A row is ready once `External` is on the
+// issue, or once it has waited DRAFT_DELAY_MS without it. Newest first, so a
+// burst spends its slots on the issues whose race is still winnable.
+async function selectReady(candidates, slots) {
+  const ready = [];
+  let checks = 0;
+  for (const row of candidates) {
+    if (ready.length >= slots) break;
+    if (row.force_draft) {
+      ready.push(row); // explicit click — never waits
+      continue;
+    }
+    const waitedMs = Date.now() - Date.parse(row.created_at);
+    if (!Number.isFinite(waitedMs) || waitedMs >= DRAFT_DELAY_MS) {
+      if (DRAFT_DELAY_MS > 0) log(`⏱️  #${row.issue_number} gave up waiting for "${LOCK}" — drafting anyway`);
+      ready.push(row);
+      continue;
+    }
+    if (checks >= MAX_LABEL_CHECKS_PER_TICK) continue;
+    checks++;
+    const { status, data } = await gh(`/repos/${REPO}/issues/${row.issue_number}`);
+    if (status !== 200 || !data) continue; // unknown — let the next poll decide
+    if (labelNames(data.labels).includes(LOCK)) ready.push(row);
+  }
+  return ready;
+}
+
 async function tick() {
   if (!AUTOPILOT_ENABLED) return; // Railway master switch — idle when off
   if (Date.now() < backoffUntil) return;
@@ -1134,7 +1166,7 @@ async function tick() {
   const query = new URLSearchParams({
     // Only the columns draftOne needs — the drafter writes the body, it never
     // reads the existing one, so don't pull it across the wire on every poll.
-    select: 'id,issue_number,draft_attempts,state,origin,created_at',
+    select: 'id,issue_number,draft_attempts,state,origin,created_at,force_draft',
     user_id: `eq.${SUPABASE_USER_ID}`,
     repo_owner: `ilike.${REPO_OWNER}`,
     repo_name: `ilike.${REPO_NAME}`,
@@ -1145,21 +1177,18 @@ async function tick() {
     // its minutes either way. (Was oldest-first, which polished stale issues
     // while fresh Help Wanted windows slipped by.)
     order: 'created_at.desc',
-    limit: String(slots),
+    // Over-fetch: rows still waiting on `External` are skipped below, so the
+    // window has to be wider than the slots we're trying to fill.
+    limit: String(forceOnly ? slots : slots + MAX_LABEL_CHECKS_PER_TICK),
   });
+  if (forceOnly) query.set('force_draft', 'eq.true');
+  const candidates = await supabaseRequest(`proposals?${query}`);
+  if (!Array.isArray(candidates) || candidates.length === 0) return;
   if (forceOnly) {
-    query.set('force_draft', 'eq.true');
-  } else if (DRAFT_DELAY_MS > 0) {
-    // created_at is when the sniper saw `External`, so this is "External + delay".
-    // force_draft rows are exempt: an explicit click shouldn't wait 20 minutes.
-    const readyAt = new Date(Date.now() - DRAFT_DELAY_MS).toISOString();
-    query.set('or', `(force_draft.eq.true,created_at.lt.${readyAt})`);
+    log(`▶️  Auto-pilot off — drafting ${candidates.length} explicitly requested issue(s): ${candidates.map((r) => `#${r.issue_number}`).join(', ')}`);
   }
-  const rows = await supabaseRequest(`proposals?${query}`);
-  if (!Array.isArray(rows) || rows.length === 0) return;
-  if (forceOnly) {
-    log(`▶️  Auto-pilot off — drafting ${rows.length} explicitly requested issue(s): ${rows.map((r) => `#${r.issue_number}`).join(', ')}`);
-  }
+  const rows = forceOnly ? candidates : await selectReady(candidates, slots);
+  if (rows.length === 0) return;
   // Fire drafts without awaiting so the poll loop keeps running and can fill
   // freed slots. The queued→drafting claim is atomic (state-filtered PATCH), so
   // a row can never be drafted twice even if it were fetched twice.
@@ -1213,6 +1242,7 @@ async function main() {
       `dryRun=${DRY_RUN} enrich=${ENRICH ? 'on' : 'off'} ` +
       `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
       `concurrency=${MAX_CONCURRENT_DRAFTS} ` +
+      `wait=${DRAFT_DELAY_MS ? `${Math.round(DRAFT_DELAY_MS / 60_000)}m for "${LOCK}"` : 'off'} ` +
       `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
   );
   void wasteReport(true).catch(() => {}); // one report at boot; then hourly from the loop

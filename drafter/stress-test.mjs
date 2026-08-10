@@ -47,8 +47,14 @@ let pick = n;
 while (pick > 1 && !existsSync(path.join(dir, pick + '.md'))) pick -= 1;
 const body = readFileSync(path.join(dir, pick + '.md'), 'utf8');
 if (out) writeFileSync(out, body);
-// Capture the prompt (last positional arg) so tests can assert its wiring.
-writeFileSync(path.join(dir, 'last_prompt.txt'), argv[argv.length - 1] || '');
+// Capture the prompt so tests can assert its wiring. \`-\` means the drafter is
+// piping it on stdin, which is how it avoids Linux's 128 KiB argv cap.
+const last = argv[argv.length - 1] || '';
+let prompt = last;
+if (last === '-') {
+  try { prompt = readFileSync(0, 'utf8'); } catch { prompt = ''; }
+}
+writeFileSync(path.join(dir, 'last_prompt.txt'), prompt);
 // Record a session rollout like real Codex does — written from session start,
 // filename carries the uuid, first lines carry the prompt — so the drafter can
 // read the id back and attribute concurrent runs by issue marker.
@@ -60,7 +66,7 @@ if (home) {
   writeFileSync(
     path.join(day, 'rollout-2026-07-17T00-00-00-' + uuid + '.jsonl'),
     JSON.stringify({ type: 'session_meta', payload: { id: uuid } }) + '\\n' +
-      JSON.stringify({ type: 'user_message', text: argv[argv.length - 1] || '' }) + '\\n',
+      JSON.stringify({ type: 'user_message', text: prompt }) + '\\n',
   );
 }
 if (existsSync(path.join(dir, 'hang'))) {
@@ -215,6 +221,9 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       // flow deterministically (the interim would arm first and race their
       // "wait until armed" checks). The interim path has its own scenario.
       FAST_INTERIM_ARM: 'false',
+      // 0 disables the wait-for-External gate, so scenarios about the draft
+      // itself don't have to carry the label. The gate has its own scenarios.
+      DRAFT_DELAY_MS: '0',
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -426,6 +435,58 @@ await runScenario({
     await deadline(() => ['queued', 'drafting', 'armed'].includes(state.rows.get('r6')?.state) && state.rows.get('r6')?.last_error?.includes('stale') || state.rows.get('r6')?.state === 'armed', 5000, 'stale row not recovered');
     // and it eventually arms
     await deadline(() => state.rows.get('r6')?.state === 'armed', 5000, 'recovered row never armed');
+  },
+});
+
+// ── scenario 7: hold a queued row until `External` lands ─────────────────────
+// The sniper queues on labels alone, so a row can arrive before External. Codex
+// must not start until it can read MelvinBot's proposal, which External signals.
+await runScenario({
+  name: 'waits-for-external',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, DRAFT_DELAY_MS: '600000' },
+  issue: baseIssue({ number: 90007 }), // Bug + Daily, no External yet
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    { id: 'r7', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90007, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline, wait }) => {
+    await wait(600); // several poll cycles
+    assert.equal(state.rows.get('r7').state, 'queued', 'drafted before External landed');
+
+    state.issue.labels = [...state.issue.labels, { name: 'External' }];
+    await deadline(() => state.rows.get('r7')?.state === 'armed', 8000, 'never drafted after External landed');
+  },
+});
+
+// ── scenario 8: stop waiting once the cap passes ─────────────────────────────
+// External never came, so MelvinBot isn't going to post. Draft as the only one.
+await runScenario({
+  name: 'gives-up-waiting-for-external',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, DRAFT_DELAY_MS: '600000' },
+  issue: baseIssue({ number: 90008 }), // no External, and none coming
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    // Queued 11 minutes ago — past the 10-minute cap.
+    { id: 'r8', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90008, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-660_000), updated_at: iso(-660_000) },
+  ],
+  run: async (state, { deadline }) => {
+    await deadline(() => state.rows.get('r8')?.state === 'armed', 8000, 'row past the cap never drafted');
+  },
+});
+
+// ── scenario 9: a dead issue is dropped, not drafted ─────────────────────────
+await runScenario({
+  name: 'dead-label-dropped',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT },
+  issue: baseIssue({ number: 90010, labels: [{ name: 'Bug' }, { name: 'Daily' }, { name: 'External' }, { name: 'Awaiting Payment' }] }),
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    { id: 'r10', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90010, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline }) => {
+    await deadline(() => state.rows.get('r10')?.state === 'draft', 5000, 'paid-out issue was not dropped');
+    assert.match(state.rows.get('r10').last_error || '', /awaiting payment/i);
+    assert.equal(state.commentPosts.length, 0);
   },
 });
 

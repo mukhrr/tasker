@@ -190,9 +190,11 @@ await runScenario({
   },
 });
 
-// ── scenario 4: skip issues that already have Help Wanted / External ─────────
+// ── scenario 4: skip Help Wanted, but queue with or without External ─────────
+// The drafter, not the sniper, decides when to start: `External` present means
+// draft now, absent means wait DRAFT_DELAY_MS. Both states must reach the queue.
 await runScenario({
-  name: 'skip-help-wanted-and-external',
+  name: 'skip-help-wanted-queue-either-side-of-external',
   env: { WATCH_GROUPS: 'Bug+daily', EXCLUDE_LABELS: '' },
   issues: [{ number: 8001, title: 'seed', labels: L('Bug', 'Daily'), updated_at: iso }],
   run: async (state, { deadline, wait }) => {
@@ -200,15 +202,36 @@ await runScenario({
 
     // Matches Bug+daily but already has Help Wanted → too late, must be skipped.
     state.issues.push({ number: 8002, title: 'already HW', labels: L('Bug', 'Daily', 'Help Wanted'), updated_at: iso });
-    // Matches but already has External → skipped.
+    // External already on → queued, and the drafter starts immediately.
     state.issues.push({ number: 8003, title: 'already External', labels: L('Bug', 'Daily', 'External'), updated_at: iso });
-    // Clean pre-HW match → queued.
-    state.issues.push({ number: 8004, title: 'pre-HW', labels: L('Bug', 'Daily'), updated_at: iso });
+    // No External yet → queued, and the drafter waits for it.
+    state.issues.push({ number: 8004, title: 'pre-External', labels: L('Bug', 'Daily'), updated_at: iso });
 
-    await deadline(() => state.inserts.some((r) => r.issue_number === 8004), 2000, '#8004 (pre-HW) not queued');
+    await deadline(() => state.inserts.some((r) => r.issue_number === 8004), 2000, '#8004 (pre-External) not queued');
+    await deadline(() => state.inserts.some((r) => r.issue_number === 8003), 2000, '#8003 (has External) not queued');
     await wait(300);
     assert.ok(!state.inserts.some((r) => r.issue_number === 8002), '#8002 (has Help Wanted) wrongly queued');
-    assert.ok(!state.inserts.some((r) => r.issue_number === 8003), '#8003 (has External) wrongly queued');
+  },
+});
+
+// ── scenario 5: a dead issue is never queued ─────────────────────────────────
+// Awaiting Payment / Internal issues keep Bug+Daily+External and lose Help
+// Wanted, so they match the groups exactly like a fresh one.
+await runScenario({
+  name: 'skip-dead-labels',
+  env: { WATCH_GROUPS: 'Bug+daily', EXCLUDE_LABELS: '' },
+  issues: [{ number: 9001, title: 'seed', labels: L('Bug', 'Daily'), updated_at: iso }],
+  run: async (state, { deadline, wait }) => {
+    await wait(200); // seed
+
+    state.issues.push({ number: 9002, title: 'paid out', labels: L('Bug', 'Daily', 'External', 'Awaiting Payment'), updated_at: iso });
+    state.issues.push({ number: 9003, title: 'staff took it', labels: L('Bug', 'Daily', 'External', 'Internal'), updated_at: iso });
+    state.issues.push({ number: 9004, title: 'live', labels: L('Bug', 'Daily', 'External'), updated_at: iso });
+
+    await deadline(() => state.inserts.some((r) => r.issue_number === 9004), 2000, '#9004 (live) not queued');
+    await wait(300);
+    assert.ok(!state.inserts.some((r) => r.issue_number === 9002), '#9002 (Awaiting Payment) wrongly queued');
+    assert.ok(!state.inserts.some((r) => r.issue_number === 9003), '#9003 (Internal) wrongly queued');
   },
 });
 
