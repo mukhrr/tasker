@@ -57,7 +57,9 @@ async function runScenario({ name, env, issues, run, settings }) {
       return json(
         res,
         200,
-        state.issues.map((i) => ({ ...i, state: 'open' })),
+        // Fresh by default so the max-age gate passes; a scenario can override
+        // created_at to test a bumped old issue.
+        state.issues.map((i) => ({ created_at: new Date().toISOString(), ...i, state: 'open' })),
       );
     }
     // No tight/fire path is exercised here.
@@ -232,6 +234,29 @@ await runScenario({
     await wait(300);
     assert.ok(!state.inserts.some((r) => r.issue_number === 9002), '#9002 (Awaiting Payment) wrongly queued');
     assert.ok(!state.inserts.some((r) => r.issue_number === 9003), '#9003 (Internal) wrongly queued');
+  },
+});
+
+// ── scenario 6: a bumped old issue is not queued ─────────────────────────────
+// Help Wanted is absent both before the race and after it. An old issue back on
+// the discovery page (the Overdue bot bumps them) already had its race, so
+// drafting it is spend with no chance of a win.
+await runScenario({
+  name: 'skip-stale-issues',
+  env: { WATCH_GROUPS: 'Bug+daily', EXCLUDE_LABELS: '', MAX_ISSUE_AGE_DAYS: '7' },
+  issues: [{ number: 10001, title: 'seed', labels: L('Bug', 'Daily'), updated_at: iso }],
+  run: async (state, { deadline, wait }) => {
+    await wait(200); // seed
+
+    const daysAgo = (n) => new Date(Date.now() - n * 86_400_000).toISOString();
+    // Bumped a minute ago, but opened 40 days ago → its race is long over.
+    state.issues.push({ number: 10002, title: 'bumped old', labels: L('Bug', 'Daily', 'External'), created_at: daysAgo(40), updated_at: iso });
+    // Just opened → still ahead of Help Wanted.
+    state.issues.push({ number: 10003, title: 'fresh', labels: L('Bug', 'Daily', 'External'), created_at: daysAgo(0), updated_at: iso });
+
+    await deadline(() => state.inserts.some((r) => r.issue_number === 10003), 2000, '#10003 (fresh) not queued');
+    await wait(300);
+    assert.ok(!state.inserts.some((r) => r.issue_number === 10002), '#10002 (40 days old) wrongly queued');
   },
 });
 

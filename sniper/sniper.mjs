@@ -180,6 +180,17 @@ const DEAD_LABELS = new Set(
 // Re-run the dead-issue check this often; a proposal can stay armed for weeks
 // and its issue can die at any point.
 const REVALIDATE_MS = int('REVALIDATE_MS', 6 * 3600_000); // 6h
+// Only auto-draft an issue whose Help Wanted is still ahead of it. Absence of
+// Help Wanted reads the same before the race and after it: an old issue that
+// the Overdue bot bumped back onto the discovery page has already had Help
+// Wanted added and removed (removal is what assignment looks like), so drafting
+// it is pure Codex spend. Measured 2026-08-11: 59 of 60 sampled issues got
+// `External` within 30 minutes of creation, so the issue's own age is the same
+// signal as the label event's and costs no extra request.
+//
+// Queue-side only. This never disarms an armed proposal — age is not a reason
+// to throw away work that is already done.
+const MAX_ISSUE_AGE_MS = int('MAX_ISSUE_AGE_DAYS', 7) * 86_400_000;
 const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
 const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
@@ -800,7 +811,7 @@ function autoDraftEnabled() {
 // Extension-identical matching: AND within a group, OR across groups, and drop
 // the issue if it carries ANY excluded label. Runs against the labels already
 // present on the discovery page (no extra request).
-function matchesWatchGroups(labelSet) {
+function matchesWatchGroups(labelSet, issue) {
   // Queue as soon as the labels match; the drafter decides when to start. It
   // waits for `External` (which lands right after MelvinBot posts its proposal,
   // so it's the cheap signal that there's something to compare against) and
@@ -810,6 +821,8 @@ function matchesWatchGroups(labelSet) {
   // Wanted, so it matches the groups exactly like a fresh one — and a payment
   // comment bumps it back onto the discovery page.
   if ([...labelSet].some((l) => DEAD_LABELS.has(l))) return false;
+  const ageMs = Date.now() - Date.parse(issue?.created_at || '');
+  if (MAX_ISSUE_AGE_MS > 0 && Number.isFinite(ageMs) && ageMs > MAX_ISSUE_AGE_MS) return false;
   if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
   return activeWatchGroups.some((group) => group.every((label) => labelSet.has(label)));
 }
@@ -1013,7 +1026,7 @@ async function discoverTick() {
       // fresh worker doesn't enqueue the entire existing page; enqueue only
       // matches seen after that. Idempotent at the DB layer, so this set is just
       // an in-process fast path.
-      if (autoDraftEnabled() && matchesWatchGroups(new Set(issueLabels)) && !cloudProposals.has(n)) {
+      if (autoDraftEnabled() && matchesWatchGroups(new Set(issueLabels), issue) && !cloudProposals.has(n)) {
         if (!queueSeeded) queued.add(n);
         else if (!queued.has(n)) queueCandidates.push(issue);
       }
@@ -1770,7 +1783,8 @@ function main() {
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
       `budget=${REQUEST_BUDGET_PER_MIN}/min telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} ` +
-      `alerts=${alertingEnabled() ? 'on' : 'off'} autoDraft=${autoDraftEnabled() ? 'on' : 'off'}`
+      `alerts=${alertingEnabled() ? 'on' : 'off'} autoDraft=${autoDraftEnabled() ? 'on' : 'off'} ` +
+      `maxIssueAge=${MAX_ISSUE_AGE_MS ? `${Math.round(MAX_ISSUE_AGE_MS / 86_400_000)}d` : 'off'}`
   );
   if (ALERT_NEW_TRIGGER && !(TG_TOKEN && TG_CHAT)) {
     log(`ℹ️  instant "${TRIGGER_NAME}" alerts are idle — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable`);
