@@ -24,12 +24,13 @@ async function readBody(req) {
   return body ? JSON.parse(body) : null;
 }
 
-async function runScenario({ name, env, issues, run, settings }) {
+async function runScenario({ name, env, issues, run, settings, events }) {
   const state = {
     issues, // [{ number, labels: [{name}], updated_at }]
     inserts: [], // POST /rest/v1/proposals bodies that were accepted
     existingKeys: new Set(), // "owner/repo#number" that already have a row
     settings, // extra user_settings columns (watched_label_groups, excluded_labels)
+    events, // { "<issue number>": [{ event, label: { name } }] }
   };
 
   const server = createServer(async (req, res) => {
@@ -52,6 +53,11 @@ async function runScenario({ name, env, issues, run, settings }) {
       state.existingKeys.add(key);
       state.inserts.push(body);
       return json(res, 201, [{ ...body, id: `p-${body.issue_number}` }]);
+    }
+    // Label history, keyed by issue number; absent means "no events".
+    const evMatch = url.pathname.match(/^\/repos\/Expensify\/App\/issues\/(\d+)\/events$/);
+    if (evMatch) {
+      return json(res, 200, (state.events || {})[evMatch[1]] || []);
     }
     if (url.pathname === '/repos/Expensify/App/issues') {
       return json(
@@ -257,6 +263,36 @@ await runScenario({
     await deadline(() => state.inserts.some((r) => r.issue_number === 10003), 2000, '#10003 (fresh) not queued');
     await wait(300);
     assert.ok(!state.inserts.some((r) => r.issue_number === 10002), '#10002 (40 days old) wrongly queued');
+  },
+});
+
+// ── scenario 7: an issue that already had Help Wanted is not queued ──────────
+// Expensify strips Help Wanted on assignment, so a finished race looks exactly
+// like one that hasn't started. Only the event log tells them apart, and it
+// catches issues too young for the age gate.
+await runScenario({
+  name: 'skip-already-raced',
+  env: { WATCH_GROUPS: 'Bug+daily', EXCLUDE_LABELS: '' },
+  issues: [{ number: 11001, title: 'seed', labels: L('Bug', 'Daily'), updated_at: iso }],
+  events: {
+    // Fresh issue, but Help Wanted came and went — someone already won it.
+    11002: [
+      { event: 'labeled', label: { name: 'External' } },
+      { event: 'labeled', label: { name: 'Help Wanted' } },
+      { event: 'unlabeled', label: { name: 'Help Wanted' } },
+    ],
+    // Never opened to contributors — still winnable.
+    11003: [{ event: 'labeled', label: { name: 'External' } }],
+  },
+  run: async (state, { deadline, wait }) => {
+    await wait(200); // seed
+
+    state.issues.push({ number: 11002, title: 'already raced', labels: L('Bug', 'Daily', 'External'), updated_at: iso });
+    state.issues.push({ number: 11003, title: 'never raced', labels: L('Bug', 'Daily', 'External'), updated_at: iso });
+
+    await deadline(() => state.inserts.some((r) => r.issue_number === 11003), 2000, '#11003 (never raced) not queued');
+    await wait(300);
+    assert.ok(!state.inserts.some((r) => r.issue_number === 11002), '#11002 (already raced) wrongly queued');
   },
 });
 

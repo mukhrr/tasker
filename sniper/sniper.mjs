@@ -867,6 +867,20 @@ function applyWatchConfig(row) {
   }
 }
 
+// Has this issue ever carried the trigger label? The label list only shows the
+// present, and Expensify strips Help Wanted on assignment, so a finished race
+// and a race that hasn't started look identical. The event log distinguishes
+// them. Returns null when GitHub won't say, which the caller treats as "no".
+async function everHadTrigger(n) {
+  for (let page = 1; page <= 3; page++) {
+    const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=100&page=${page}`);
+    if (status !== 200 || !Array.isArray(data)) return null;
+    if (data.some((e) => e?.event === 'labeled' && e?.label?.name?.toLowerCase() === TRIGGER)) return true;
+    if (data.length < 100) return false;
+  }
+  return false;
+}
+
 async function enqueueForDrafting(issue) {
   const n = issue.number;
   if (queued.has(n)) return;
@@ -874,6 +888,15 @@ async function enqueueForDrafting(issue) {
   const [owner, repo] = REPO.split('/');
   const title = issue.title ? ` — ${issue.title}` : '';
   try {
+    // Terminal: history doesn't un-happen, so stay in `queued` and never
+    // re-check. A GitHub failure falls through and queues — a missed race costs
+    // more than a wasted draft.
+    const raced = await everHadTrigger(n);
+    if (raced === true) {
+      log(`⏭️  #${n} already had "${TRIGGER_NAME}" — race is over, not queueing`);
+      return;
+    }
+    if (raced === null) log(`#${n} could not read label history — queueing anyway`);
     // ignore-duplicates + on_conflict makes this idempotent against the unique
     // (user_id, repo_owner, repo_name, issue_number) constraint — a manual row
     // or a prior queue entry is never overwritten. (Without on_conflict,
