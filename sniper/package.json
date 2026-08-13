@@ -8,7 +8,7 @@
     "sniper": "./sniper.mjs"
   },
   "scripts": {
-    "start": "node sniper.mjs",
+    "start": "MALLOC_ARENA_MAX=2 node --max-old-space-size=256 sniper.mjs",
     "dry": "DRY_RUN=true node sniper.mjs",
     "stress": "node stress-test.mjs",
     "test:queue": "node queue-test.mjs"

@@ -171,6 +171,47 @@ pm2 stop sniper            # pause it
   anyway, lower `REQUEST_BUDGET_PER_MIN` and bump `TIGHT_INTERVAL_MS` to 80 and
   `DISCOVERY_INTERVAL_MS` to 1000 in `.env`, then `pm2 restart sniper`.
 
+## Moving the drafter here too (drops the Railway bill to $0)
+
+The steps above put the sniper on Always Free. The drafter can share the same box,
+which retires Railway entirely (Hobby is $5/mo plus usage; the Jul 12 - Aug 12 2026
+invoice was $19 of usage, $12.37 of it memory).
+
+Shape matters: `VM.Standard.E2.1.Micro` has 1 GB RAM, enough for the sniper alone
+but not for a Codex run over the Expensify/App checkout. You need
+`VM.Standard.A1.Flex` (ARM, Always Free, up to 4 OCPU / 24 GB). A1 often reports
+"Out of capacity"; retry over a few days or across availability domains.
+
+```bash
+# on the A1 box
+sudo apt-get install -y docker.io git && sudo usermod -aG docker ubuntu   # re-login after
+git clone <your repo> ~/tasker && cd ~/tasker/drafter
+docker build -t drafter .
+mkdir -p ~/drafter-data          # replaces the Railway volume: repo clone + CODEX_HOME
+docker run -d --name drafter --restart always \
+  --env-file ~/drafter.env -v ~/drafter-data:/data drafter
+```
+
+`~/drafter.env` is `drafter/.env.example` filled in, carrying the same values the
+Railway service uses. Two of them matter here:
+
+- `CODEX_AUTH_JSON` seeds `/data/codex/auth.json` on first boot. Codex refreshes the
+  token in place, so `~/drafter-data` must persist. Never delete it. Docker's
+  `--env-file` takes the rest of the line verbatim, so this one must be a single
+  line with no surrounding quotes, otherwise the quotes land inside auth.json and
+  every Codex run fails to authenticate.
+- `CODEX_UNSAFE_SANDBOX=true` was needed on Railway because bwrap/Landlock fails in
+  its kernel. On a plain Ubuntu VM the sandbox works, so **leave it unset** and let
+  Codex sandbox itself.
+
+`--restart always` is the Docker equivalent of the ALWAYS restart policy, so
+`IDLE_RESTART_MS` is safe to set here. It matters less once you are off Railway,
+since nothing is metering held memory on a free VM.
+
+Update with `git pull && docker build -t drafter . && docker restart drafter`.
+Losing Railway also loses push-to-deploy, so this becomes a manual step (or a cron
+that pulls and rebuilds).
+
 ## Railway watch paths
 
 Both services deploy from this monorepo, so each has a Watch Path configured

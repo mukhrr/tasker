@@ -21,4 +21,12 @@ COPY skills ./skills
 ENV DATA_DIR=/data
 ENV CODEX_HOME=/data/codex
 
-CMD ["node", "drafter.mjs"]
+# glibc parks freed memory in per-thread arenas instead of returning it, so an
+# idle container keeps whatever a Codex draft peaked at. Two arenas is enough for
+# this workload and lets RSS actually come back down.
+ENV MALLOC_ARENA_MAX=2
+
+# Flags go on the command, not NODE_OPTIONS: the Codex CLI is an npm launcher and
+# would inherit the env var. A capped heap makes V8 collect instead of grow, and
+# --expose-gc lets the drafter compact after each draft.
+CMD ["node", "--max-old-space-size=384", "--expose-gc", "drafter.mjs"]

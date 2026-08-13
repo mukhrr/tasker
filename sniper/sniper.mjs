@@ -225,6 +225,42 @@ let alertSeeded = false; // first discovery scan only records existing trigger i
 const queued = new Set(); // issue numbers already enqueued for the drafter this process
 let queueSeeded = false; // first discovery scan only records existing matches, never queues them
 
+// ── memo sweep ───────────────────────────────────────────────────────────────
+// The memos below are keyed by issue or proposal id and only evicted when that
+// key reaches a terminal state, so an issue that discovery sees and that never
+// fires leaves its entry behind for the life of the process. Uptime here is
+// measured in weeks and Railway bills held memory, so cap them. Eviction is
+// insertion-ordered and re-setting a key does not refresh its position, so an
+// active key can be dropped: the cost is one unconditional GET for a dropped
+// ETag, or one repeated event lookup. `posted`, `alerted` and `queued` are
+// excluded on purpose. They are integer sets costing bytes, and dropping an
+// entry would allow a duplicate fire, alert or queue.
+const MEMO_SWEEP_INTERVAL_MS = int('MEMO_SWEEP_INTERVAL_MS', 600_000); // 0 disables
+const MEMO_CAPS = [
+  ['etags', etags, 4000],
+  ['checkedLabelUpdates', checkedLabelUpdates, 4000],
+  ['alertEventChecks', alertEventChecks, 4000],
+  ['speculativeClaimTried', speculativeClaimTried, 5000],
+  ['consumedLockEvents', consumedLockEvents, 5000],
+  ['fireEventChecks', fireEventChecks, 2000],
+  ['validatedCloudProposalIds', validatedCloudProposalIds, 2000],
+  ['hwEventAnchors', hwEventAnchors, 1000],
+];
+
+function sweepMemos() {
+  const dropped = [];
+  for (const [name, memo, cap] of MEMO_CAPS) {
+    if (memo.size <= cap) continue;
+    let n = memo.size - cap;
+    dropped.push(`${name}:${n}`);
+    for (const key of memo.keys()) {
+      memo.delete(key);
+      if (--n === 0) break;
+    }
+  }
+  if (dropped.length) log(`🧹 memo sweep dropped ${dropped.join(' ')}`);
+}
+
 // ── request budget + GitHub clock tracking ───────────────────────────────────
 // Secondary rate limits count 304s too (learned the hard way on #95956), so
 // EVERY request is budgeted. Pollers check the budget and degrade instead of
@@ -1833,6 +1869,7 @@ function main() {
   // off an already-calibrated clock instead of a half-finished burst, and
   // latency comp never decays to 0 because the 120s RTT window went quiet.
   setInterval(() => void calibrateClock('background'), 60_000);
+  if (MEMO_SWEEP_INTERVAL_MS > 0) setInterval(sweepMemos, MEMO_SWEEP_INTERVAL_MS);
 
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
   if (DISCOVER || CLOUD_MODE) void discoverTick();

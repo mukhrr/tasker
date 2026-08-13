@@ -92,7 +92,11 @@ const MAX_LABEL_CHECKS_PER_TICK = int('MAX_LABEL_CHECKS_PER_TICK', 8);
 // How many issues to draft at once. Codex runs are network-bound, so parallel
 // drafts compress a mass-labeling backlog's wall-clock (~4-5 min per draft
 // serially) without using more plan quota in total.
-const MAX_CONCURRENT_DRAFTS = int('MAX_CONCURRENT_DRAFTS', 3);
+// Lowered from 3 to 2 on 2026-08-13: three simultaneous Codex runs over the same
+// checkout set the container's memory high-water mark, and Railway bills held
+// memory (memory was $12.37 of a $19 month while vCPU was $0.86). Two only costs
+// wall-clock when three or more issues queue in the same burst.
+const MAX_CONCURRENT_DRAFTS = int('MAX_CONCURRENT_DRAFTS', 2);
 const STALE_DRAFTING_MS = int('STALE_DRAFTING_MS', 30 * 60_000); // reclaim after 30 min
 const STALE_SWEEP_MS = int('STALE_SWEEP_MS', 60_000);
 const MAX_DRAFT_ATTEMPTS = int('MAX_DRAFT_ATTEMPTS', 3);
@@ -107,6 +111,15 @@ const WASTE_REPORT_ENABLED = bool('WASTE_REPORT_ENABLED', true);
 // Armed-and-open this long with no HW ⇒ counted as "likely wasted" (C+ review
 // rarely runs past this; tune if the real distribution differs).
 const WASTE_STALE_ARMED_MS = int('WASTE_STALE_ARMED_MS', 24 * 60 * 60_000);
+
+// A Codex draft leaves the process holding several hundred MB that V8 and glibc
+// never hand back, and the drafter then idles for hours at that high-water mark
+// while Railway bills it. Exiting once idle drops it back to a ~60 MB boot.
+// OFF by default because it is only safe when the Railway service's restart
+// policy is ALWAYS: under the default ON_FAILURE, a clean exit(0) is treated as
+// a finished job and the drafter would simply stay down. Set the policy first,
+// then set IDLE_RESTART_MS (1200000 = 20 min).
+const IDLE_RESTART_MS = int('IDLE_RESTART_MS', 0); // 0 disables
 
 const DRAFT_PROMPT_FILE = process.env.DRAFT_PROMPT_FILE || path.join(HERE, 'prompts', 'draft.md');
 const ENRICH_PROMPT_FILE = process.env.ENRICH_PROMPT_FILE || path.join(HERE, 'prompts', 'enrich.md');
@@ -130,6 +143,8 @@ let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
 let lastWasteReportAt = 0;
 let draftsInFlight = 0; // concurrent draftOne calls, capped at MAX_CONCURRENT_DRAFTS
+let draftsSinceBoot = 0; // 0 ⇒ still at the boot memory baseline, nothing to reclaim
+let lastDraftEndedAt = 0;
 const dryRunSeen = new Set(); // issues already dry-drafted this process (no re-loop)
 
 // ── logging + telegram ────────────────────────────────────────────────────────
@@ -1245,6 +1260,13 @@ async function tick() {
       })
       .finally(() => {
         draftsInFlight--;
+        draftsSinceBoot++;
+        lastDraftEndedAt = Date.now();
+        // Codex output and issue payloads are parsed as one big string each, so
+        // the heap ends a draft far above its working set. Compacting here (the
+        // container runs node --expose-gc) returns it before the idle stretch
+        // that Railway meters.
+        if (draftsInFlight === 0 && typeof global.gc === 'function') global.gc();
       });
   }
 }
@@ -1255,7 +1277,19 @@ async function loop() {
   } catch (e) {
     log(`tick failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+  if (shouldRecycle()) {
+    log(`♻️  idle ${Math.round((Date.now() - lastDraftEndedAt) / 60_000)}m after ${draftsSinceBoot} draft(s) — exiting to release memory`);
+    process.exit(0);
+  }
   setTimeout(() => void loop(), POLL_INTERVAL_MS);
+}
+
+// Only recycle with no draft in flight: a claimed row would otherwise sit in
+// `drafting` until the stale sweeper reclaims it, wasting the race window it was
+// queued for.
+function shouldRecycle() {
+  if (IDLE_RESTART_MS <= 0 || draftsSinceBoot === 0 || draftsInFlight > 0) return false;
+  return Date.now() - lastDraftEndedAt >= IDLE_RESTART_MS;
 }
 
 async function main() {

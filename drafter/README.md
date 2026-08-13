@@ -115,6 +115,14 @@ Go-live order:
 ## Tuning
 
 - `CODEX_MODEL` pins a specific model; empty uses the account default.
+- **Memory is the Railway bill.** Railway meters held RAM, not the limit, and a
+  drafter that peaked during a Codex run keeps that RSS while it idles. The
+  container caps the heap and compacts after each draft (`--max-old-space-size`,
+  `--expose-gc`, `MALLOC_ARENA_MAX=2`), and `MAX_CONCURRENT_DRAFTS` sets the peak.
+  `IDLE_RESTART_MS` exits once idle so the next boot starts near 60 MB, but it is
+  off by default: **switch the service's restart policy to ALWAYS first**, because
+  under the default ON_FAILURE a clean exit reads as a finished job and the drafter
+  stays down.
 - `CODEX_UNSAFE_SANDBOX=true` bypasses the Codex sandbox — only if Landlock/seccomp
   fails in Railway's kernel (the process is already isolated in its own container).
 - Edit `prompts/draft.md` and `prompts/enrich.md` to tune voice and depth; they encode
