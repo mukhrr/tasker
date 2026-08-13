@@ -490,4 +490,28 @@ await runScenario({
   },
 });
 
+// ── scenario 10: the Melvin verdict marker never reaches the proposal ────────
+// Codex states how its draft compares to Melvin's on a trailing marker line.
+// It must be stripped before arming, and must never be posted to GitHub.
+await runScenario({
+  name: 'melvin-verdict-stripped',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT },
+  issue: baseIssue({ number: 90011, labels: [{ name: 'Help Wanted' }] }), // direct-post path
+  // Marker followed by more text: the model ignored "nothing after it", which
+  // must still not leak the marker into the posted comment.
+  cannedProposals: [`${GOOD_PROPOSAL}\n<!-- MELVIN: BEATS — pins the exact guard Melvin only guessed at -->\nDone.\n`],
+  seedRows: [
+    { id: 'r11', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90011, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline }) => {
+    await deadline(() => state.commentPosts.length > 0, 8000, 'never posted');
+    const stored = state.rows.get('r11').body;
+    const posted = state.commentPosts[0].body;
+    assert.ok(!/MELVIN:/.test(stored), 'verdict marker survived into the stored body');
+    assert.ok(!/MELVIN:/.test(posted), 'verdict marker was POSTED to GitHub');
+    assert.match(stored, /## Proposal/, 'stripping ate the proposal');
+    assert.match(stored, /root cause/i, 'stripping truncated the body');
+  },
+});
+
 console.log('ALL PASS');

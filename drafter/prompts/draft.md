@@ -123,3 +123,15 @@ Key rules from the skill (do not violate):
 
 Print ONLY the finished proposal markdown as your final message — starting with
 `## Proposal`. No preamble, no explanation of what you did, no surrounding commentary.
+
+Then, as the very last line and nothing after it, state how your proposal compares
+to Melvin's. This line is stripped before the proposal is posted; it exists so the
+comparison you just did is visible without a second model re-deriving it.
+
+    <!-- MELVIN: <BEATS|SAME|ABSENT> — one sentence, max 200 chars -->
+
+- `BEATS` — different root cause, or a concrete/verified fix or evidence Melvin lacks.
+  Say what yours has that Melvin's doesn't.
+- `SAME` — same root cause and no materially better fix. Say so plainly; an honest
+  `SAME` is more useful than a stretched `BEATS`.
+- `ABSENT` — no MelvinBot proposal on the issue.

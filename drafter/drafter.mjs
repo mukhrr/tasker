@@ -532,6 +532,32 @@ const REQUIRED_HEADINGS = [
 ];
 const PLACEHOLDER_RE = /(_investigating|_detailed proposal|placeholder|reviewing this issue|proposal is on the way|TODO|FIXME|lorem ipsum)/i;
 
+// Codex states how its draft compares to MelvinBot's on a trailing marker line.
+// It has already read Melvin's proposal to write the draft, so this costs
+// nothing; the alternative is a second model re-deriving the same comparison.
+// Split it off before validation so the marker can never reach GitHub, and
+// tolerate its absence — an older session or a stubborn model just means no
+// verdict, not a failed draft.
+// Not anchored to the end: the prompt asks for the marker last, but a model that
+// writes one more line would otherwise leak it into a posted GitHub comment.
+function splitMelvinVerdict(body) {
+  if (!body) return { body, verdict: null };
+  let verdict = null;
+  const stripped = body
+    .replace(/\n*<!--\s*MELVIN:\s*(BEATS|SAME|ABSENT)\b[\s—:-]*([^>]*?)\s*-->/gi, (_m, kind, reason) => {
+      verdict ??= { kind: kind.toUpperCase(), reason: (reason || '').trim().slice(0, 200) };
+      return '';
+    })
+    .trimEnd();
+  return { body: stripped, verdict };
+}
+
+function melvinLine(verdict) {
+  if (!verdict) return '';
+  const label = { BEATS: '✅ beats Melvin', SAME: '⚠️ same as Melvin', ABSENT: 'ℹ️ no Melvin proposal' }[verdict.kind];
+  return `\nvs Melvin: ${label}${verdict.reason ? ` — ${verdict.reason}` : ''}`;
+}
+
 async function validateProposal(body) {
   const problems = [];
   if (!body || body.length < 200) problems.push('proposal is too short (<200 chars)');
@@ -669,7 +695,7 @@ async function draftOne(row, settings = { autoPost: true }) {
     return; // failure paths handled inside (or interim left armed)
   }
 
-  const { body, sessionId } = result;
+  const { body, sessionId, verdict } = result;
 
   if (DRY_RUN) {
     log(
@@ -683,7 +709,7 @@ async function draftOne(row, settings = { autoPost: true }) {
     return;
   }
 
-  const armed = await finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed);
+  const armed = await finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed, verdict);
   if (!armed) return;
 
   if (ENRICH) {
@@ -722,6 +748,7 @@ async function armInterim(claimed, n, issue, comments, settings) {
       log(`⏭️  #${n} interim skipped: ${draft.error}`);
       return false;
     }
+    draft.body = splitMelvinVerdict(draft.body).body;
     const problems = await validateProposal(draft.body);
     if (problems.length) {
       log(`⏭️  #${n} interim discarded — validation failed: ${problems.join('; ')}`);
@@ -752,7 +779,7 @@ async function armInterim(claimed, n, issue, comments, settings) {
 
 // Put the full draft where it belongs given the row's current state, and notify.
 // Returns the row (for the enrich pass) or null when nothing further should run.
-async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed) {
+async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed, verdict) {
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
 
   if (!interimArmed) {
@@ -773,10 +800,13 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
       return null;
     }
     log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
+    // Essential, not verbose: the Melvin comparison is the point of the draft,
+    // and it is the only place that verdict surfaces now that the Claude review
+    // gate is off.
     await notify(
       `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
+        `${melvinLine(verdict)}` +
         `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
-      { level: 'verbose' },
     );
     const hasHW = labelNames(issue.labels).includes(TRIGGER);
     if (DIRECT_POST && hasHW && settings.autoPost) {
@@ -855,8 +885,9 @@ async function draftWithValidation(prompt, row, { keepArmedOnFail = false } = {}
       }
       return null;
     }
-    const problems = await validateProposal(draft.body);
-    if (problems.length === 0) return { body: draft.body, sessionId: draft.sessionId };
+    const { body, verdict } = splitMelvinVerdict(draft.body);
+    const problems = await validateProposal(body);
+    if (problems.length === 0) return { body, sessionId: draft.sessionId, verdict };
     log(`⚠️  #${n} validation failed (attempt ${attempt}): ${problems.join('; ')}`);
     row._lastProblems = problems.map((p) => `- ${p}`).join('\n');
     if (attempt === 2) {
@@ -865,7 +896,7 @@ async function draftWithValidation(prompt, row, { keepArmedOnFail = false } = {}
       } else {
         await updateProposal(row.id, {
           state: 'draft',
-          body: draft.body, // keep the best attempt for a human to rescue
+          body, // keep the best attempt for a human to rescue
           last_error: `Auto-draft failed validation: ${problems.join('; ')}`.slice(0, 300),
         });
         await notify(`⚠️ Auto-draft for ${REPO}#${n} failed validation — needs a human.\nhttps://github.com/${REPO}/issues/${n}`);
@@ -934,6 +965,7 @@ async function enrichOne(id, n, currentBody) {
     log(`enrich #${n} skipped: ${draft.error}`);
     return;
   }
+  draft.body = splitMelvinVerdict(draft.body).body;
   const problems = await validateProposal(draft.body);
   if (problems.length) {
     log(`enrich #${n} discarded — validation failed: ${problems.join('; ')}`);
