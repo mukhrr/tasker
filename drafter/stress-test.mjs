@@ -127,6 +127,7 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
     issue,
     commentPosts: [],
     commentPatches: [],
+    telegram: [], // sendMessage bodies, so message shape is asserted not eyeballed
   };
 
   const server = createServer(async (req, res) => {
@@ -170,6 +171,12 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
         updated.push({ ...r });
       }
       return json(res, 200, updated);
+    }
+
+    // ── Telegram ──
+    if (url.pathname.endsWith('/sendMessage') && req.method === 'POST') {
+      state.telegram.push(await readBody(req));
+      return json(res, 200, { ok: true, result: { message_id: 1 } });
     }
 
     // ── GitHub ──
@@ -217,6 +224,9 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       FAKE_CODEX_DIR: codexDir,
       TELEGRAM_BOT_TOKEN: '',
       TELEGRAM_CHAT_ID: '',
+      // Telegram goes to the mock server, so a scenario that sets a token has
+      // its sendMessage bodies captured instead of hitting the real API.
+      TELEGRAM_API_URL: `http://127.0.0.1:${port}`,
       // Default OFF so the existing scenarios keep testing the single full-draft
       // flow deterministically (the interim would arm first and race their
       // "wait until armed" checks). The interim path has its own scenario.
@@ -511,6 +521,43 @@ await runScenario({
     assert.ok(!/MELVIN:/.test(posted), 'verdict marker was POSTED to GitHub');
     assert.match(stored, /## Proposal/, 'stripping ate the proposal');
     assert.match(stored, /root cause/i, 'stripping truncated the body');
+  },
+});
+
+// ── scenario 11: the armed ping carries the verdict and the action buttons ───
+// The analyzer's review ping used to carry these; that gate is off now, so the
+// drafter's arm notice is the only place the Melvin verdict surfaces. The
+// callback_data must stay `run:<issue>` — the analyzer daemon's getUpdates
+// listener matches on that, and it is what makes the button work at all.
+await runScenario({
+  name: 'armed-ping-format',
+  env: {
+    CODEX_BIN: SHIM,
+    CODEX_SCRIPT: SCRIPT,
+    TELEGRAM_BOT_TOKEN: 'tg-test',
+    TELEGRAM_CHAT_ID: '4242',
+  },
+  issue: baseIssue({ number: 90012 }),
+  cannedProposals: [`${GOOD_PROPOSAL}\n<!-- MELVIN: BEATS — pins the exact empty-string guard Melvin missed -->\n`],
+  seedRows: [
+    { id: 'r12', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90012, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline }) => {
+    await deadline(() => state.rows.get('r12')?.state === 'armed', 8000, 'never armed');
+    await deadline(() => state.telegram.length > 0, 4000, 'no Telegram message sent');
+    const msg = state.telegram.find((m) => /Proposal armed/.test(m.text || ''));
+    assert.ok(msg, `no armed ping among: ${state.telegram.map((m) => (m.text || '').slice(0, 40)).join(' | ')}`);
+
+    assert.match(msg.text, /beats MelvinBot/, 'verdict missing from the headline');
+    assert.match(msg.text, /Why: pins the exact empty-string guard Melvin missed/, 'reason missing');
+    assert.match(msg.text, /Expensify\/App#90012 — /, 'issue and title line missing');
+    assert.ok(!/codex exec resume/.test(msg.text), 'Codex resume command leaked into Telegram');
+    assert.ok(!/MELVIN:/.test(msg.text), 'raw marker leaked into Telegram');
+
+    const kb = msg.reply_markup?.inline_keyboard?.[0];
+    assert.ok(kb, 'no inline keyboard on the armed ping');
+    assert.equal(kb[0].callback_data, 'run:90012', 'deep-analysis callback_data is not run:<issue>');
+    assert.match(kb[1].url, /issues\/90012$/, 'View issue button does not link to the issue');
   },
 });
 

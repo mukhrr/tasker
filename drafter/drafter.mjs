@@ -155,14 +155,19 @@ function log(...a) {
 // 'essential' messages (posts, failures, usage limits) always send; 'verbose'
 // ones (per-issue "draft armed" chatter) send only when TELEGRAM_VERBOSE is on.
 const TELEGRAM_VERBOSE = bool('TELEGRAM_VERBOSE', false);
-async function notify(text, { level = 'essential' } = {}) {
+async function notify(text, { level = 'essential', replyMarkup } = {}) {
   if (level === 'verbose' && !TELEGRAM_VERBOSE) return;
   if (!TG_TOKEN || !TG_CHAT) return;
   try {
     const res = await fetch(`${TG_API}/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT, text, disable_web_page_preview: true }),
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text,
+        disable_web_page_preview: true,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) log(`telegram err: ${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}`);
@@ -567,10 +572,41 @@ function splitMelvinVerdict(body) {
   return { body: stripped, verdict };
 }
 
-function melvinLine(verdict) {
-  if (!verdict) return '';
-  const label = { BEATS: '✅ beats Melvin', SAME: '⚠️ same as Melvin', ABSENT: 'ℹ️ no Melvin proposal' }[verdict.kind];
-  return `\nvs Melvin: ${label}${verdict.reason ? ` — ${verdict.reason}` : ''}`;
+// The armed ping. Shaped like the analyzer's review ping it replaces, because
+// that one was readable and actionable: verdict in the headline, the reasoning
+// under "Why:", and a button that queues the deep analysis. The Codex resume
+// command stays in the Railway log — it's debugging text, not mission control.
+const ARMED_HEADLINE = {
+  BEATS: "✅ Proposal armed — beats MelvinBot's",
+  SAME: "⚠️ Proposal armed — same as MelvinBot's",
+  ABSENT: 'ℹ️ Proposal armed — no MelvinBot proposal',
+};
+
+function armedMessage({ n, title, issueUrl, body, verdict }) {
+  const headline = ARMED_HEADLINE[verdict?.kind] || '📝 Proposal armed';
+  const lines = [`${headline}`, `${REPO}#${n} — ${title}`, issueUrl, ''];
+  if (verdict?.reason) lines.push(`Why: ${verdict.reason}`);
+  lines.push(
+    verdict?.kind === 'SAME'
+      ? "It adds nothing over Melvin's, so it's probably not worth posting — disarm it in Tasker if you agree."
+      : "It's armed and will be posted when the issue opens to contributors.",
+  );
+  lines.push('Tap below to run a deep Claude analysis and verify it.');
+  lines.push(`(${body.length} chars, validated)`);
+  return lines.join('\n');
+}
+
+// Same callback_data the analyzer daemon's getUpdates listener already handles —
+// it matches on `run:<issue>` and the chat id, not on which process sent it.
+function runAnalysisButtons(n, issueUrl) {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🔬 Run deep analysis', callback_data: `run:${n}` },
+        { text: 'View issue', url: issueUrl },
+      ],
+    ],
+  };
 }
 
 async function validateProposal(body) {
@@ -814,15 +850,13 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
       log(`#${n} arm skipped — row changed under us (manual edit?)`);
       return null;
     }
-    log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}`);
+    log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}${resumeHint(sessionId)}`);
     // Essential, not verbose: the Melvin comparison is the point of the draft,
     // and it is the only place that verdict surfaces now that the Claude review
     // gate is off.
-    await notify(
-      `📝 Draft ready & auto-armed — ${REPO}#${n}\n${issue.title}\n${issueUrl}` +
-        `${melvinLine(verdict)}` +
-        `\n(${body.length} chars, validated)${resumeHint(sessionId)}`,
-    );
+    await notify(armedMessage({ n, title: issue.title, issueUrl, body, verdict }), {
+      replyMarkup: runAnalysisButtons(n, issueUrl),
+    });
     const hasHW = labelNames(issue.labels).includes(TRIGGER);
     if (DIRECT_POST && hasHW && settings.autoPost) {
       await directPost(armed, issue, body);
