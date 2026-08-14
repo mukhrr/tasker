@@ -178,11 +178,20 @@ await runScenario({
   // Env says watch "Bug"; the extension has synced "Performance" + exclude "reviewing".
   env: { WATCH_GROUPS: 'Bug', EXCLUDE_LABELS: '' },
   settings: { watched_label_groups: [['Performance']], excluded_labels: ['reviewing'] },
-  issues: [{ number: 7001, title: 'seed', labels: L('Performance'), updated_at: iso }],
+  issues: [{ number: 7001, title: 'already on the page', labels: L('Performance'), updated_at: iso }],
   run: async (state, { deadline, wait, output }) => {
     // Startup uses env until the first settings sync adopts the extension config.
     await deadline(() => output.join('').includes('watch config from extension'), 2000, 'never adopted extension config');
-    await wait(200); // let it re-seed under the new rules
+
+    // #7001 was on the page before the config widened to include it. Adopting a
+    // new config must RE-EVALUATE the page, not re-seed it — re-seeding recorded
+    // it as already-handled, so an edit only ever applied to issues opened after
+    // it, and the page spans ~2h of churn, so the rest were unrecoverable.
+    await deadline(
+      () => state.inserts.some((r) => r.issue_number === 7001),
+      2000,
+      '#7001 was on the page when the config widened, but was never queued',
+    );
 
     // A new Performance issue (extension group) must queue; a Bug issue (old env
     // group, now overridden) must NOT.

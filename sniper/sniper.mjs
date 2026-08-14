@@ -885,8 +885,12 @@ function applyWatchConfig(row) {
       activeExcludeLabels = excluded;
       watchConfigSource = 'extension';
       if (changed) {
-        queued.clear(); // re-evaluate the page against the new rules
-        queueSeeded = false;
+        // Re-evaluate the page against the new rules, which means NOT re-seeding:
+        // seeding records matches without queueing them, so clearing the flag here
+        // made an edit apply only to issues opened after it. Widening the config
+        // then silently skipped everything already on the page, and the page only
+        // spans ~2h of Expensify's churn, so those issues were unrecoverable.
+        queued.clear();
         log(`🧩 watch config from extension — groups=[${groups.map((g) => g.join('+')).join('|')}] excl=[${[...excluded].join(',')}]`);
       }
       return;
@@ -897,8 +901,7 @@ function applyWatchConfig(row) {
     activeWatchGroups = ENV_WATCH_GROUPS;
     activeExcludeLabels = ENV_EXCLUDE_LABELS;
     watchConfigSource = ENV_WATCH_GROUPS.length ? 'env' : 'none';
-    queued.clear();
-    queueSeeded = false;
+    queued.clear(); // same as above: re-evaluate, don't re-seed
     log('🧩 watch config reverted to env defaults (extension synced none)');
   }
 }
