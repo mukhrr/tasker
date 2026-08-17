@@ -390,10 +390,63 @@ async function captureSessionEarly(reqId, n) {
         // requireState running: don't write onto a canceled/re-queued row.
         await updateRequest(reqId, { claude_session_id: sid }, { requireState: 'running' }).catch(() => {});
         log(`🔖 #${n} session ${sid} (captured at start)`);
-        return;
+        return path.join(dir, f);
       }
     }
     await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+
+// The claude run is one opaque 10-30 minute stretch from the daemon's side, but
+// its session transcript records every tool call as it happens. The first edit
+// to a real source file is the reproduce→fix transition; repro artifacts (test
+// harnesses, .repros/ recordings, scratch scripts) are still reproduction.
+const EDIT_TOOL_RE = /"name":\s*"(?:Edit|Write|MultiEdit|NotebookEdit)"/;
+async function watchFixPhase(reqId, n, transcript, ctrl) {
+  let offset = 0;
+  let remainder = '';
+  while (!ctrl.stop) {
+    await new Promise((r) => setTimeout(r, 5000));
+    let chunk = '';
+    try {
+      const fh = await open(transcript, 'r');
+      const { size } = await fh.stat();
+      if (size > offset) {
+        const buf = Buffer.alloc(size - offset);
+        const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+        offset += bytesRead;
+        chunk = buf.toString('utf8', 0, bytesRead);
+      }
+      await fh.close();
+    } catch {
+      continue; // transient read failure — retry next tick
+    }
+    if (!chunk) continue;
+    const lines = (remainder + chunk).split('\n');
+    remainder = lines.pop() || '';
+    for (const line of lines) {
+      if (!EDIT_TOOL_RE.test(line)) continue;
+      let hit = false;
+      try {
+        for (const item of JSON.parse(line)?.message?.content || []) {
+          if (item?.type !== 'tool_use') continue;
+          if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(item.name || '')) continue;
+          const filePath = String(item.input?.file_path || item.input?.notebook_path || '');
+          if (filePath.includes('/src/') && !/\.(test|spec)\./.test(filePath)) {
+            hit = true;
+            break;
+          }
+        }
+      } catch {
+        continue; // partial or non-JSON line
+      }
+      if (!hit) continue;
+      if (ctrl.stop) return; // the run moved on — never regress a later phase
+      setPhase(reqId, '🛠 Implementing the fix…');
+      log(`🛠 #${n} first source edit seen — phase → fixing`);
+      return;
+    }
   }
 }
 
@@ -635,8 +688,13 @@ async function processRequest(req) {
     // shelling out to the CLI. Additive to the App repo's own MCP config.
     if (existsSync(REPRO_MCP_CONFIG)) args.push('--mcp-config', REPRO_MCP_CONFIG);
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
-    setPhase(req.id, 'Claude is reproducing and fixing…');
-    void captureSessionEarly(req.id, n); // surface the resumable session id right away
+    setPhase(req.id, '🔬 Reproducing the bug…');
+    const phaseWatch = { stop: false };
+    // Surface the resumable session id right away, then tail that transcript to
+    // advance the phase when reproduction turns into fixing.
+    void captureSessionEarly(req.id, n)
+      .then((transcript) => (transcript ? watchFixPhase(req.id, n, transcript, phaseWatch) : null))
+      .catch(() => {});
 
     // Watch for the row changing state under us and kill the in-flight claude
     // when it does. Not just 'canceled': a Cancel followed by a fast Re-run can
@@ -679,6 +737,7 @@ async function processRequest(req) {
       });
     } finally {
       clearInterval(cancelWatch);
+      phaseWatch.stop = true; // later phases own the row from here
     }
     if (res.lingered) log(`⏭️  #${n} result received — reaped lingering claude/MCP instead of waiting for exit`);
     if (canceled) {
