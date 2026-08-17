@@ -81,6 +81,11 @@ const POST_LATENCY_COMP_CAP_MS = int('POST_LATENCY_COMP_CAP_MS', 12); // max sen
 const POST_EARLY_FIRE_MS = int('POST_EARLY_FIRE_MS', 250); // desired pre-boundary lead
 const POST_EARLY_FIRE_CAP_MS = int('POST_EARLY_FIRE_CAP_MS', 500); // hard ceiling regardless of samples
 const POST_EARLY_SAFETY_FRACTION = 0.35; // lead ≤ this × min recent processing proxy
+// Prior for GitHub's comment-create processing, used until this process has
+// measured its own. 950ms is just under the fastest of the four races measured
+// 2026-07-18..08-17 (982, 995, 1521, 1715ms), so the safety fraction bounds the
+// lead against a real number instead of a guess. 0 falls back to samples only.
+const POST_PROC_PRIOR_MS = int('POST_PROC_PRIOR_MS', 950);
 const MAX_POST_DELAY_MS = 1500; // sanity cap on the boundary wait
 // Before posting, look up the real Help Wanted event time so a boundary-crossing
 // detection doesn't anchor the post a full second late. Bounded so a slow lookup
@@ -334,9 +339,10 @@ function notePostProc(postMs) {
   const proc = Math.max(0, postMs - minRtt); // subtract full RTT, not one-way — deliberately conservative
   const now = Date.now();
   postProcSamples.push({ at: now, ms: proc });
-  while (postProcSamples.length && (postProcSamples.length > 20 || now - postProcSamples[0].at > 600_000)) {
-    postProcSamples.shift();
-  }
+  // Only race POSTs land here and races are days apart, so the old 10-minute
+  // window expired every sample before the next race could use it. Keep the
+  // last 20 by count alone.
+  while (postProcSamples.length > 20) postProcSamples.shift();
 }
 
 // One `-1s` stamp (posted in the Help Wanted second, renders above the label)
@@ -346,12 +352,13 @@ let earlyFireDisabled = false;
 function earlyFireMs() {
   if (earlyFireDisabled || POST_EARLY_FIRE_MS <= 0) return 0;
   let early = Math.min(POST_EARLY_FIRE_MS, POST_EARLY_FIRE_CAP_MS);
-  if (postProcSamples.length >= 3) {
-    const minProc = Math.min(...postProcSamples.map((s) => s.ms));
-    early = Math.min(early, Math.floor(minProc * POST_EARLY_SAFETY_FRACTION));
-  } else {
-    early = Math.min(early, 150); // conservative until this session has measured processing
-  }
+  // The sniper restarts more often than it races, so waiting for 3 in-session
+  // samples meant the flat 150ms floor was the only lead ever used in
+  // production — the safety fraction never once ran. Seed it with a measured
+  // prior instead, and let real samples pull it down if this box is slower.
+  const procs = postProcSamples.map((s) => s.ms);
+  if (POST_PROC_PRIOR_MS > 0) procs.push(POST_PROC_PRIOR_MS);
+  if (procs.length) early = Math.min(early, Math.floor(Math.min(...procs) * POST_EARLY_SAFETY_FRACTION));
   return Math.max(0, early);
 }
 
@@ -1844,6 +1851,7 @@ function main() {
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
       `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
+      `early=${earlyFireMs()}ms ` +
       `budget=${REQUEST_BUDGET_PER_MIN}/min telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} ` +
       `alerts=${alertingEnabled() ? 'on' : 'off'} autoDraft=${autoDraftEnabled() ? 'on' : 'off'} ` +
       `maxIssueAge=${MAX_ISSUE_AGE_MS ? `${Math.round(MAX_ISSUE_AGE_MS / 86_400_000)}d` : 'off'}`
