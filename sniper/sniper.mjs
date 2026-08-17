@@ -211,6 +211,8 @@ const validatedCloudProposalIds = new Map(); // proposal id -> last GitHub open/
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
+const checkedPrecursorUpdates = new Map(); // n -> issue.updated_at already checked for a C+ comment
+const consumedPrecursorComments = new Map(); // n -> assignee comment id already spent on a tight window
 const fireEventChecks = new Map(); // fire-path memo for the real HW event lookup (kept separate so it never false-negatives)
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
 const inFlightCloud = new Set(); // issue numbers temporarily claimed as `posting`
@@ -244,6 +246,8 @@ const MEMO_SWEEP_INTERVAL_MS = int('MEMO_SWEEP_INTERVAL_MS', 600_000); // 0 disa
 const MEMO_CAPS = [
   ['etags', etags, 4000],
   ['checkedLabelUpdates', checkedLabelUpdates, 4000],
+  ['checkedPrecursorUpdates', checkedPrecursorUpdates, 4000],
+  ['consumedPrecursorComments', consumedPrecursorComments, 4000],
   ['alertEventChecks', alertEventChecks, 4000],
   ['speculativeClaimTried', speculativeClaimTried, 5000],
   ['consumedLockEvents', consumedLockEvents, 5000],
@@ -1131,6 +1135,16 @@ async function discoverTick() {
             isWatch: cloudProposals.has(n),
             source: cloudProposals.has(n) ? 'cloud' : 'local',
           });
+        } else if (cloudProposals.has(n) && !budgetExhausted(0.5)) {
+          // No fresh External (armed issues carry it for days) — check for the
+          // C+ precursor instead. Armed-only and consumed per comment, so an
+          // ordinary comment burst can't churn 300-request tight windows; the
+          // budget guard keeps precursors from starving detection itself.
+          const commentId = await freshAssigneeCommentId(n, issue);
+          if (commentId) {
+            log(`👀 #${n} assignee commented — expecting "${TRIGGER_NAME}" shortly, tight-polling`);
+            track(n, { mode: 'tight', issue, isWatch: true, source: 'cloud' });
+          }
         }
       } else if (hasHW && updatedAgo < FIRE_FRESH_MS) {
         // `updated_at` also changes for unrelated activity. Confirm the actual
@@ -1225,6 +1239,40 @@ async function getRecentLabelEvent(n, label, after, issueUpdatedAt, memo = check
     }
   }
   return latest;
+}
+
+// The C+ reviewer (an issue assignee) posts a review comment and Help Wanted
+// follows 6-9 seconds later — measured on all four races 08-14..08-17
+// (#98580 -9s, #98025 -8s, #98709 -9s, #98308 -6s). A fresh assignee comment
+// is therefore worth a tight window; without it, detection rides the 400ms
+// discovery page and can lag the label by 2s+ (#98308 lost 5 places to that).
+// Returns the comment id (once per comment via the memo) or null.
+async function freshAssigneeCommentId(n, issue) {
+  const assignees = (issue.assignees || [])
+    .map((a) => a?.login)
+    .filter((l) => l && !l.endsWith('[bot]'));
+  if (!assignees.length) return null;
+  if (checkedPrecursorUpdates.get(n) === issue.updated_at) return null;
+  checkedPrecursorUpdates.set(n, issue.updated_at);
+  // `since` because the per-issue comments endpoint ignores sort/direction —
+  // per_page=1 alone returns the OLDEST comment (verified live on #98308).
+  const since = new Date(Date.now() - FRESH_LOCK_MS).toISOString();
+  const { status, data } = await gh(
+    `/repos/${REPO}/issues/${n}/comments?since=${since}&per_page=10`,
+  );
+  if (status !== 200 || !Array.isArray(data)) {
+    checkedPrecursorUpdates.delete(n); // transient failure: allow a later retry
+    return null;
+  }
+  for (const c of data) {
+    if (!assignees.includes(c?.user?.login)) continue;
+    const at = Date.parse(c.created_at || '');
+    if (!Number.isFinite(at) || Date.now() - at > FRESH_LOCK_MS) continue;
+    if (c.id <= (consumedPrecursorComments.get(n) || 0)) continue;
+    consumedPrecursorComments.set(n, c.id);
+    return c.id;
+  }
+  return null;
 }
 
 // One fresh read of the /events endpoint for the newest Help Wanted labeled
