@@ -186,8 +186,11 @@ you learned.
 5. **Rewrite the proposal** only if your findings changed it: same template
    (`## Proposal` / root cause / changes / optional alternatives), first person,
    evidence-backed, permalinks as bare URLs, small illustrative diff of the fix
-   (never the full patch). If your investigation confirmed the proposal as-is,
-   output UNCHANGED.
+   (never the full patch). Work the verification facts in — what you observed
+   at the faulty line while the bug was live, and what the fix verifiably
+   changed (see the output contract). A run that reproduced and verified but
+   left the proposal reading like static analysis has wasted its edge, so
+   UNCHANGED is only right when the existing text already carries those facts.
 
 ## Output contract (mandatory)
 
@@ -200,13 +203,21 @@ root cause, what you changed (files), and any caveats.
 === PROPOSAL ===
 The full updated proposal markdown, or the single word UNCHANGED.
 
-**No reproduction detail in the proposal.** How you reproduced it is yours, not
+**Verification facts in, reproduction method out.** The method is yours, not
 the reader's: leave out repro steps, environment/account setup, seeding or test
 data, Playwright/fast-replay scripts, screenshots of the bug, and any narration
 of what you tried. The C+ already has the repro steps — they are in the issue.
-The proposal contains only root cause, the fix, and evidence for both. Put the
-reproduction story in `=== SUMMARY ===` above, which is for the user alone and
-is never posted to GitHub.
+But the FACTS your live run produced are the proposal's strongest evidence and
+belong in it, especially in the changes section: the runtime value or state you
+observed at the faulty line while the bug was live, the failure mode as it
+actually presented, and the verified outcome ("with this change the duplicate
+highlight no longer appears; a regression test that fails on current main
+passes with the fix"). One or two factual sentences, stated as verified
+observations — this is what a proposal built on a live reproduction has over
+one built on reading the code, so don't flatten it into speculation ("should
+fix") when you watched it work. Put the reproduction story itself in
+`=== SUMMARY ===` above, which is for the user alone and is never posted to
+GitHub.
 If the "Current proposal" section below says none exists yet, you MUST output a
 complete NEW proposal (never UNCHANGED) — it will be posted for you (immediately
 if the issue already has Help Wanted, otherwise armed to auto-post the moment
