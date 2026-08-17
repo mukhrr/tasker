@@ -217,7 +217,26 @@ duplicate highlight no longer appears; a regression test that fails on current
 main passes with the fix"). One or two factual sentences per section, stated as
 verified observations — this is what a proposal built on a live reproduction
 has over one built on reading the code, so don't flatten it into speculation
-("should fix") when you watched it work. Put the reproduction story itself in
+("should fix") when you watched it work.
+
+**Present the live evidence as evidence, not prose.** Rival proposals are
+paragraphs and permalinks; yours should show the mechanism the way you actually
+saw it. Best form: a short fenced causal trace, each step carrying the value
+you observed live —
+
+```
+open report with 3 existing expenses
+→ ReportScreen mounts, useMemo recomputes selection      selectedIDs = ['a1','b2','c3']   (observed: should be [])
+→ SelectionListContext keeps the stale array             src/components/SelectionList/index.tsx
+→ every row where id ∈ selectedIDs renders highlighted   3 rows highlighted on open
+```
+
+Other shapes that work: 2-4 real console/log lines captured at the faulty path,
+or the offending line annotated with the observed before/after value. Pick
+whichever fits the bug and vary the shape between proposals — one repeated
+template across our proposals is its own tell. Every value shown must be one
+you actually observed in the run; a reconstructed-from-imagination trace is
+worse than plain prose. Put the reproduction story itself in
 `=== SUMMARY ===` above, which is for the user alone and is never posted to
 GitHub.
 If the "Current proposal" section below says none exists yet, you MUST output a
