@@ -183,6 +183,15 @@ you learned.
 4. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
+   **Write it the way this codebase already writes it.** Before coding, find
+   how App solves the same shape of problem elsewhere (grep for a sibling
+   component or flow that got this right) and mirror it: reuse the existing
+   hook / util / action instead of inventing a parallel one, keep naming,
+   error handling, and Onyx access idioms local to the file you're in. A fix
+   that reads like it grew there is what the C+ merges; a correct fix in a
+   foreign style invites a rewrite request or loses to a proposal that
+   followed the conventions. If the codebase pattern IS the bug, say so in
+   the proposal instead of silently diverging from it.
    **Always add or extend a deterministic Jest test that reproduces the bug**
    (fails on the unfixed code, passes with your fix) unless truly impossible —
    the harness automatically runs your changed test files with and without your
