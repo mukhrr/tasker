@@ -491,8 +491,9 @@ function parseOutput(text) {
   const proposalMatch = text.match(/===\s*PROPOSAL\s*===\s*([\s\S]*)$/i);
   const summary = (summaryMatch?.[1] || '').trim().slice(0, 1500);
   let proposal = (proposalMatch?.[1] || '').trim();
-  if (/^UNCHANGED\b/i.test(proposal)) proposal = '';
-  return { summary: summary || text.trim().slice(-1200), proposal };
+  const notReproduced = /^NOT_REPRODUCED\b/i.test(proposal);
+  if (notReproduced || /^UNCHANGED\b/i.test(proposal)) proposal = '';
+  return { summary: summary || text.trim().slice(-1200), proposal, notReproduced };
 }
 
 function changedFiles(porcelain) {
@@ -769,7 +770,7 @@ async function processRequest(req) {
     } catch {
       /* plain-text fallback */
     }
-    const { summary, proposal: updatedProposal } = parseOutput(finalText);
+    const { summary, proposal: updatedProposal, notReproduced } = parseOutput(finalText);
 
     // Stash exactly what the run changed: post-run dirty files minus the ones
     // that were already dirty before it started (those are the user's).
@@ -777,6 +778,37 @@ async function processRequest(req) {
     const afterFiles = changedFiles(after.stdout);
     const files = afterFiles.filter((f) => !preDirty.has(f));
     const overlap = afterFiles.filter((f) => preDirty.has(f));
+
+    // Reproduction gate: claude reported it could not reproduce the bug, so by
+    // contract it implemented no fix and rewrote nothing. Stop here — park any
+    // exploratory edits for hygiene and leave the proposal exactly as it was.
+    if (notReproduced) {
+      let stashRef = null;
+      if (files.length) {
+        const stash = await git(['stash', 'push', '-u', '-m', `not-reproduced-#${n}`, '--', ...files]);
+        if (stash.code === 0) stashRef = `not-reproduced-#${n}`;
+      }
+      const row = await updateRequest(
+        req.id,
+        {
+          state: 'failed',
+          result_summary: summary.slice(0, 2000),
+          stash_ref: stashRef,
+          claude_session_id: claudeSessionId,
+          last_error: 'Stopped: could not reproduce the bug — nothing was changed.',
+          progress: null,
+        },
+        { requireState: 'running' },
+      );
+      log(`🚫 #${n} could not reproduce — stopped${stashRef ? ` (exploratory edits stashed as ${stashRef})` : ''}`);
+      if (row) {
+        await notify(
+          `🚫 Deep analysis stopped — could not reproduce ${REPO}#${n}\n` +
+            `https://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 500)}\n\nProposal left untouched.`,
+        );
+      }
+      return;
+    }
 
     // Red/green verification runs BEFORE stashing, while the fix is in the tree.
     let verification = null;

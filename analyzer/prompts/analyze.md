@@ -172,7 +172,15 @@ you learned.
      state / navigation / API responses — and empirically CONFIRM or DISPROVE
      the proposal's root cause against production code paths. If you fall back,
      STATE explicitly why the required platform couldn't be attempted.
-3. **Fix:** implement the minimal correct fix in the working tree. Check the
+3. **Reproduction gate — hard stop.** Reproducing live (or, on the Simulate
+   fallback, empirically confirming the root cause in the Jest harness) is a
+   precondition for everything after it. If you exhausted the flow above and
+   neither happened, STOP: implement no fix, rewrite no proposal, revert any
+   exploratory edits, and output NOT_REPRODUCED per the contract below with a
+   summary of what you tried and what you observed instead. A fix for a bug
+   you never saw is a guess — the entire value of this run is that everything
+   in the proposal was watched happening.
+4. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
    **Always add or extend a deterministic Jest test that reproduces the bug**
@@ -180,10 +188,10 @@ you learned.
    the harness automatically runs your changed test files with and without your
    source changes to verify the fix red/green, so the test is what turns your
    analysis into proof. Keep it fast and focused.
-4. **Sanity-check** what you changed (lint/typecheck the touched files if fast:
+5. **Sanity-check** what you changed (lint/typecheck the touched files if fast:
    `npx tsc --noEmit` is too slow for the whole repo — prefer targeted checks;
    skip heavyweight verification rather than stalling).
-5. **Rewrite the proposal** only if your findings changed it: same template
+6. **Rewrite the proposal** only if your findings changed it: same template
    (`## Proposal` / root cause / changes / optional alternatives), first person,
    evidence-backed, permalinks as bare URLs, small illustrative diff of the fix
    (never the full patch). Work the verification facts into both sections —
@@ -202,7 +210,9 @@ End your final message with exactly these two sections:
 root cause, what you changed (files), and any caveats.
 
 === PROPOSAL ===
-The full updated proposal markdown, or the single word UNCHANGED.
+The full updated proposal markdown, or the single word UNCHANGED, or the single
+word NOT_REPRODUCED (the reproduction gate tripped: no fix was implemented and
+the existing proposal must stay untouched).
 
 **Verification facts in, reproduction method out.** The method is yours, not
 the reader's: leave out repro steps, environment/account setup, seeding or test
@@ -240,7 +250,8 @@ worse than plain prose. Put the reproduction story itself in
 `=== SUMMARY ===` above, which is for the user alone and is never posted to
 GitHub.
 If the "Current proposal" section below says none exists yet, you MUST output a
-complete NEW proposal (never UNCHANGED) — it will be posted for you (immediately
+complete NEW proposal (never UNCHANGED; NOT_REPRODUCED still applies when the
+gate tripped) — it will be posted for you (immediately
 if the issue already has Help Wanted, otherwise armed to auto-post the moment
 Help Wanted lands). Follow the expensify-proposal-writer template exactly:
 `## Proposal` / root cause / changes / optional alternatives, first person,
