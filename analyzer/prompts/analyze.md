@@ -210,6 +210,29 @@ you learned.
    left the proposal reading like static analysis has wasted its edge, so
    UNCHANGED is only right when the existing text already carries those facts.
 
+## How it reads (anti-tells)
+
+The C+ reads dozens of model-written proposals a day and pattern-matches the
+sheen. Kill it:
+
+- Vary the rhythm. A short sentence, then a longer one. A fragment is fine.
+  Four bullets of identical length in perfect parallel is the loudest tell
+  there is.
+- No bold on single words for emphasis (never "renders **no** code row"). If a
+  word needs bold to carry the point, rewrite the sentence. Headings carry
+  their own weight.
+- No em dashes. Use a comma, a colon, or a new sentence.
+- Banned constructions: "This is X, not Y", "not just X, it's Y", "crucially",
+  "importantly", "note that", "in other words", "simply", "essentially".
+- Inline code for real identifiers only, at most two per sentence. If a
+  sentence needs more, split it or move the detail into a snippet.
+- Prose first. A bullet list only when the content is genuinely a list, and
+  one list per proposal is usually enough.
+- First person, past tense for what you did and saw: "I put the workspace in
+  that state and the row never renders."
+- Do not sand every sentence smooth. A slightly unpolished line reads like an
+  engineer; uniform polish reads like a model.
+
 ## Output contract (mandatory)
 
 End your final message with exactly these two sections:
@@ -241,19 +264,19 @@ has over one built on reading the code, so don't flatten it into speculation
 **Present the live evidence as evidence, not prose.** Rival proposals are
 paragraphs and permalinks; yours should show the mechanism the way you actually
 saw it. Default shape: a plain markdown bullet chain — NO code fence. One
-bullet per causal step, the observed value inside the same clause, inline code
-for Onyx keys / requests / values, bold on the one word that carries the
-finding. It renders in normal proportional font, wraps on any screen, and asks
-the reader to learn nothing:
+bullet per causal step, the observed value inside the same clause, inline
+code for real identifiers. It renders in normal proportional font, wraps on
+any screen, and asks the reader to learn nothing:
 
-- Reopen the DM after Reset & refresh — network shows **exactly one**
-  `OpenReport` for the whole flow
-- It restores the `SPLIT` action, but the response carries no `-2` transaction:
-  `transactions_<id>` never lands in Onyx
-- The preview renders from the missing transaction and **never re-asks** —
-  skeleton stays 12s+, no recovery request is ever sent
+- Reopened the DM after Reset and refresh. The network log shows one
+  `OpenReport` for the whole flow, nothing after it.
+- That response restores the SPLIT action but carries no transaction, so
+  `transactions_<id>` never lands in Onyx.
+- The preview renders from the missing transaction and never asks again.
+  The skeleton was still there 12 seconds later.
 
-3-6 bullets, every clause an observation, no filler steps, and never
+3-6 bullets, every clause an observation, no filler steps, varied bullet
+length (see "How it reads" below), and never
 space-aligned columns inside a code fence — they collapse the moment GitHub
 wraps a long line. When the bug is missing-or-wrong state, a ```diff snapshot
 is the sharper shape (`+` the state that exists, `-` the state that never

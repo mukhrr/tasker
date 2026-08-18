@@ -32,6 +32,29 @@ description: Draft and revise Expensify/App issue proposals quickly using contri
 - Do not claim a measurable impact unless the issue evidence supports it.
 - If the issue is really a new product/process idea rather than a bug/job proposal, format it for `#expensify-open-source` using `Strategy` / `Problem` / `Solution`.
 
+## How it reads (anti-tells)
+
+The C+ reads dozens of model-written proposals a day and pattern-matches the
+sheen. Kill it:
+
+- Vary the rhythm. A short sentence, then a longer one. A fragment is fine.
+  Four bullets of identical length in perfect parallel is the loudest tell
+  there is.
+- No bold on single words for emphasis (never "renders **no** code row"). If a
+  word needs bold to carry the point, rewrite the sentence. Headings carry
+  their own weight.
+- No em dashes. Use a comma, a colon, or a new sentence.
+- Banned constructions: "This is X, not Y", "not just X, it's Y", "crucially",
+  "importantly", "note that", "in other words", "simply", "essentially".
+- Inline code for real identifiers only, at most two per sentence. If a
+  sentence needs more, split it or move the detail into a snippet.
+- Prose first. A bullet list only when the content is genuinely a list, and
+  one list per proposal is usually enough.
+- First person, past tense for what you did and saw: "I put the workspace in
+  that state and the row never renders."
+- Do not sand every sentence smooth. A slightly unpolished line reads like an
+  engineer; uniform polish reads like a model.
+
 ## Expected Shape
 
 ```markdown
