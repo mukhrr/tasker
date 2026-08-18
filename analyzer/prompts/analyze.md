@@ -231,16 +231,26 @@ has over one built on reading the code, so don't flatten it into speculation
 
 **Present the live evidence as evidence, not prose.** Rival proposals are
 paragraphs and permalinks; yours should show the mechanism the way you actually
-saw it. Best form: a short fenced causal trace, each step carrying the value
-you observed live —
+saw it. Best form: a short fenced causal trace — numbered steps in order, and
+under each step one labeled line for what you observed there. STACK, never
+side-by-side columns: space-aligned columns look clever in a terminal and turn
+to soup the moment GitHub wraps one long line, and an unlabeled right-hand
+value forces the reader to guess its relationship to the step —
 
 ```
-open report with 3 existing expenses
-→ ReportScreen mounts, useMemo recomputes selection      selectedIDs = ['a1','b2','c3']   (observed: should be [])
-→ SelectionListContext keeps the stale array             src/components/SelectionList/index.tsx
-→ every row where id ∈ selectedIDs renders highlighted   3 rows highlighted on open
+1. reopen the DM after Reset & refresh
+   saw: exactly ONE OpenReport request for the whole flow
+
+2. the response restores the SPLIT action but carries no -2 transaction
+   saw: reportActions_<dm> holds the action; transactions_<id> absent from Onyx
+
+3. the preview renders from the missing transaction and never re-asks
+   saw: skeleton "loads infinitely", still there 12s later; no recovery request
 ```
 
+Rules for the trace: number the steps (the chain is the argument); `saw:` marks
+a value or behavior you watched live, `at:` marks the code point when one line
+needs it; one observation line per step, ~6 steps max; no alignment padding.
 Other shapes that work: 2-4 real console/log lines captured at the faulty path,
 or the offending line annotated with the observed before/after value. Pick
 whichever fits the bug and vary the shape between proposals — one repeated
