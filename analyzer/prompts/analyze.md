@@ -231,28 +231,25 @@ has over one built on reading the code, so don't flatten it into speculation
 
 **Present the live evidence as evidence, not prose.** Rival proposals are
 paragraphs and permalinks; yours should show the mechanism the way you actually
-saw it. Best form: a short fenced causal trace — numbered steps in order, and
-under each step one labeled line for what you observed there. STACK, never
-side-by-side columns: space-aligned columns look clever in a terminal and turn
-to soup the moment GitHub wraps one long line, and an unlabeled right-hand
-value forces the reader to guess its relationship to the step —
+saw it. Default shape: a plain markdown bullet chain — NO code fence. One
+bullet per causal step, the observed value inside the same clause, inline code
+for Onyx keys / requests / values, bold on the one word that carries the
+finding. It renders in normal proportional font, wraps on any screen, and asks
+the reader to learn nothing:
 
-```
-1. reopen the DM after Reset & refresh
-   saw: exactly ONE OpenReport request for the whole flow
+- Reopen the DM after Reset & refresh — network shows **exactly one**
+  `OpenReport` for the whole flow
+- It restores the `SPLIT` action, but the response carries no `-2` transaction:
+  `transactions_<id>` never lands in Onyx
+- The preview renders from the missing transaction and **never re-asks** —
+  skeleton stays 12s+, no recovery request is ever sent
 
-2. the response restores the SPLIT action but carries no -2 transaction
-   saw: reportActions_<dm> holds the action; transactions_<id> absent from Onyx
-
-3. the preview renders from the missing transaction and never re-asks
-   saw: skeleton "loads infinitely", still there 12s later; no recovery request
-```
-
-Rules for the trace: number the steps (the chain is the argument); `saw:` marks
-a value or behavior you watched live, `at:` marks the code point when one line
-needs it; one observation line per step, ~6 steps max; no alignment padding.
-Other shapes that work: 2-4 real console/log lines captured at the faulty path,
-or the offending line annotated with the observed before/after value. Pick
+3-6 bullets, every clause an observation, no filler steps, and never
+space-aligned columns inside a code fence — they collapse the moment GitHub
+wraps a long line. When the bug is missing-or-wrong state, a ```diff snapshot
+is the sharper shape (`+` the state that exists, `-` the state that never
+arrived — GitHub colors them green/red, so the mismatch is visible before a
+word is read). 2-4 real console/log lines still fit timing bugs. Pick
 whichever fits the bug and vary the shape between proposals — one repeated
 template across our proposals is its own tell. Every value shown must be one
 you actually observed in the run; a reconstructed-from-imagination trace is
