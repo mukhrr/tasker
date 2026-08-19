@@ -1163,7 +1163,19 @@ export class StatusWidget {
 
     const line = document.createElement('div');
     line.className = 'proposal-status-sub analysis-summary';
-    if (st === 'done') {
+    // done/failed/canceled are all terminal and all editable: a canceled or
+    // failed run can still carry a real Claude-written account worth keeping
+    // (NOT_REPRODUCED writes one to result_summary even on 'failed'), and
+    // a bare "re-run anytime" with no way to leave a note was the actual gap
+    // — the field being edited is always result_summary, only the prefix and
+    // the empty-state fallback vary by state.
+    const TERMINAL_META: Record<string, { emoji: string; fallback: string }> = {
+      done: { emoji: '✅', fallback: 'Analysis finished.' },
+      failed: { emoji: '⚠️', fallback: this.analysis?.last_error ?? 'Analysis failed.' },
+      canceled: { emoji: '🚫', fallback: 'Canceled — re-run anytime.' },
+    };
+    if (st && TERMINAL_META[st]) {
+      const { emoji, fallback } = TERMINAL_META[st];
       if (this.analysisEditing) {
         const textarea = document.createElement('textarea');
         textarea.className = 'proposal-textarea analysis-summary-input';
@@ -1201,7 +1213,7 @@ export class StatusWidget {
       } else {
         const summaryText = document.createElement('span');
         const summary = this.analysis?.result_summary ?? '';
-        summaryText.textContent = `✅ ${summary || 'Analysis finished.'}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
+        summaryText.textContent = `${emoji} ${summary || fallback}${this.analysis?.stash_ref ? ` · stash: ${this.analysis.stash_ref}` : ''}`;
         line.appendChild(summaryText);
         const editBtn = document.createElement('button');
         editBtn.className = 'analysis-edit-btn';
@@ -1215,10 +1227,6 @@ export class StatusWidget {
         });
         line.appendChild(editBtn);
       }
-    } else if (st === 'failed') {
-      line.textContent = `⚠️ ${(this.analysis?.last_error ?? 'Analysis failed').slice(0, 240)}`;
-    } else if (st === 'canceled') {
-      line.textContent = '🚫 Canceled — re-run anytime.';
     } else if (st === 'running') {
       // The daemon publishes its phase — claude's session ending is only the
       // first stage; red/green, browser replay, stashing and the proposal update
@@ -1240,6 +1248,9 @@ export class StatusWidget {
   private async runAnalysis(): Promise<void> {
     if (this.analysisBusy) return;
     this.analysisBusy = true;
+    // A pending edit is against the row that's about to be replaced — drop it
+    // so a stale draft can't reappear over the new run's own terminal state.
+    this.analysisEditing = false;
     this.render();
     const res = await sendMessage<AnalysisResponse>({
       type: 'RUN_ANALYSIS',

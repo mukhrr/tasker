@@ -973,11 +973,15 @@ async function handleUpdateAnalysisSummary(
     .ilike('repo_owner', owner)
     .ilike('repo_name', repo)
     .eq('issue_number', number)
-    .eq('state', 'done')
+    // Any terminal state is editable, not just 'done': a canceled run can
+    // still be worth a note, and NOT_REPRODUCED writes a real summary onto a
+    // 'failed' row. State-filtered regardless, so a Re-run that flips the row
+    // to queued/running mid-edit can't have a stale save land on top of it.
+    .in('state', ['done', 'failed', 'canceled'])
     .select()
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: 'Only completed analysis summaries can be edited' };
+  if (!data) return { ok: false, error: 'Only a finished, failed, or canceled analysis can be edited' };
   return { ok: true, data: data as AnalysisRequest };
 }
 
