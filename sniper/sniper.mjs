@@ -1294,9 +1294,16 @@ async function pollHwAnchorOnce(n) {
   return latest;
 }
 
-// Poll the real HW event time throughout the tight window so fire() has an
-// accurate anchor ready instead of a rushed fire-time lookup. Stops when the
-// anchor is found, the issue posts, or the tight window ends.
+// Poll the real HW event time throughout the tight window. This doubles as a
+// SECOND detection path, independent of tick()'s /labels poll: #98573 showed
+// /labels can sit on a stale conditional-GET response for up to ~1s even at
+// 50ms cadence with the tight window already open before the label landed
+// (detectDateMs read a full second later than the event's own timestamp) —
+// while the /events-based anchor here is fetched on its own schedule against
+// a different endpoint. Whichever of the two sees it first fires; fire()'s
+// own `posted` guard makes a double-call harmless. If /events turns out to
+// carry the same staleness, this costs nothing beyond what the anchor poll
+// already spent — it was running for every tight window regardless.
 function startHwAnchorPoll(n) {
   if (ANCHOR_POLL_INTERVAL_MS <= 0 || hwAnchorPolling.has(n)) return; // 0 disables (stress test)
   hwAnchorPolling.add(n);
@@ -1312,6 +1319,9 @@ function startHwAnchorPoll(n) {
         hwEventAnchors.set(n, ts);
         log(`⚓ #${n} HW anchor pre-fetched: ${new Date(ts).toISOString()}`);
         hwAnchorPolling.delete(n);
+        if (!posted.has(n)) {
+          void fire(n, st.issue, 'events-anchor', { hwEventMs: ts, detectDateMs: ts, detectLocalMs: Date.now() });
+        }
         return;
       }
     } catch {
