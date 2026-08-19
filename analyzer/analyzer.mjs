@@ -682,7 +682,7 @@ async function processRequest(req) {
 
     // json output = the same final text plus metadata — notably session_id,
     // which the widget offers as a copyable `claude --resume` command.
-    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json'];
+    const args = ['-p', '--dangerously-skip-permissions', '--output-format', 'json', '--name', String(n)];
     if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
     // fast-replay's MCP server: gives the run a one-call `repro_run` tool
     // (verdict + failing step + console + network + screenshot) instead of
@@ -1138,7 +1138,7 @@ async function processReview(proposal) {
   }
 
   const prompt = await buildReviewPrompt(issue, n, proposal.body || '', melvin);
-  const args = ['-p', '--output-format', 'json']; // no tool use → no --dangerously-skip-permissions
+  const args = ['-p', '--output-format', 'json', '--name', String(n)]; // no tool use → no --dangerously-skip-permissions
   if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
   const res = await run(CLAUDE_BIN, args, {
     cwd: APP_REPO_DIR,
