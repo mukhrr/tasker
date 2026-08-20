@@ -403,9 +403,19 @@ async function captureSessionEarly(reqId, n) {
 // to a real source file is the reproduce→fix transition; repro artifacts (test
 // harnesses, .repros/ recordings, scratch scripts) are still reproduction.
 const EDIT_TOOL_RE = /"name":\s*"(?:Edit|Write|MultiEdit|NotebookEdit)"/;
+// A live web repro against the real dev server is genuinely slow — #99000 took
+// 36 minutes and 76 tool calls before its first source edit, most of it real
+// work (18 iterated Playwright probe scripts, 4 retried after a TimeoutError).
+// The old flat "Reproducing the bug…" gave no way to tell that from a hang, so
+// count tool_use events off the same transcript tail and report growth — not
+// live, just enough motion across the widget's own poll to prove it's alive.
+const TOOL_USE_COUNT_RE = /"type":\s*"tool_use"/g;
+const REPRO_PROGRESS_THROTTLE_MS = 20_000;
 async function watchFixPhase(reqId, n, transcript, ctrl) {
   let offset = 0;
   let remainder = '';
+  let toolCalls = 0;
+  let lastReportedAt = 0;
   while (!ctrl.stop) {
     await new Promise((r) => setTimeout(r, 5000));
     let chunk = '';
@@ -425,6 +435,15 @@ async function watchFixPhase(reqId, n, transcript, ctrl) {
     if (!chunk) continue;
     const lines = (remainder + chunk).split('\n');
     remainder = lines.pop() || '';
+    const newCalls = lines.reduce((sum, l) => sum + (l.match(TOOL_USE_COUNT_RE)?.length || 0), 0);
+    if (newCalls > 0) {
+      toolCalls += newCalls;
+      const now = Date.now();
+      if (now - lastReportedAt >= REPRO_PROGRESS_THROTTLE_MS) {
+        lastReportedAt = now;
+        setPhase(reqId, `🔬 Reproducing the bug… (${toolCalls} actions so far)`);
+      }
+    }
     for (const line of lines) {
       if (!EDIT_TOOL_RE.test(line)) continue;
       let hit = false;
