@@ -280,21 +280,26 @@ length (see "How it reads" below), and never
 space-aligned columns inside a code fence — they collapse the moment GitHub
 wraps a long line.
 
-**A mermaid flowchart when the bug is a chain of steps.** GitHub renders
-```mermaid fences natively in comments, and almost nobody uses them — a
-diagram of the actual mechanism is the least imitable thing in a proposal.
-Boxes are the flow, arrows are the observed facts:
+**A mermaid diagram matched to the bug's shape.** GitHub renders ```mermaid
+fences natively in comments, and almost nobody uses them — a diagram of the
+actual mechanism is the least imitable thing in a proposal. Pick the diagram
+TYPE from what the bug actually is, not from rotation. Three types earn their
+place:
+
+**`flowchart` — a causal chain.** One thing causes the next causes the next.
+This is the default and fits most bugs. Boxes are the flow, arrows are the
+observed facts:
 
 ```mermaid
 flowchart TD
     A["Save 0.00 on itemized page"] -->|"jsonCode 200"| B["maxExpenseAmountNoItemizedReceipt = 0"]
     B -->|"Rules row reads $0.00"| C["Enter 50 on receipt page"]
-    C -->|"validate() returns {} — limit was 0"| D["Set receipt limit to 5000"]
+    C -->|"validate() returns {}, limit was 0"| D["Set receipt limit to 5000"]
     D -->|"jsonCode 666"| E["Auth UpdatePolicyAttributes returned an error"]
-    E -->|"failureData restores previous value"| F["Silent rollback — nothing on screen changed"]
+    E -->|"failureData restores previous value"| F["Silent rollback, nothing on screen changed"]
 ```
 
-Rules, all learned from what actually renders on GitHub:
+Flowchart-only rules, all learned from what actually renders on GitHub:
 - **6 boxes or fewer → `flowchart TD`** (vertical). A comment column is tall,
   not wide, so vertical never runs out of room. This is the default.
 - **More than 6 → `flowchart LR`** (horizontal). Prefer collapsing the trace
@@ -302,14 +307,58 @@ Rules, all learned from what actually renders on GitHub:
 - **Never wrap a long chain with subgraphs.** Mermaid anchors cross-subgraph
   edges at the subgraph boundary rather than the real node, so the connector
   leaves from the middle of one row and lands in the middle of the next,
-  implying causality that does not exist. A misleading diagram is worse than
-  no diagram.
-- Box text is the step, short enough to scan. The arrow label carries the
-  evidence — a response code, a returned value, an action name, a server
-  message. Same rule as everywhere else: only values the run actually
-  observed.
+  implying causality that does not exist.
 - Quote every label (`A["..."]`, `-->|"..."|`). Parentheses, braces and
   colons break the parse unquoted, and real evidence is full of them.
+
+**`sequenceDiagram` — a race or an ordering.** Two requests, two effects, or
+client vs server, where the bug is WHICH ARRIVED FIRST rather than what caused
+what. A flowchart cannot show concurrency; this can. 2-4 participants, no
+more:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Page
+    participant S as Server
+    participant O as Onyx
+    par cold boot
+        P->>S: OpenReport (mount effect, sent once)
+    and
+        P->>S: OpenApp
+    end
+    S-->>O: OpenReport onyxData, 3 transactions
+    S-->>O: OpenApp setcollection replaces transactions_
+    Note over O: report present, total -423937, txnCount 0
+```
+
+- Message text after `:` is raw — do NOT quote it the way flowchart labels are
+  quoted, and keep semicolons out of it.
+- `Note over X: value` is where the measured state goes.
+- `par ... and ... end` for the concurrent legs, `autonumber` when the order
+  itself is the point.
+
+**`stateDiagram-v2` — a component stuck in a state.** A lifecycle that enters
+a state and has no edge out, or takes the wrong edge. Use it when the fix is
+"add the missing transition", not when the bug is a chain:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Loading
+    Loading --> Loaded: transactions land
+    Loading --> Loading: OpenApp replaces collection, txnCount 0
+    note right of Loading: shouldWaitForTransactions stays true, no re-fetch
+```
+
+- State ids cannot contain spaces. Use `state "long name" as s1` for anything
+  longer than a word.
+- Transition labels go after a `:`, unquoted.
+
+Other mermaid types render too (class, ER, gitGraph), but they describe
+structure rather than mechanism and almost never fit a bug — reach for one
+only if it genuinely is the bug. A bad-fit exotic diagram is worse than the
+default flowchart, and a misleading diagram is worse than no diagram at all.
+The type comes from the mechanism, never from wanting to look different.
 
 When the bug is missing-or-wrong state rather than a chain, a ```diff snapshot
 is the sharper shape (`+` the state that exists, `-` the state that never
