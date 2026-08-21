@@ -1,7 +1,7 @@
 // Status is now dynamic per-user, so TaskStatus is just a string alias
 export type TaskStatus = string;
 
-export type TaskStatusGroup = 'todo' | 'in_progress' | 'complete';
+export type TaskStatusGroup = 'todo' | 'in_progress' | 'pending' | 'complete';
 
 export interface UserStatus {
   id: string;

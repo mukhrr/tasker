@@ -19,7 +19,8 @@ import type { TaskStatusGroup } from '@/types/database';
 const RAMP: Record<TaskStatusGroup, string> = {
   todo: 'var(--chart-ramp-1)',
   in_progress: 'var(--chart-ramp-2)',
-  complete: 'var(--chart-ramp-3)',
+  pending: 'var(--chart-ramp-3)',
+  complete: 'var(--chart-ramp-4)',
 };
 
 interface StatusChartProps {

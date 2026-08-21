@@ -15,11 +15,13 @@ export const COLOR_HEX: Record<string, string> = {
 export const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
   in_progress: 'In Progress',
+  pending: 'Pending',
   complete: 'Complete',
 };
 
 export const STATUS_GROUP_ORDER: TaskStatusGroup[] = [
   'todo',
   'in_progress',
+  'pending',
   'complete',
 ];

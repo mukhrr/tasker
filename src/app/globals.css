@@ -77,6 +77,7 @@
   --chart-ramp-1: #75bfe3;
   --chart-ramp-2: #0e9fd2;
   --chart-ramp-3: #016d91;
+  --chart-ramp-4: #00465f;
   --radius: 0.25rem;
   --sidebar: #fbfbfa;
   --sidebar-foreground: #37352f;
@@ -117,6 +118,7 @@
   --chart-ramp-1: #2e7097;
   --chart-ramp-2: #4892be;
   --chart-ramp-3: #65b8eb;
+  --chart-ramp-4: #8bd4f5;
   --sidebar: #121212;
   --sidebar-foreground: #e3e2de;
   --sidebar-primary: #e3e2de;

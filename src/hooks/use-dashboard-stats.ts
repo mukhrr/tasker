@@ -21,12 +21,13 @@ export function useDashboardStats(
     const inProgressTasks = tasks.filter(
       (t) => t.status_group === 'in_progress'
     );
+    const pendingTasks = tasks.filter((t) => t.status_group === 'pending');
 
     const totalEarned = completeTasks.reduce(
       (sum, t) => sum + (t.amount ?? 0),
       0
     );
-    const pendingAmount = inProgressTasks.reduce(
+    const pendingAmount = pendingTasks.reduce(
       (sum, t) => sum + (t.amount ?? 0),
       0
     );
@@ -62,18 +63,20 @@ export function useDashboardStats(
     const groupLabels: Record<TaskStatusGroup, string> = {
       todo: 'To-do',
       in_progress: 'In Progress',
+      pending: 'Pending',
       complete: 'Complete',
     };
     const groupCounts: Record<TaskStatusGroup, number> = {
       todo: 0,
       in_progress: 0,
+      pending: 0,
       complete: 0,
     };
     for (const t of tasks) {
       groupCounts[t.status_group] = (groupCounts[t.status_group] ?? 0) + 1;
     }
     const tasksByStatusGroup = (
-      ['todo', 'in_progress', 'complete'] as TaskStatusGroup[]
+      ['todo', 'in_progress', 'pending', 'complete'] as TaskStatusGroup[]
     ).map((g) => ({
       name: groupLabels[g],
       value: groupCounts[g],

@@ -57,12 +57,14 @@ export const COLOR_NAMES = Object.keys(STATUS_COLORS);
 export const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
   in_progress: 'In Progress',
+  pending: 'Pending',
   complete: 'Complete',
 };
 
 export const STATUS_GROUP_ORDER: TaskStatusGroup[] = [
   'todo',
   'in_progress',
+  'pending',
   'complete',
 ];
 
@@ -123,6 +125,7 @@ export function getStatusesByGroup(
   const groups: Record<TaskStatusGroup, UserStatus[]> = {
     todo: [],
     in_progress: [],
+    pending: [],
     complete: [],
   };
   for (const s of statuses) {

@@ -1076,6 +1076,7 @@ export class StatusWidget {
     const groups: Record<TaskStatusGroup, UserStatus[]> = {
       todo: [],
       in_progress: [],
+      pending: [],
       complete: [],
     };
     for (const s of this.statuses) {

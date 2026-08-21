@@ -3,6 +3,7 @@ import type { UserStatus, TaskStatusGroup } from '@/types/database';
 const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
   in_progress: 'In Progress',
+  pending: 'Pending',
   complete: 'Complete',
 };
 
@@ -10,6 +11,7 @@ function buildStatusTaxonomy(statuses: UserStatus[]): string {
   const groups: Record<TaskStatusGroup, UserStatus[]> = {
     todo: [],
     in_progress: [],
+    pending: [],
     complete: [],
   };
   for (const s of statuses) {
@@ -20,6 +22,7 @@ function buildStatusTaxonomy(statuses: UserStatus[]): string {
   for (const group of [
     'todo',
     'in_progress',
+    'pending',
     'complete',
   ] as TaskStatusGroup[]) {
     section += `### ${STATUS_GROUP_LABELS[group]}\n`;

@@ -295,7 +295,7 @@ function todayDate(): string {
 async function handleUpdateStatus(taskId: string, status: string, statusGroup: string): Promise<MessageResponse> {
   if (!taskId || typeof taskId !== 'string') return { ok: false, error: 'Invalid task ID' };
   if (!status || typeof status !== 'string') return { ok: false, error: 'Invalid status' };
-  const validGroups = ['todo', 'in_progress', 'complete'];
+  const validGroups = ['todo', 'in_progress', 'pending', 'complete'];
   if (!validGroups.includes(statusGroup)) return { ok: false, error: 'Invalid status group' };
 
   const supabase = getSupabaseClient();
@@ -353,7 +353,7 @@ async function handleUpdateLinkedStatuses(
 ): Promise<MessageResponse> {
   if (!issueNumbers.length) return { ok: true };
 
-  const validGroups = ['todo', 'in_progress', 'complete'];
+  const validGroups = ['todo', 'in_progress', 'pending', 'complete'];
   if (!validGroups.includes(statusGroup)) return { ok: false, error: 'Invalid status group' };
 
   const supabase = getSupabaseClient();
