@@ -21,6 +21,11 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   note: 'Note',
 };
 
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+});
+
 export function TaskTable({ userId }: { userId: string }) {
   const ctx = useTaskTable(userId);
 
@@ -34,6 +39,10 @@ export function TaskTable({ userId }: { userId: string }) {
   }
 
   const visibleColumnKeys = ctx.columnOrder.filter(ctx.isColumnVisible);
+  const totalAmount = ctx.filteredTasks.reduce(
+    (sum, task) => sum + (task.amount ?? 0),
+    0
+  );
 
   return (
     <div className="space-y-4">
@@ -148,9 +157,17 @@ export function TaskTable({ userId }: { userId: string }) {
       </div>
 
       {ctx.tasks.length > 0 && (
-        <p className="text-sm text-muted-foreground">
-          {ctx.filteredTasks.length} of {ctx.tasks.length} tasks
-        </p>
+        <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+          <p>
+            {ctx.filteredTasks.length} of {ctx.tasks.length} tasks
+          </p>
+          <p className="shrink-0 tabular-nums">
+            Total amount{' '}
+            <span className="font-medium text-foreground">
+              {currencyFormatter.format(totalAmount)}
+            </span>
+          </p>
+        </div>
       )}
     </div>
   );
