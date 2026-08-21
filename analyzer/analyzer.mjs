@@ -403,6 +403,47 @@ async function captureSessionEarly(reqId, n) {
 // to a real source file is the reproduce→fix transition; repro artifacts (test
 // harnesses, .repros/ recordings, scratch scripts) are still reproduction.
 const EDIT_TOOL_RE = /"name":\s*"(?:Edit|Write|MultiEdit|NotebookEdit)"/;
+// File paths any Edit/Write/MultiEdit/NotebookEdit tool_use in one transcript
+// line touched, normalized to repo-relative (the transcript records absolute
+// paths; git status --porcelain reports repo-relative — both sides of the
+// stash-time comparison need to agree on one form).
+function editedFilePathsInLine(line) {
+  if (!EDIT_TOOL_RE.test(line)) return [];
+  const paths = [];
+  const prefix = APP_REPO_DIR.endsWith('/') ? APP_REPO_DIR : `${APP_REPO_DIR}/`;
+  try {
+    for (const item of JSON.parse(line)?.message?.content || []) {
+      if (item?.type !== 'tool_use') continue;
+      if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(item.name || '')) continue;
+      const p = String(item.input?.file_path || item.input?.notebook_path || '');
+      if (p) paths.push(p.startsWith(prefix) ? p.slice(prefix.length) : p);
+    }
+  } catch {
+    /* partial or non-JSON line */
+  }
+  return paths;
+}
+
+// Called once, after claude has exited and the transcript is complete: the
+// authoritative "what did OUR session actually touch" list. Stashing used to
+// diff dirty-files-now against dirty-files-at-start, which can't tell Claude's
+// own edit from someone else's landing in the same 10-40 minute window — #99086
+// swept in unrelated bank-account WIP from the same shared checkout because of
+// exactly that gap. This reads ground truth from the tool calls themselves.
+async function claudeTouchedFiles(transcript) {
+  const touched = new Set();
+  let text;
+  try {
+    text = await readFile(transcript, 'utf8');
+  } catch {
+    return touched; // unreadable — caller falls back to the old preDirty-only diff
+  }
+  for (const line of text.split('\n')) {
+    for (const p of editedFilePathsInLine(line)) touched.add(p);
+  }
+  return touched;
+}
+
 // A live web repro against the real dev server is genuinely slow — #99000 took
 // 36 minutes and 76 tool calls before its first source edit, most of it real
 // work (18 iterated Playwright probe scripts, 4 retried after a TimeoutError).
@@ -445,21 +486,9 @@ async function watchFixPhase(reqId, n, transcript, ctrl) {
       }
     }
     for (const line of lines) {
-      if (!EDIT_TOOL_RE.test(line)) continue;
-      let hit = false;
-      try {
-        for (const item of JSON.parse(line)?.message?.content || []) {
-          if (item?.type !== 'tool_use') continue;
-          if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(item.name || '')) continue;
-          const filePath = String(item.input?.file_path || item.input?.notebook_path || '');
-          if (filePath.includes('/src/') && !/\.(test|spec)\./.test(filePath)) {
-            hit = true;
-            break;
-          }
-        }
-      } catch {
-        continue; // partial or non-JSON line
-      }
+      const hit = editedFilePathsInLine(line).some(
+        (filePath) => filePath.startsWith('src/') && !/\.(test|spec)\./.test(filePath),
+      );
       if (!hit) continue;
       if (ctrl.stop) return; // the run moved on — never regress a later phase
       setPhase(reqId, '🛠 Implementing the fix…');
@@ -720,10 +749,16 @@ async function processRequest(req) {
     log(`🤖 #${n} running claude (timeout ${Math.round(CLAUDE_TIMEOUT_MS / 60000)}m)`);
     setPhase(req.id, '🔬 Reproducing the bug…');
     const phaseWatch = { stop: false };
-    // Surface the resumable session id right away, then tail that transcript to
-    // advance the phase when reproduction turns into fixing.
+    // sessionInfo.transcript is read again at stash-time, once claude has
+    // exited and the file is complete, for the authoritative touched-files
+    // scan — this fire-and-forget chain runs the live progress/phase watch in
+    // the meantime and just leaves the path behind for that later read.
+    const sessionInfo = { transcript: null };
     void captureSessionEarly(req.id, n)
-      .then((transcript) => (transcript ? watchFixPhase(req.id, n, transcript, phaseWatch) : null))
+      .then((transcript) => {
+        sessionInfo.transcript = transcript;
+        return transcript ? watchFixPhase(req.id, n, transcript, phaseWatch) : null;
+      })
       .catch(() => {});
 
     // Watch for the row changing state under us and kill the in-flight claude
@@ -776,7 +811,9 @@ async function processRequest(req) {
       // re-queued by a fast Re-run) — leave it exactly as the extension set it;
       // a 'queued' row gets picked up fresh by the main loop right after this.
       const part = await git(['status', '--porcelain']);
-      const partFiles = changedFiles(part.stdout).filter((f) => !preDirty.has(f));
+      const partTouched = sessionInfo.transcript ? await claudeTouchedFiles(sessionInfo.transcript) : null;
+      const partIsClaudes = partTouched ? (f) => partTouched.has(f) : (f) => !preDirty.has(f);
+      const partFiles = changedFiles(part.stdout).filter((f) => !preDirty.has(f) && partIsClaudes(f));
       if (partFiles.length) {
         await git(['stash', 'push', '-u', '-m', `canceled-analysis-#${n}`, '--', ...partFiles]);
         log(`🚫 #${n} canceled — ${partFiles.length} partial file(s) stashed as canceled-analysis-#${n}`);
@@ -801,12 +838,25 @@ async function processRequest(req) {
     }
     const { summary, proposal: updatedProposal, notReproduced } = parseOutput(finalText);
 
-    // Stash exactly what the run changed: post-run dirty files minus the ones
-    // that were already dirty before it started (those are the user's).
+    // Stash exactly what CLAUDE changed — ground truth from its own tool
+    // calls, not a before/after dirty-file diff. The diff alone can't tell
+    // Claude's edit from someone else's landing in the same 10-40 minute
+    // window: this checkout is the user's own active dev environment (real
+    // branches, real commits), not a scratch clone, so a concurrent edit is a
+    // real possibility, not a hypothetical — #99086's stash swept in unrelated
+    // WIP from exactly that gap. Falls back to the old preDirty-only diff only
+    // if the transcript was never captured at all, so a scan failure can't
+    // silently drop Claude's own fix.
     const after = await git(['status', '--porcelain']);
     const afterFiles = changedFiles(after.stdout);
-    const files = afterFiles.filter((f) => !preDirty.has(f));
-    const overlap = afterFiles.filter((f) => preDirty.has(f));
+    const touched = sessionInfo.transcript ? await claudeTouchedFiles(sessionInfo.transcript) : null;
+    const isClaudes = touched ? (f) => touched.has(f) : (f) => !preDirty.has(f);
+    const files = afterFiles.filter((f) => !preDirty.has(f) && isClaudes(f));
+    const overlap = afterFiles.filter((f) => !(!preDirty.has(f) && isClaudes(f)));
+    const strayFiles = touched ? overlap.filter((f) => !preDirty.has(f)) : [];
+    if (strayFiles.length) {
+      log(`⚠️ #${n} left ${strayFiles.length} concurrently-modified file(s) alone (not ours): ${strayFiles.slice(0, 5).join(', ')}`);
+    }
 
     // Reproduction gate: claude reported it could not reproduce the bug, so by
     // contract it implemented no fix and rewrote nothing. Stop here — park any
@@ -1003,7 +1053,9 @@ async function processRequest(req) {
       }
     }
 
-    const overlapNote = overlap.length ? `; ⚠️ ${overlap.length} file(s) had pre-existing local edits and were left unstashed: ${overlap.slice(0, 3).join(', ')}` : '';
+    const overlapNote = overlap.length
+      ? `; ⚠️ ${overlap.length} file(s) left unstashed (${strayFiles.length ? 'not ours — modified elsewhere during the run' : 'pre-existing local edits'}): ${overlap.slice(0, 3).join(', ')}`
+      : '';
     const verificationNote = verification ? `${verification}; ` : '';
     const resultSummary = `${summary}\n\n[${verificationNote}${proposalNote}${stashRef ? `; stash: ${stashRef}` : '; no code changes'}${overlapNote}]`.slice(0, 2000);
     const doneRow = await updateRequest(
