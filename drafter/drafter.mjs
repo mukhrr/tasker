@@ -138,6 +138,12 @@ const FAST_INTERIM_ARM = bool('FAST_INTERIM_ARM', false);
 const INTERIM_TIMEOUT_MS = int('INTERIM_TIMEOUT_MS', 120_000);
 const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 
+// Watch the issue the moment a proposal is armed. An armed proposal now waits
+// hours for the C+ review gate, and everything that decides its fate happens on
+// the issue in the meantime (the C+ comment, Help Wanted, Internal, a close).
+// Posting a comment subscribes you automatically, but that is far too late.
+const SUBSCRIBE_ON_ARM = bool('SUBSCRIBE_ON_ARM', true);
+
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
@@ -234,6 +240,32 @@ async function gh(pathname, { method = 'GET', body } = {}) {
 
 function labelNames(labels) {
   return (labels || []).map((l) => (typeof l === 'string' ? l : l.name).toLowerCase());
+}
+
+// Subscribe to issue notifications. REST has no per-issue subscription endpoint
+// (it 404s), so this is GraphQL-only; node_id comes free on the REST issue
+// payload we already fetched. GraphQL answers 200 with an `errors` array when
+// the token lacks the `notifications` scope, so success is the returned
+// viewerSubscription, never the status code.
+async function subscribeToIssue(n, issue) {
+  if (!SUBSCRIBE_ON_ARM || !issue?.node_id) return;
+  try {
+    const { data } = await gh('/graphql', {
+      method: 'POST',
+      body: {
+        query:
+          'mutation($id:ID!){updateSubscription(input:{subscribableId:$id,state:SUBSCRIBED}){subscribable{viewerSubscription}}}',
+        variables: { id: issue.node_id },
+      },
+    });
+    if (data?.data?.updateSubscription?.subscribable?.viewerSubscription === 'SUBSCRIBED') {
+      log(`🔔 #${n} subscribed to the issue`);
+      return;
+    }
+    log(`#${n} subscribe failed: ${data?.errors?.[0]?.message || JSON.stringify(data).slice(0, 200)}`);
+  } catch (e) {
+    log(`#${n} subscribe errored: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // ── shell helper ───────────────────────────────────────────────────────────────
@@ -815,6 +847,7 @@ async function armInterim(claimed, n, issue, comments, settings) {
       return false;
     }
     log(`⚡ #${n} interim armed (${draft.body.length} chars) — full draft continuing`);
+    await subscribeToIssue(n, issue);
     // If Help Wanted is already present the sniper ignores the stale label, so
     // post the interim now to be in the race; the full draft edits it later.
     const hasHW = labelNames(issue.labels).includes(TRIGGER);
@@ -851,6 +884,7 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
       return null;
     }
     log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}${resumeHint(sessionId)}`);
+    await subscribeToIssue(n, issue);
     // Essential, not verbose: the Melvin comparison is the point of the draft,
     // and it is the only place that verdict surfaces now that the Claude review
     // gate is off.
