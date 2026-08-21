@@ -105,7 +105,31 @@ export function useTaskTable(userId: string) {
   const filteredTasks = useMemo(() => {
     let filtered = tasksCrud.tasks;
 
-    if (activeTab === 'archived') {
+    if (activeTab === 'pending') {
+      const normalizeStatus = (value: string) =>
+        value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      const pendingStatuses = new Set([
+        'awaiting_payment',
+        'submit_in_nd',
+        'submitted_in_nd',
+      ]);
+      const pendingKeys = new Set(
+        statusesCrud.statuses
+          .filter(
+            (status) =>
+              pendingStatuses.has(normalizeStatus(status.key)) ||
+              pendingStatuses.has(normalizeStatus(status.label))
+          )
+          .map((status) => status.key)
+      );
+
+      filtered = filtered.filter(
+        (task) =>
+          !task.archived &&
+          (pendingKeys.has(task.status) ||
+            pendingStatuses.has(normalizeStatus(task.status)))
+      );
+    } else if (activeTab === 'archived') {
       filtered = filtered.filter((t) => t.archived);
     } else {
       filtered = filtered.filter((t) => !t.archived);
@@ -406,7 +430,7 @@ export function useTaskTable(userId: string) {
     // Data
     tasks: tasksCrud.tasks,
     filteredTasks,
-    loading: tasksCrud.loading,
+    loading: tasksCrud.loading || statusesCrud.loading,
     syncingTaskIds: tasksCrud.syncingTaskIds,
     statuses: statusesCrud.statuses,
     columns: customColumns.columns,

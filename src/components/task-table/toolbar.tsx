@@ -121,6 +121,7 @@ export function Toolbar({
     { value: 'all', label: 'All' },
     { value: 'todo', label: 'To-do' },
     { value: 'in_progress', label: 'In Progress' },
+    { value: 'pending', label: 'Pending' },
     { value: 'complete', label: 'Complete' },
     { value: 'archived', label: 'Archived' },
   ];
