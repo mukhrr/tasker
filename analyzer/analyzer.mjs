@@ -641,9 +641,19 @@ async function processRequest(req) {
 
   const fail = async (error) => {
     log(`❌ #${n} analysis failed: ${error}`);
-    // State-filtered: a cancel that landed meanwhile must not be overwritten.
-    const row = await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500), progress: null }, { requireState: 'running' });
-    if (row) await notify(`⚠️ Claude analysis for ${REPO}#${n} failed: ${String(error).slice(0, 200)}`);
+    // #99086: this write can itself fail (a transient network blip hit both
+    // the original error AND this one, back to back). Unguarded, that second
+    // throw propagated out of fail() and past processRequest entirely, so the
+    // row stayed 'running' forever instead of landing on 'failed' — the exact
+    // state recoverOrphanedRuns() already knows how to re-queue at boot, had
+    // it ever gotten there. Never let reporting a failure produce a worse one.
+    try {
+      // State-filtered: a cancel that landed meanwhile must not be overwritten.
+      const row = await updateRequest(req.id, { state: 'failed', last_error: String(error).slice(0, 500), progress: null }, { requireState: 'running' });
+      if (row) await notify(`⚠️ Claude analysis for ${REPO}#${n} failed: ${String(error).slice(0, 200)}`);
+    } catch (e) {
+      log(`#${n} could not even record the failure: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   try {
