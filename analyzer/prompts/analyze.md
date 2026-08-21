@@ -278,7 +278,40 @@ any screen, and asks the reader to learn nothing:
 3-6 bullets, every clause an observation, no filler steps, varied bullet
 length (see "How it reads" below), and never
 space-aligned columns inside a code fence — they collapse the moment GitHub
-wraps a long line. When the bug is missing-or-wrong state, a ```diff snapshot
+wraps a long line.
+
+**A mermaid flowchart when the bug is a chain of steps.** GitHub renders
+```mermaid fences natively in comments, and almost nobody uses them — a
+diagram of the actual mechanism is the least imitable thing in a proposal.
+Boxes are the flow, arrows are the observed facts:
+
+```mermaid
+flowchart TD
+    A["Save 0.00 on itemized page"] -->|"jsonCode 200"| B["maxExpenseAmountNoItemizedReceipt = 0"]
+    B -->|"Rules row reads $0.00"| C["Enter 50 on receipt page"]
+    C -->|"validate() returns {} — limit was 0"| D["Set receipt limit to 5000"]
+    D -->|"jsonCode 666"| E["Auth UpdatePolicyAttributes returned an error"]
+    E -->|"failureData restores previous value"| F["Silent rollback — nothing on screen changed"]
+```
+
+Rules, all learned from what actually renders on GitHub:
+- **6 boxes or fewer → `flowchart TD`** (vertical). A comment column is tall,
+  not wide, so vertical never runs out of room. This is the default.
+- **More than 6 → `flowchart LR`** (horizontal). Prefer collapsing the trace
+  to 6 first; past that, boxes stack too tall vertically.
+- **Never wrap a long chain with subgraphs.** Mermaid anchors cross-subgraph
+  edges at the subgraph boundary rather than the real node, so the connector
+  leaves from the middle of one row and lands in the middle of the next,
+  implying causality that does not exist. A misleading diagram is worse than
+  no diagram.
+- Box text is the step, short enough to scan. The arrow label carries the
+  evidence — a response code, a returned value, an action name, a server
+  message. Same rule as everywhere else: only values the run actually
+  observed.
+- Quote every label (`A["..."]`, `-->|"..."|`). Parentheses, braces and
+  colons break the parse unquoted, and real evidence is full of them.
+
+When the bug is missing-or-wrong state rather than a chain, a ```diff snapshot
 is the sharper shape (`+` the state that exists, `-` the state that never
 arrived — GitHub colors them green/red, so the mismatch is visible before a
 word is read). 2-4 real console/log lines still fit timing bugs. Pick
