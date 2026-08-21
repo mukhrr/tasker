@@ -22,16 +22,17 @@ export function useDashboardStats(
       (t) => t.status_group === 'in_progress'
     );
     const pendingTasks = tasks.filter((t) => t.status_group === 'pending');
+    const activeTasks = [...inProgressTasks, ...pendingTasks];
 
     const totalEarned = completeTasks.reduce(
       (sum, t) => sum + (t.amount ?? 0),
       0
     );
-    const pendingAmount = pendingTasks.reduce(
+    const pendingAmount = activeTasks.reduce(
       (sum, t) => sum + (t.amount ?? 0),
       0
     );
-    const activeCount = inProgressTasks.length;
+    const activeCount = activeTasks.length;
     const completedCount = completeTasks.length;
 
     // Earnings over time — last 12 months
