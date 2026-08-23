@@ -28,6 +28,16 @@ you learned.
 ## Suggested flow (time-box ~30 minutes total)
 
 1. Read the issue and the current proposal below. Read the code paths involved.
+   **Pin the reported symptom before you drive anything**: write down the
+   Expected Result, the Actual Result, and the preconditions that decide which
+   is which (signed in or not, first open or repeat, platform, account state,
+   app version). That pinned symptom is what step 3 checks against, so pin it
+   before the app has a chance to show you something else. When the title and
+   the Actual Result disagree, or the Actual Result contradicts the steps, say
+   so in `=== SUMMARY ===` and pin BOTH readings, then look for the one defect
+   that produces both. A report that contradicts itself usually has a single
+   cause upstream of both symptoms, and the proposal that finds it beats the
+   ones that pick a half and fix that.
 2. **Reproduce (time-box ~10-12 min for web, more for native) — the platform is
    NOT your choice: read the issue's "Platforms:" checklist and follow this RULE:**
    - **Any web platform checked** (Windows: Chrome, MacOS: Chrome Safari, or any
@@ -180,6 +190,25 @@ you learned.
    summary of what you tried and what you observed instead. A fix for a bug
    you never saw is a guess — the entire value of this run is that everything
    in the proposal was watched happening.
+   **The gate is the REPORTED symptom, not any symptom.** It passes only when
+   what you observed is the mismatch you pinned in step 1, under the
+   preconditions you pinned with it. Two tripwires, both of which look like
+   progress from the inside:
+   - **The reported flow worked when you drove it.** That IS the gate tripping.
+     A neighbouring variant failing (you repeated a single-use step, forced an
+     error the report never mentions, used state the steps never produce) is a
+     different bug, however real. Reproducing it does not open the gate.
+   - **Your write-up has to reinterpret the report to fit what you saw.** If
+     the root cause only reads as "the reported bug" after you re-explain what
+     the reporter meant, you reproduced something else.
+   Either way, output NOT_REPRODUCED. Describe the different bug in
+   `=== SUMMARY ===`, which is for the user alone and may be worth its own
+   issue, and never build the proposal around it. This is not a formality: on
+   #99156 the run reproduced a genuine expired-code failure on the same screen
+   and the C+ dismissed the whole batch with "all other proposals are fixing
+   the different bug". A wrong-bug proposal loses to a slower right-bug one
+   every time, so a NOT_REPRODUCED costs a race, and a wrong bug costs
+   standing with the reviewer who picks the winner.
 4. **Fix:** implement the minimal correct fix in the working tree. Check the
    surrounding code and git history (`git log -p`, `git blame`) so the fix
    doesn't regress the case the current code was written for.
