@@ -148,9 +148,16 @@ you learned.
         happening) and the green re-run (bug gone) are the only video evidence
         anyone in the thread will have, and you are driving both anyway.
         Launch the verification context with
-        `recordVideo: { dir: <absolute path> }` pointing at
+        `recordVideo: { dir: <absolute path>, size: { width: 1280, height: 720 } }`
+        pointing at
         `~/.tasker/videos/issue-<<<ISSUE_NUMBER>>>/` (expand the ~ yourself,
-        Playwright treats it as a literal relative path), and after the
+        Playwright treats it as a literal relative path), AND set
+        `viewport: { width: 1280, height: 720 }` on that same context — the
+        two sizes must match, and `viewport: null` is not allowed on a
+        recording context. On any mismatch Playwright scales the page into a
+        corner of the frame and pads the rest with gray, which reads as a
+        broken take. Don't resize the window mid-recording for the same
+        reason. After the
         context closes rename each take with `video.saveAs(...)` (grab
         `page.video()` before closing): `bug.webm` for the run that shows the
         bug, `fixed.webm` for the re-run with the fix. Keep takes short: start
