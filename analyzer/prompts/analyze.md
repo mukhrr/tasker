@@ -144,6 +144,23 @@ you learned.
         per profile dir). If the browser lane is unavailable (Cloudflare
         challenge unsolved / offline), the Jest red/green remains the
         verification floor for both paths.
+        **Record the two runs that matter.** The red baseline run (bug
+        happening) and the green re-run (bug gone) are the only video evidence
+        anyone in the thread will have, and you are driving both anyway.
+        Launch the verification context with
+        `recordVideo: { dir: <absolute path> }` pointing at
+        `~/.tasker/videos/issue-<<<ISSUE_NUMBER>>>/` (expand the ~ yourself,
+        Playwright treats it as a literal relative path), and after the
+        context closes rename each take with `video.saveAs(...)` (grab
+        `page.video()` before closing): `bug.webm` for the run that shows the
+        bug, `fixed.webm` for the re-run with the fix. Keep takes short: start
+        the recorded run from the last seeded state, not from sign-in.
+        Everything in that folder is sent to the operator's Telegram when the
+        run completes so they can attach it to the proposal by hand (GitHub
+        takes comment uploads only through the web UI). Recording is a
+        byproduct of runs you were already doing — never spend exploration
+        time on a separate camera pass, and skip it entirely if the
+        verification lane itself fell back to Jest.
      7. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
@@ -167,11 +184,19 @@ you learned.
      **`npm run android`** (it pulls a prebuilt APK from rock's remote cache —
      fast). If the build fails: `git clean -fdx android/` and re-run — that
      recovery is known-good. Drive the UI with `adb shell input tap/swipe/text`
-     + `adb exec-out screencap -p > shot.png` (read the screenshots). Kill the
-     emulator when done.
+     + `adb exec-out screencap -p > shot.png` (read the screenshots). Record
+     the decisive bug/fixed passes as video too:
+     `adb shell "screenrecord --time-limit 120 /sdcard/take.mp4" &`, stop it
+     early with `adb shell killall -2 screenrecord` (SIGINT finalizes the
+     file, give it a second), then `adb pull` into
+     `~/.tasker/videos/issue-<<<ISSUE_NUMBER>>>/` as `bug.mp4` / `fixed.mp4`
+     — same folder and naming as the web takes, same Telegram delivery. Kill
+     the emulator when done.
    - **ONLY "iOS: App" checked** (no web) → you MUST attempt the iOS simulator:
      **`npm run ios`** (run `npm run pod-install` first if `ios/Pods` is
-     missing); drive via `xcrun simctl` (boot/install/launch/screenshot).
+     missing); drive via `xcrun simctl` (boot/install/launch/screenshot); record the
+     bug/fixed passes with `xcrun simctl io booted recordVideo <file>.mp4`
+     (stop with SIGINT) and drop them in the same videos folder.
    - **Both native apps checked, no web** → Android first (warmer, easier to
      drive); iOS only if the behavior can't be shown on Android.
    - **Simulate** — the fallback, never the first choice when the required

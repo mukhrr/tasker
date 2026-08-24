@@ -18,7 +18,7 @@
  *         node --env-file=.env analyzer.mjs
  */
 
-import { readFile, writeFile, readdir, open } from 'node:fs/promises';
+import { readFile, writeFile, readdir, open, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -661,11 +661,81 @@ async function browserRedGreenCheck(n, files, overlap) {
   return '🌐 VERIFIED browser red/green — replay observes the bug without the fix, gone with it';
 }
 
+// ── run videos ───────────────────────────────────────────────────────────────
+// The prompt has Claude record its red/green verification runs (bug happening,
+// bug gone) into ~/.tasker/videos/issue-<n>. GitHub has no API for comment
+// attachments, so the takes go to Telegram and the user drags them into the
+// proposal by hand. The folder is wiped when a run starts, so a stale take can
+// never pass as the current one.
+const VIDEO_ROOT = path.join(homedir(), '.tasker', 'videos');
+const TG_UPLOAD_LIMIT = 49 * 1024 * 1024; // bot API rejects uploads at 50MB
+
+let ffmpegOk = null;
+async function haveFfmpeg() {
+  if (ffmpegOk === null) ffmpegOk = (await run('ffmpeg', ['-version'], { timeoutMs: 10_000 })).code === 0;
+  return ffmpegOk;
+}
+
+async function sendRunVideos(n) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  const dir = path.join(VIDEO_ROOT, `issue-${n}`);
+  let names = [];
+  try {
+    names = (await readdir(dir)).filter((f) => /\.(webm|mp4|mov)$/i.test(f)).sort();
+  } catch {
+    return; // no folder — the run recorded nothing
+  }
+  for (const name of names) {
+    try {
+      let file = path.join(dir, name);
+      // Telegram streams mp4 inline; webm arrives as a bare file. Transcode
+      // when ffmpeg is around so the ping is watchable in one tap, fall back
+      // to sending the webm as a document when it isn't.
+      let sendAs = /\.webm$/i.test(name) ? 'document' : 'video';
+      if (sendAs === 'document' && (await haveFfmpeg())) {
+        const mp4 = path.join(tmpdir(), `tasker-video-${n}-${name.replace(/\.webm$/i, '')}.mp4`);
+        const t = await run(
+          'ffmpeg',
+          ['-y', '-i', file, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mp4],
+          { timeoutMs: 60_000 },
+        );
+        if (t.code === 0) {
+          file = mp4;
+          sendAs = 'video';
+        }
+      }
+      const st = await stat(file);
+      if (st.size > TG_UPLOAD_LIMIT) {
+        log(`🎬 #${n} ${name} is ${(st.size / 1e6).toFixed(0)}MB — over Telegram's bot upload limit, left in ${dir}`);
+        continue;
+      }
+      const form = new FormData();
+      form.append('chat_id', TG_CHAT);
+      form.append('caption', `🎬 ${REPO}#${n} — ${name}`);
+      form.append(
+        sendAs,
+        new Blob([await readFile(file)], { type: sendAs === 'video' ? 'video/mp4' : 'video/webm' }),
+        path.basename(file),
+      );
+      const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/send${sendAs === 'video' ? 'Video' : 'Document'}`, {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (res.ok) log(`🎬 #${n} sent ${name} to Telegram`);
+      else log(`🎬 #${n} ${name} upload failed (${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}) — left in ${dir}`);
+    } catch (e) {
+      log(`🎬 #${n} ${name} send errored: ${e instanceof Error ? e.message : String(e)} — left in ${dir}`);
+    }
+  }
+}
+
 async function processRequest(req) {
   const n = req.issue_number;
   const claimed = await updateRequest(req.id, { state: 'running' }, { requireState: 'queued' });
   if (!claimed) return;
   log(`🔬 #${n} analysis starting`);
+  await rm(path.join(VIDEO_ROOT, `issue-${n}`), { recursive: true, force: true }).catch(() => {});
   setPhase(req.id, 'Preparing the checkout…');
 
   const fail = async (error) => {
@@ -1071,6 +1141,7 @@ async function processRequest(req) {
     await notify(
       `🧠 Claude analysis done — ${REPO}#${n}\nhttps://github.com/${REPO}/issues/${n}\n\n${summary.slice(0, 600)}\n\n${verification ? `${verification}\n` : ''}${proposalNote}${stashRef ? `\nFix stashed: git stash list | grep "${stashRef}"` : '\n(no code changes)'}${overlapNote}`,
     );
+    await sendRunVideos(n);
   } catch (e) {
     await fail(e instanceof Error ? e.message : String(e));
   }
