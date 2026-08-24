@@ -166,8 +166,16 @@ you learned.
         run completes so they can attach it to the proposal by hand (GitHub
         takes comment uploads only through the web UI). Recording is a
         byproduct of runs you were already doing — never spend exploration
-        time on a separate camera pass, and skip it entirely if the
-        verification lane itself fell back to Jest.
+        time on a separate camera pass. The two takes have different
+        preconditions: `bug.webm` comes from the live reproduction run, so it
+        exists whenever you drove the bug in a browser at all, even when
+        verification later fell back to Jest — keep and deliver it in that
+        case, it is the half a proposal needs most. Only `fixed.webm` depends
+        on the browser green lane; skip just that one when the fix can't be
+        shown in the browser. Delete a take only when it does not show the
+        bug (blank, wrong page, died before the moment); when unsure, leave
+        it — the operator triages by eye, and a partial take of the real
+        symptom beats no take.
      7. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
