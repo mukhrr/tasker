@@ -12,6 +12,7 @@ import type {
   AutoPostResponse,
   AutoPilotResponse,
   AnalysisResponse,
+  AnalysesBatchResponse,
 } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
 
@@ -41,6 +42,7 @@ export class StatusWidget {
   private root: HTMLDivElement;
   private task: Task | null = null;
   private linkedTasks: Task[] = [];
+  private prAnalyses: AnalysisRequest[] = [];
   private statuses: UserStatus[] = [];
   private dropdownOpen = false;
   private loading = true;
@@ -224,9 +226,10 @@ export class StatusWidget {
       return;
     }
 
-    const [batchRes, statusesRes] = await Promise.all([
+    const [batchRes, statusesRes, analysesRes] = await Promise.all([
       sendMessage<TasksBatchResponse>({ type: 'QUERY_TASKS_BATCH', owner: this.owner, repo: this.repo, issueNumbers: this.linkedIssueNumbers }),
       sendMessage<StatusesResponse>({ type: 'QUERY_STATUSES' }),
+      sendMessage<AnalysesBatchResponse>({ type: 'QUERY_ANALYSES_BATCH', owner: this.owner, repo: this.repo, issueNumbers: this.linkedIssueNumbers }),
     ]);
 
     if (!batchRes.ok) {
@@ -237,6 +240,10 @@ export class StatusWidget {
 
     if (statusesRes.ok && statusesRes.data) {
       this.statuses = statusesRes.data;
+    }
+
+    if (analysesRes.ok && analysesRes.data) {
+      this.prAnalyses = analysesRes.data;
     }
   }
 
@@ -266,12 +273,65 @@ export class StatusWidget {
       return;
     }
 
-    if (this.linkedTasks.length === 0) {
-      // No tracked tasks among linked issues — hide
+    if (this.linkedTasks.length === 0 && this.prAnalyses.length === 0) {
+      // Nothing tracked and nothing analyzed among the linked issues — hide
       return;
     }
 
-    this.renderPrStatusBadge();
+    if (this.linkedTasks.length > 0) {
+      this.renderPrStatusBadge();
+    }
+    this.renderPrCopyChips();
+  }
+
+  // The connected issue number and its Claude analysis session id, inline in
+  // the PR header, one click to copy. The session id is what resumes the
+  // analysis context locally (claude --resume <id>) while working the PR.
+  private renderPrCopyChips() {
+    if (this.prAnalyses.length === 0) return;
+    let wrapper = this.root.querySelector('.tasker-wrapper') as HTMLDivElement | null;
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.className = 'tasker-wrapper';
+      this.root.appendChild(wrapper);
+    }
+    const chips = document.createElement('div');
+    chips.className = 'tasker-chips';
+    for (const a of [...this.prAnalyses].sort((x, y) => x.issue_number - y.issue_number)) {
+      chips.appendChild(this.makeHeaderCopyChip(`#${a.issue_number}`, String(a.issue_number), 'Copy the linked issue number'));
+      if (a.claude_session_id) {
+        chips.appendChild(
+          this.makeHeaderCopyChip(
+            a.claude_session_id.slice(0, 8),
+            a.claude_session_id,
+            'Copy the analysis session id — resume from ~/Documents/App with: claude --resume <id>',
+          ),
+        );
+      }
+    }
+    wrapper.appendChild(chips);
+  }
+
+  // tasker-btn styled sibling of makeCopyButton — the proposal-btn class it
+  // uses only exists in the sidebar stylesheet, not the PR header one.
+  private makeHeaderCopyChip(label: string, copyText: string, title: string): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'tasker-btn copy-chip';
+    btn.title = title;
+    const text = document.createElement('span');
+    text.textContent = label;
+    const icon = document.createElement('span');
+    icon.textContent = '\u{1F4CB}';
+    btn.append(text, icon);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void navigator.clipboard
+        .writeText(copyText)
+        .then(() => { icon.textContent = '\u2713'; })
+        .catch(() => { icon.textContent = '\u2717'; })
+        .finally(() => { setTimeout(() => { icon.textContent = '\u{1F4CB}'; }, 1200); });
+    });
+    return btn;
   }
 
   private renderPrStatusBadge() {
@@ -1463,6 +1523,18 @@ export class StatusWidget {
       .tasker-header.dark .linked-count {
         background: #1e3a5f;
         color: #93c5fd;
+      }
+
+      .tasker-chips {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: 6px;
+      }
+      .copy-chip {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        padding: 4px 8px;
       }
 
       .chevron {

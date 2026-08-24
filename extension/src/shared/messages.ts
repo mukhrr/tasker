@@ -181,6 +181,15 @@ export interface QueryAnalysisRequest {
   number: number;
 }
 
+// Batch lookup for PR pages: one query for every issue number the PR
+// description links, returning only the rows that exist.
+export interface QueryAnalysesBatchRequest {
+  type: 'QUERY_ANALYSES_BATCH';
+  owner: string;
+  repo: string;
+  issueNumbers: number[];
+}
+
 // Cancel a queued/running analysis: queued -> never picked up; running -> the
 // daemon kills the in-flight claude and parks partial work in a stash.
 export interface CancelAnalysisRequest {
@@ -260,6 +269,7 @@ export type MessageRequest =
   | ClearProposalRequest
   | RunAnalysisRequest
   | QueryAnalysisRequest
+  | QueryAnalysesBatchRequest
   | CancelAnalysisRequest
   | UpdateAnalysisSummaryRequest
   | SyncLabelConfigRequest
@@ -298,3 +308,4 @@ export type AutoPostResponse = MessageResponse<{ enabled: boolean }>;
 export type AutoPilotResponse = MessageResponse<{ enabled: boolean }>;
 
 export type AnalysisResponse = MessageResponse<AnalysisRow | null>;
+export type AnalysesBatchResponse = MessageResponse<AnalysisRow[]>;

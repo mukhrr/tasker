@@ -96,6 +96,8 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleRunAnalysis(msg.owner, msg.repo, msg.number);
     case 'QUERY_ANALYSIS':
       return handleQueryAnalysis(msg.owner, msg.repo, msg.number);
+    case 'QUERY_ANALYSES_BATCH':
+      return handleQueryAnalysesBatch(msg.owner, msg.repo, msg.issueNumbers);
     case 'CANCEL_ANALYSIS':
       return handleCancelAnalysis(msg.owner, msg.repo, msg.number);
     case 'UPDATE_ANALYSIS_SUMMARY':
@@ -342,6 +344,31 @@ async function handleQueryTasksBatch(owner: string, repo: string, issueNumbers: 
 
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: (data ?? []) as Task[] };
+}
+
+// PR pages parse every #NNNNN the description mentions, most of which are not
+// bounty issues. One .in() query returns rows only for the ones that are.
+async function handleQueryAnalysesBatch(
+  owner: string,
+  repo: string,
+  issueNumbers: number[],
+): Promise<MessageResponse<AnalysisRequest[]>> {
+  if (!issueNumbers.length) return { ok: true, data: [] };
+
+  const supabase = getSupabaseClient();
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session?.user) return { ok: false, error: 'Not authenticated' };
+
+  const { data, error } = await supabase
+    .from('analysis_requests')
+    .select('*')
+    .eq('user_id', session.session.user.id)
+    .ilike('repo_owner', owner)
+    .ilike('repo_name', repo)
+    .in('issue_number', issueNumbers.slice(0, 20));
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: (data ?? []) as AnalysisRequest[] };
 }
 
 async function handleUpdateLinkedStatuses(
