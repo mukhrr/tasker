@@ -143,6 +143,10 @@ const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 // the issue in the meantime (the C+ comment, Help Wanted, Internal, a close).
 // Posting a comment subscribes you automatically, but that is far too late.
 const SUBSCRIBE_ON_ARM = bool('SUBSCRIBE_ON_ARM', true);
+// A SAME verdict is Codex admitting, after reading Melvin's proposal, that it
+// couldn't beat it — racing that draft would just echo the bot. Drop instead
+// of arming (the pre-7d0d059 review-gate behavior, now on Codex's own verdict).
+const DROP_MELVIN_DUPES = bool('DROP_MELVIN_DUPES', true);
 
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
@@ -867,6 +871,35 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
 
   if (!interimArmed) {
+    if (DROP_MELVIN_DUPES && verdict?.kind === 'SAME') {
+      const dropped = await updateProposal(
+        claimed.id,
+        {
+          state: 'draft',
+          body, // keep the draft so the extension can rearm it if the verdict is wrong
+          last_error: `Dropped: same as MelvinBot's proposal${verdict.reason ? ` — ${verdict.reason}` : ''}`.slice(0, 300),
+          draft_attempts: (claimed.draft_attempts || 0) + 1,
+          codex_session_id: sessionId,
+        },
+        { requireState: 'drafting' },
+      );
+      if (!dropped) {
+        log(`#${n} dup drop skipped — row changed under us (manual edit?)`);
+        return null;
+      }
+      log(`🗑️ #${n} dropped — same as MelvinBot's${verdict.reason ? ` (${verdict.reason})` : ''}`);
+      const lines = [
+        "🗑️ Dropped — same as MelvinBot's proposal",
+        `${REPO}#${n} — ${issue.title}`,
+        issueUrl,
+        '',
+      ];
+      if (verdict.reason) lines.push(`Why: ${verdict.reason}`);
+      lines.push('Draft kept in Tasker — rearm it there if you disagree, or run a deep analysis to find a better fix.');
+      await notify(lines.join('\n'), { replyMarkup: runAnalysisButtons(n, issueUrl) });
+      return null;
+    }
+
     // Original path: arm drafting → armed, direct-post if Help Wanted present.
     const armed = await updateProposal(
       claimed.id,
