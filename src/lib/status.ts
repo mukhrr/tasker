@@ -90,15 +90,24 @@ export function getStaleDays(statusKey: string): number {
   return STALE_DAYS_BY_STATUS[statusKey] ?? DEFAULT_STALE_DAYS;
 }
 
+/** Ms past (positive) or until (negative) the status's stale window. */
+export function getStaleOverdueMs(
+  statusKey: string,
+  statusChangedAt: string | null | undefined
+): number | null {
+  if (!statusChangedAt) return null;
+  const elapsed = Date.now() - new Date(statusChangedAt).getTime();
+  return elapsed - getStaleDays(statusKey) * DAY_MS;
+}
+
 /** Returns a row background class if status hasn't changed for its stale window */
 export function getStaleRowBg(
   statuses: UserStatus[],
   statusKey: string,
   statusChangedAt: string | null | undefined
 ): string {
-  if (!statusChangedAt) return '';
-  const elapsed = Date.now() - new Date(statusChangedAt).getTime();
-  if (elapsed < getStaleDays(statusKey) * DAY_MS) return '';
+  const overdue = getStaleOverdueMs(statusKey, statusChangedAt);
+  if (overdue == null || overdue < 0) return '';
   const status = getStatusByKey(statuses, statusKey);
   if (!status) return '';
   return getStatusColor(status.color).rowBg;

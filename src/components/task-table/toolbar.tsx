@@ -288,6 +288,7 @@ export function Toolbar({
             </p>
             {(
               [
+                { key: 'priority', label: 'Priority' },
                 { key: 'created_at', label: 'Date created' },
                 { key: 'updated_at', label: 'Last updated' },
                 ...BUILT_IN_COLUMNS.map((c) => ({
@@ -307,7 +308,9 @@ export function Toolbar({
                         ? sortConfig.direction === 'asc'
                           ? 'desc'
                           : 'asc'
-                        : 'asc',
+                        : item.key === 'priority'
+                          ? 'desc'
+                          : 'asc',
                     })
                   }
                   className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted"

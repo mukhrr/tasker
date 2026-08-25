@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
 import { useStatuses } from '@/hooks/use-statuses';
-import { getStatusGroup, getStaleDays } from '@/lib/status';
+import { getStatusGroup, getStaleDays, getStaleOverdueMs } from '@/lib/status';
 import type { Task, TaskStatusGroup } from '@/types/database';
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import {
@@ -145,6 +145,13 @@ export function useTaskTable(userId: string) {
         issue: (t) => (t.issue_title || t.issue_url).toLowerCase(),
         pr: (t) => t.pr_url?.toLowerCase() ?? null,
         status: (t) => t.status,
+        // Needs-attention score: same inputs as the stale row highlight, so
+        // desc puts highlighted rows on top, most overdue first. Done tasks
+        // never need attention and sink to the bottom.
+        priority: (t) =>
+          getStatusGroup(statusesCrud.statuses, t.status) === 'complete'
+            ? -Infinity
+            : getStaleOverdueMs(t.status, t.status_changed_at),
         amount: (t) => t.amount,
         assigned: (t) => t.assigned_date,
         payment: (t) => t.payment_date,

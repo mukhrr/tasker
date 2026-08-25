@@ -26,7 +26,7 @@ export const BUILT_IN_COLUMNS: ColumnDef[] = [
 export type SortDirection = 'asc' | 'desc';
 
 export interface SortConfig {
-  key: ColumnKey | 'created_at' | 'updated_at';
+  key: ColumnKey | 'created_at' | 'updated_at' | 'priority';
   direction: SortDirection;
 }
 
