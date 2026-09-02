@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { parseIssueUrl } from '@/lib/github';
+import { issueKey, parseIssueUrl } from '@/lib/github';
 import type { Task, TaskStatus } from '@/types/database';
 
 const supabase = createClient();
@@ -18,14 +18,11 @@ type TaskListItem = Pick<
   | 'created_at'
 >;
 
-// Deduplicate by repo+issue number (keep the first — most recent by created_at)
+// Deduplicate by issue identity (keep the first — most recent by created_at)
 export function dedupeTasks<T extends TaskListItem>(rows: T[]): T[] {
   const seen = new Set<string>();
   return rows.filter((t) => {
-    const key =
-      t.repo_owner && t.repo_name && t.issue_number
-        ? `${t.repo_owner}/${t.repo_name}#${t.issue_number}`.toLowerCase()
-        : t.issue_url.toLowerCase();
+    const key = issueKey(t);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -130,18 +127,9 @@ export function useTasks<T extends TaskListItem = Task>(
   };
 
   const addTask = async (issueUrl: string) => {
-    // Check for duplicate issue
     const parsed = parseIssueUrl(issueUrl);
-    const duplicate = tasks.find((t) => {
-      if (parsed && t.repo_owner && t.repo_name && t.issue_number) {
-        return (
-          t.repo_owner.toLowerCase() === parsed.owner.toLowerCase() &&
-          t.repo_name.toLowerCase() === parsed.repo.toLowerCase() &&
-          t.issue_number === parsed.number
-        );
-      }
-      return t.issue_url.toLowerCase() === issueUrl.toLowerCase();
-    });
+    const key = issueKey({ issue_url: issueUrl });
+    const duplicate = tasks.find((t) => issueKey(t) === key);
     if (duplicate) {
       throw new Error('This issue is already in your task list.');
     }

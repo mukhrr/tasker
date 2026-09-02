@@ -27,10 +27,36 @@ export function parseIssueUrl(url: string): {
   owner: string;
   repo: string;
   number: number;
+  commentId: number | null;
 } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (!match) return null;
-  return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
+  const comment = url.match(/#issuecomment-(\d+)/);
+  return {
+    owner: match[1],
+    repo: match[2],
+    number: parseInt(match[3], 10),
+    commentId: comment ? parseInt(comment[1], 10) : null,
+  };
+}
+
+// A comment link is tracked separately from its issue, so the comment id is part
+// of the identity: two rows for one issue only collide when both point at the same thing.
+export function issueKey(t: {
+  issue_url: string;
+  repo_owner?: string | null;
+  repo_name?: string | null;
+  issue_number?: number | null;
+}): string {
+  const parsed = parseIssueUrl(t.issue_url);
+  const owner = t.repo_owner ?? parsed?.owner;
+  const repo = t.repo_name ?? parsed?.repo;
+  const number = t.issue_number ?? parsed?.number;
+  if (!owner || !repo || !number) return t.issue_url.toLowerCase();
+  const base = `${owner}/${repo}#${number}`;
+  return (
+    parsed?.commentId ? `${base}#comment-${parsed.commentId}` : base
+  ).toLowerCase();
 }
 
 export function parsePrUrl(url: string): {
@@ -184,7 +210,10 @@ export function normalizeUrl(url: string): string {
 
 export function shortenGitHubUrl(url: string): string {
   const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
-  if (issueMatch) return `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;
+  if (issueMatch) {
+    const short = `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;
+    return /#issuecomment-\d+/.test(url) ? `${short} (comment)` : short;
+  }
 
   const prMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (prMatch) return `${prMatch[1]}/${prMatch[2]}#${prMatch[3]}`;

@@ -254,6 +254,9 @@ async function handleQueryTask(owner: string, repo: string, number: number): Pro
     .ilike('repo_owner', owner)
     .ilike('repo_name', repo)
     .eq('issue_number', number)
+    // A comment link on the same issue is its own row; prefer the oldest row here.
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (error) return { ok: false, error: error.message };
