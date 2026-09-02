@@ -118,35 +118,39 @@ you learned.
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
      5. Reproduce the reported steps and capture screenshots.
-     6. **Verify the fix in the browser — Playwright is the DEFAULT.** You
-        already reproduced the bug with your headed-Chrome Playwright script
-        (steps 2–5) = the RED baseline. After implementing the fix, re-run
-        that same script against the running dev server (same profile, same
-        steps) and confirm the bug is GONE = GREEN. Capture before/after
-        screenshots and state both plainly in the summary, e.g. "browser
-        repro: error toast appeared before the fix, gone after (Playwright,
-        headed Chrome)." This Playwright red→green IS the browser
-        verification; do not require anything else for it.
-        **fast-replay is a FALLBACK, not the default** — reach for it only
-        when a durable, re-runnable artifact is worth leaving behind (a
-        subtle/flaky repro you want the harness or the user to re-confirm
-        later), or when your ad-hoc Playwright verification was
-        inconclusive. When you do use it: author agent steps in
-        `.repros/issue-<<<ISSUE_NUMBER>>>/recording.json` (selector
-        `candidates` high-confidence first, a `semantic` string, `waitAfter`
-        with a `timeoutMs`, `author: "agent"`; schema at
-        `$(npm root -g)/fast-replay`), then `repro run
-        issue-<<<ISSUE_NUMBER>>> --profile ~/.tasker/pw-profile --headed`
-        (PASS = bug reproduces) and `--expect-fixed` after the fix (PASS =
-        fixed); quote both verdict lines and leave
-        `.repros/issue-<<<ISSUE_NUMBER>>>/` in the tree (it is stashed with
-        the analysis). Close any browser on that profile first (one Chrome
-        per profile dir). If the browser lane is unavailable (Cloudflare
-        challenge unsolved / offline), the Jest red/green remains the
-        verification floor for both paths.
+     6. **Verify the fix in the browser — record the repro, then replay it.**
+        Your headed-Chrome Playwright script from steps 2–5 is the RED
+        baseline, and it is already a drive file in waiting: port its
+        decisive steps into `.repros/drive/issue-<<<ISSUE_NUMBER>>>.mjs` —
+        `defineDrive({ async drive(page, { observe }) { … } })` — ending
+        with `await observe(<the bug's locator or text>)` so the recording
+        asserts the bug NOW (it fails when the bug does not hold; a passing
+        record IS the red verdict). Record it:
+        `repro record issue-<<<ISSUE_NUMBER>>> --url <dev server URL>
+        --drive .repros/drive/issue-<<<ISSUE_NUMBER>>>.mjs --profile
+        ~/.tasker/pw-profile` (headless by default; close any browser on
+        that profile first — one Chrome per profile dir). After implementing
+        the fix, `repro run issue-<<<ISSUE_NUMBER>>> --expect-fixed` is the
+        GREEN verdict. Quote both verdict lines in the summary, e.g.
+        "repro record: bug asserted and captured; repro run --expect-fixed:
+        PASS." Leave `.repros/drive/issue-<<<ISSUE_NUMBER>>>.mjs` and
+        `.repros/issue-<<<ISSUE_NUMBER>>>/` in the tree — both are stashed
+        with the analysis, and the repro re-verifies the fix in seconds
+        after any rebase.
+        **Fall back to the plain Playwright red→green** (re-run your repro
+        script after the fix and confirm the bug is gone) only when the bug
+        has no DOM/console/network signal `observe` can assert (a purely
+        visual glitch) or the repro burns one-shot state you cannot re-seed
+        — and say which in the summary. If the browser lane is unavailable
+        (Cloudflare challenge unsolved / offline), the Jest red/green
+        remains the verification floor for both paths.
         **Record the two runs that matter.** The red baseline run (bug
-        happening) and the green re-run (bug gone) are the only video evidence
-        anyone in the thread will have, and you are driving both anyway.
+        happening) and a green pass after the fix (bug gone) are the only
+        video evidence anyone in the thread will have. `repro record` and
+        `repro run` capture no video, so both takes come from your own
+        Playwright contexts: the live reproduction run, and one re-run of
+        the same steps after `--expect-fixed` passes (it doubles as an
+        eyeball check on the green verdict).
         Launch the verification context with
         `recordVideo: { dir: <absolute path>, size: { width: 1280, height: 720 } }`
         pointing at
