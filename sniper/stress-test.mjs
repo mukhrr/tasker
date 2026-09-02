@@ -104,6 +104,7 @@ const worker = spawn(process.execPath, ['sniper.mjs'], {
     SUPABASE_USER_ID: proposal.user_id,
     REPO: 'Expensify/App',
     DRY_RUN: 'false',
+    REALTIME_ENABLED: 'false',
     DISCOVER: 'false',
     ARMED_SYNC_INTERVAL_MS: '10',
     DISCOVERY_INTERVAL_MS: '10',

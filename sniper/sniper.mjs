@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RealtimeClient } from '@supabase/realtime-js';
 /**
  * Tasker proposal sniper — always-on, server-side.
  *
@@ -172,6 +173,13 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_USER_ID = process.env.SUPABASE_USER_ID || '';
 const ARMED_SYNC_INTERVAL_MS = int('ARMED_SYNC_INTERVAL_MS', 1000);
+// Realtime is the primary arm/disarm signal; the poll is the safety net. While
+// the channel is subscribed the poll only runs every REALTIME_SYNC_INTERVAL_MS
+// (catches a dropped event); when the channel is down it falls back to the
+// ARMED_SYNC_INTERVAL_MS cadence the worker always ran on.
+const REALTIME_ENABLED = bool('REALTIME_ENABLED', true);
+const REALTIME_SYNC_INTERVAL_MS = int('REALTIME_SYNC_INTERVAL_MS', 30_000);
+const REALTIME_DEBOUNCE_MS = int('REALTIME_DEBOUNCE_MS', 150);
 // A dead issue — closed, `Internal` (staff took it), or `Awaiting Payment` (the
 // work is merged and the payout is pending). Help Wanted is never coming back,
 // so these are never queued, alerted on, or left armed. Age alone is never a
@@ -752,13 +760,91 @@ async function syncArmedProposals() {
   }
 }
 
+let cloudSyncTimer = null;
+let cloudSyncRunning = false;
+let cloudSyncRerun = false;
+let realtimeSubscribed = false;
+
 async function cloudSyncTick() {
+  if (cloudSyncRunning) {
+    cloudSyncRerun = true; // an event landed mid-sync; run again right after
+    return;
+  }
+  cloudSyncRunning = true;
+  clearTimeout(cloudSyncTimer);
   try {
     await syncArmedProposals();
   } catch (e) {
     log(`Supabase sync failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    cloudSyncRunning = false;
   }
-  setTimeout(() => void cloudSyncTick(), ARMED_SYNC_INTERVAL_MS);
+  const delay = cloudSyncRerun ? 0 : realtimeSubscribed ? REALTIME_SYNC_INTERVAL_MS : ARMED_SYNC_INTERVAL_MS;
+  cloudSyncRerun = false;
+  cloudSyncTimer = setTimeout(() => void cloudSyncTick(), delay);
+}
+
+// The drafter touches a proposal row several times per draft; coalesce a burst
+// of events into one sync.
+let realtimeKickTimer = null;
+function kickCloudSync(reason) {
+  if (realtimeKickTimer) return;
+  realtimeKickTimer = setTimeout(() => {
+    realtimeKickTimer = null;
+    log(`📡 ${reason} → syncing`);
+    void cloudSyncTick();
+  }, REALTIME_DEBOUNCE_MS);
+}
+
+let realtimeClient = null;
+let realtimeChannel = null;
+let realtimeDownSince = 0;
+
+function startRealtime() {
+  if (!CLOUD_MODE || !REALTIME_ENABLED) return;
+  realtimeClient = new RealtimeClient(`${SUPABASE_URL.replace(/^http/, 'ws')}/realtime/v1`, {
+    params: { apikey: SUPABASE_SERVICE_ROLE_KEY },
+  });
+  void realtimeClient.setAuth(SUPABASE_SERVICE_ROLE_KEY);
+  subscribeRealtime();
+  setInterval(realtimeWatchdog, 30_000);
+}
+
+function subscribeRealtime() {
+  if (realtimeChannel) void realtimeClient.removeChannel(realtimeChannel);
+  realtimeChannel = realtimeClient
+    .channel('sniper-cloud-sync')
+    // No user filter on proposals: DELETE payloads only carry the primary key,
+    // so a user_id filter would drop "Clear draft". The sync filters by user.
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'proposals' }, (p) =>
+      kickCloudSync(`proposals ${p.eventType}`),
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'user_settings', filter: `id=eq.${SUPABASE_USER_ID}` },
+      (p) => kickCloudSync(`settings ${p.eventType}`),
+    )
+    .subscribe((status, err) => {
+      const was = realtimeSubscribed;
+      realtimeSubscribed = status === 'SUBSCRIBED';
+      if (realtimeSubscribed) {
+        realtimeDownSince = 0;
+        log(`📡 realtime subscribed — poll relaxed to ${REALTIME_SYNC_INTERVAL_MS}ms`);
+        if (!was) kickCloudSync('realtime (re)subscribed'); // pick up anything missed while down
+        return;
+      }
+      if (!realtimeDownSince) realtimeDownSince = Date.now();
+      log(`📡 realtime ${status}${err ? `: ${err.message || err}` : ''} — polling every ${ARMED_SYNC_INTERVAL_MS}ms until it is back`);
+      void cloudSyncTick(); // reschedule onto the fast cadence now, not after the relaxed timer
+    });
+}
+
+function realtimeWatchdog() {
+  if (realtimeSubscribed || !realtimeDownSince) return;
+  if (Date.now() - realtimeDownSince < 60_000) return;
+  realtimeDownSince = Date.now();
+  log('📡 realtime down for 60s — resubscribing');
+  subscribeRealtime();
 }
 
 async function claimCloudProposal(proposal) {
@@ -1907,7 +1993,7 @@ function main() {
     `sniper up — repo=${REPO} ` +
       `${DISCOVER ? 'discover=on ' : ''}` +
       `${WATCH.length ? `watch=[${WATCH.join(',')}] ` : ''}` +
-      `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms ` : ''}` +
+      `${CLOUD_MODE ? `supabase=on sync=${ARMED_SYNC_INTERVAL_MS}ms realtime=${REALTIME_ENABLED ? 'on' : 'off'} ` : ''}` +
       `dryRun=${DRY_RUN} tight=${TIGHT_INTERVAL_MS}ms margin=${POST_BOUNDARY_MARGIN_MS}ms ` +
       `early=${earlyFireMs()}ms ` +
       `budget=${REQUEST_BUDGET_PER_MIN}/min telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} ` +
@@ -1943,6 +2029,7 @@ function main() {
   for (const n of WATCH) track(n, { isWatch: true, mode: 'slow' });
   if (DISCOVER || CLOUD_MODE) void discoverTick();
   if (CLOUD_MODE) void cloudSyncTick();
+  startRealtime();
   startFireKeepAlive();
 }
 

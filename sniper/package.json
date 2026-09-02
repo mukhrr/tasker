@@ -15,5 +15,8 @@
   },
   "engines": {
     "node": "22.x"
+  },
+  "dependencies": {
+    "@supabase/realtime-js": "2.112.4"
   }
 }

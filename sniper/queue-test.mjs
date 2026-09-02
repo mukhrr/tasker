@@ -87,6 +87,7 @@ async function runScenario({ name, env, issues, run, settings, events }) {
       SUPABASE_USER_ID: 'user-1',
       REPO: 'Expensify/App',
       DRY_RUN: 'false',
+      REALTIME_ENABLED: 'false',
       DISCOVER: 'false',
       ALERT_NEW_TRIGGER: 'false',
       ARMED_SYNC_INTERVAL_MS: '20',
