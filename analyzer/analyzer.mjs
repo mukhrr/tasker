@@ -430,18 +430,23 @@ function editedFilePathsInLine(line) {
 // own edit from someone else's landing in the same 10-40 minute window — #99086
 // swept in unrelated bank-account WIP from the same shared checkout because of
 // exactly that gap. This reads ground truth from the tool calls themselves.
+// Returns null when the scan has no signal — transcript unreadable, or a
+// bypass-permissions session that made every edit through Bash (sed, python
+// heredocs), which this scan cannot see. #100199 delivered its whole fix that
+// way and the empty set classified it "not ours"; null sends callers to the
+// newly-dirty fallback instead.
 async function claudeTouchedFiles(transcript) {
   const touched = new Set();
   let text;
   try {
     text = await readFile(transcript, 'utf8');
   } catch {
-    return touched; // unreadable — caller falls back to the old preDirty-only diff
+    return null;
   }
   for (const line of text.split('\n')) {
     for (const p of editedFilePathsInLine(line)) touched.add(p);
   }
-  return touched;
+  return touched.size ? touched : null;
 }
 
 // A live web repro against the real dev server is genuinely slow — #99000 took
@@ -920,6 +925,9 @@ async function processRequest(req) {
     const after = await git(['status', '--porcelain']);
     const afterFiles = changedFiles(after.stdout);
     const touched = sessionInfo.transcript ? await claudeTouchedFiles(sessionInfo.transcript) : null;
+    if (sessionInfo.transcript && !touched) {
+      log(`#${n} transcript shows no Edit/Write calls (bash-only session?) — attributing newly-dirty files to claude`);
+    }
     const isClaudes = touched ? (f) => touched.has(f) : (f) => !preDirty.has(f);
     const files = afterFiles.filter((f) => !preDirty.has(f) && isClaudes(f));
     const overlap = afterFiles.filter((f) => !(!preDirty.has(f) && isClaudes(f)));

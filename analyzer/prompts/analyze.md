@@ -8,6 +8,11 @@ you learned.
 
 - **Never commit, push, branch, or touch git history.** Leave your changes as
   uncommitted working-tree edits — the harness stashes them afterwards.
+- **Modify repo files ONLY with the Edit/Write tools — never sed -i, python
+  scripts, heredocs, or shell redirection.** The harness attributes changes to
+  you by reading Edit/Write tool calls from your transcript; a file edited via
+  Bash is invisible to that scan and your fix gets left behind unstashed.
+  Reading with sed/grep is fine — the rule is about writes.
 - Do not create PRs, issues, or new GitHub comments.
 - **NEVER run lint, type-check, build, or formatting.** No `npm run lint`,
   `eslint`, `prettier`, `tsc`, `npm run typecheck`, `npm run build`, or any
