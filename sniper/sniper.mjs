@@ -193,17 +193,12 @@ const DEAD_LABELS = new Set(
 // Re-run the dead-issue check this often; a proposal can stay armed for weeks
 // and its issue can die at any point.
 const REVALIDATE_MS = int('REVALIDATE_MS', 6 * 3600_000); // 6h
-// Only auto-draft an issue whose Help Wanted is still ahead of it. Absence of
-// Help Wanted reads the same before the race and after it: an old issue that
-// the Overdue bot bumped back onto the discovery page has already had Help
-// Wanted added and removed (removal is what assignment looks like), so drafting
-// it is pure Codex spend. Measured 2026-08-11: 59 of 60 sampled issues got
-// `External` within 30 minutes of creation, so the issue's own age is the same
-// signal as the label event's and costs no extra request.
-//
-// Queue-side only. This never disarms an armed proposal — age is not a reason
-// to throw away work that is already done.
-const MAX_ISSUE_AGE_MS = int('MAX_ISSUE_AGE_DAYS', 7) * 86_400_000;
+// Optional queue-side age cap, OFF by default. It stood in for "the race
+// already happened" (2026-08-11: 59 of 60 issues got `External` within 30
+// minutes of creation) — but Monthly/Weekly issues flip to External a month+
+// later and the proxy dropped exactly those, while everHadTrigger() already
+// asks the event log the real question on every queue attempt.
+const MAX_ISSUE_AGE_MS = int('MAX_ISSUE_AGE_DAYS', 0) * 86_400_000;
 const CLOUD_MODE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && SUPABASE_USER_ID);
 
 const API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
