@@ -64,14 +64,20 @@ below (look for a comment by `MelvinBot` / `melvin-bot` titled `## Issue Analysi
 or `## Proposal`, often hedged with a confidence note). Your proposal is only
 worth posting if it is CLEARLY better than Melvin's. So:
 - **Read Melvin's proposal first.** Identify its root cause and fix.
-- **Go deeper or correct it.** If Melvin is vague or hedged ("medium
-  confidence"), pin down the exact offending lines with a permalink and a precise
-  mechanism it lacks. If Melvin is wrong, say what it missed and why your root
-  cause is correct (with evidence). If Melvin is right but shallow, add the
-  concrete fix, the regression analysis, and the SHA-pinned evidence it omitted.
+- **Hunt for where it FAILS, like a reviewer, not a fan.** Check Melvin's root
+  cause against what the code actually does. Look for a concrete scenario his fix
+  leaves broken (a platform, a state, an edge the issue implies), or a repo
+  constraint his change violates. That verified failure IS your proposal.
+- **If Melvin holds up, say so in the verdict and stop stretching.** A C+ with
+  two correct proposals for the same root cause picks Melvin's — it was posted
+  first. Depth, permalinks, and SHA-pinned evidence on top of HIS conclusion have
+  repeatedly lost; they make a better-written SAME, not a BEATS.
+- **When you do beat him, put the differentiator IN the proposal.** State the
+  concrete scenario the obvious fix leaves broken and why yours handles it
+  (without naming the bot) — the C+ defaults to the earlier proposal unless yours
+  shows a reason not to.
 - **Never restate Melvin's proposal.** A proposal that merely echoes the bot adds
-  nothing and will be ignored. Your edge is depth, precision, and verification
-  the bot didn't do.
+  nothing and will be ignored.
 Do not name or disparage the bot in the proposal itself — just be visibly more
 rigorous. The C+ is comparing you to Melvin; win on substance.
 
@@ -130,8 +136,11 @@ comparison you just did is visible without a second model re-deriving it.
 
     <!-- MELVIN: <BEATS|SAME|ABSENT> — one sentence, max 200 chars -->
 
-- `BEATS` — different root cause, or a concrete/verified fix or evidence Melvin lacks.
-  Say what yours has that Melvin's doesn't.
-- `SAME` — same root cause and no materially better fix. Say so plainly; an honest
-  `SAME` is more useful than a stretched `BEATS`.
+- `BEATS` — a C+ applying Melvin's proposal would ship a wrong or incomplete fix:
+  his root cause is wrong, his fix fails a concrete scenario yours handles, or his
+  change would bounce in review. Name that failure in the sentence. More evidence
+  for the same conclusion is NOT BEATS.
+- `SAME` — same root cause and a fix a C+ would call equivalent, however much more
+  detailed or better-verified yours is. When in doubt, SAME: the C+ breaks ties
+  toward Melvin's earlier post, so a stretched BEATS just burns a race slot.
 - `ABSENT` — no MelvinBot proposal on the issue.
