@@ -851,7 +851,7 @@ export class StatusWidget {
 
     let armBtnRef: HTMLButtonElement | null = null;
     if (isArmed) {
-      // Armed: the body is locked in — offer Copy + Disarm.
+      // Armed: the body is locked in — offer Copy + Disarm + Re-draft.
       const copyBtn = document.createElement('button');
       copyBtn.className = 'proposal-btn';
       copyBtn.textContent = 'Copy proposal';
@@ -871,6 +871,16 @@ export class StatusWidget {
       disarmBtn.disabled = this.proposalBusy || state === 'posting';
       disarmBtn.addEventListener('click', () => void this.setProposalState('draft'));
       actions.appendChild(disarmBtn);
+      if (state === 'armed') {
+        const redraftBtn = document.createElement('button');
+        redraftBtn.className = 'proposal-btn';
+        redraftBtn.textContent = this.proposalBusy ? 'Queueing…' : '♻️ Re-draft';
+        redraftBtn.disabled = this.proposalBusy;
+        redraftBtn.title =
+          'Queue a fresh Codex draft to replace this one. While it re-drafts the row is not armed, so a Help Wanted landing in that window is not raced.';
+        redraftBtn.addEventListener('click', () => void this.enqueueAutoDraft());
+        actions.appendChild(redraftBtn);
+      }
       if (this.proposal?.codex_session_id) {
         actions.appendChild(
           this.makeCopyButton(
