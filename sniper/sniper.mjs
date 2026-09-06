@@ -233,6 +233,7 @@ const alerted = new Set(); // issue numbers already Telegram-alerted for the tri
 const alertEventChecks = new Map(); // alert-path memo — MUST stay separate from checkedLabelUpdates
 let alertSeeded = false; // first discovery scan only records existing trigger issues
 const queued = new Set(); // issue numbers already enqueued for the drafter this process
+const rescued = new Set(); // issue numbers already rescue-queued (HW landed with nothing armed)
 let queueSeeded = false; // first discovery scan only records existing matches, never queues them
 
 // ── memo sweep ───────────────────────────────────────────────────────────────
@@ -955,6 +956,19 @@ function matchesWatchGroups(labelSet, issue) {
   return activeWatchGroups.some((group) => group.every((label) => labelSet.has(label)));
 }
 
+// Help Wanted landing on an already-matched (External) issue reopens it: the C+
+// chose contributors over Melvin's own proposal, so an issue we skipped or
+// dropped as a Melvin duplicate is worth drafting NOW — the drafter direct-posts
+// on arm while the label is live. Assignees mean the race is already over;
+// everHadTrigger cannot referee here because the trigger is legitimately present.
+function matchesHwRescue(labelSet, issue) {
+  if (!labelSet.has(TRIGGER)) return false;
+  if ((issue?.assignees || []).length > 0) return false;
+  if ([...labelSet].some((l) => DEAD_LABELS.has(l))) return false;
+  if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
+  return activeWatchGroups.some((group) => group.every((label) => label === TRIGGER || labelSet.has(label)));
+}
+
 // Adopt the extension's synced watch config from a user_settings row, falling
 // back to the env defaults when it hasn't synced anything. Called each settings
 // fetch so edits in the extension take effect within ~1 poll.
@@ -983,6 +997,7 @@ function applyWatchConfig(row) {
         // then silently skipped everything already on the page, and the page only
         // spans ~2h of Expensify's churn, so those issues were unrecoverable.
         queued.clear();
+        rescued.clear();
         log(`🧩 watch config from extension — groups=[${groups.map((g) => g.join('+')).join('|')}] excl=[${[...excluded].join(',')}]`);
       }
       return;
@@ -994,6 +1009,7 @@ function applyWatchConfig(row) {
     activeExcludeLabels = ENV_EXCLUDE_LABELS;
     watchConfigSource = ENV_WATCH_GROUPS.length ? 'env' : 'none';
     queued.clear(); // same as above: re-evaluate, don't re-seed
+    rescued.clear();
     log('🧩 watch config reverted to env defaults (extension synced none)');
   }
 }
@@ -1012,17 +1028,20 @@ async function everHadTrigger(n) {
   return false;
 }
 
-async function enqueueForDrafting(issue) {
+async function enqueueForDrafting(issue, { rescue = false } = {}) {
   const n = issue.number;
-  if (queued.has(n)) return;
-  queued.add(n); // optimistic; a failed insert clears it below for a later retry
+  const seen = rescue ? rescued : queued;
+  if (seen.has(n)) return;
+  seen.add(n); // optimistic; a failed insert clears it below for a later retry
   const [owner, repo] = REPO.split('/');
   const title = issue.title ? ` — ${issue.title}` : '';
   try {
     // Terminal: history doesn't un-happen, so stay in `queued` and never
     // re-check. A GitHub failure falls through and queues — a missed race costs
     // more than a wasted draft.
-    const raced = await everHadTrigger(n);
+    // A rescue skips the history check: its trigger is present by definition,
+    // and matchesHwRescue already ruled out assigned issues.
+    const raced = rescue ? false : await everHadTrigger(n);
     if (raced === true) {
       log(`⏭️  #${n} already had "${TRIGGER_NAME}" — race is over, not queueing`);
       return;
@@ -1046,8 +1065,35 @@ async function enqueueForDrafting(issue) {
     });
     const inserted = Array.isArray(rows) && rows.length > 0;
     if (inserted) {
-      log(`🧠 #${n} queued for drafting${title}`);
-      await notify(`🧠 Queued for drafting ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`, { level: 'verbose' });
+      if (rescue) {
+        await supabaseRequest(
+          `proposals?user_id=eq.${SUPABASE_USER_ID}&repo_owner=eq.${owner}&repo_name=eq.${repo}&issue_number=eq.${n}`,
+          { method: 'PATCH', body: { force_draft: true } },
+        );
+        log(`🚨 #${n} "${TRIGGER_NAME}" live with nothing armed — rescue draft queued${title}`);
+        await notify(`🚨 ${TRIGGER_NAME} live with nothing armed — rescue draft queued for ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`);
+      } else {
+        log(`🧠 #${n} queued for drafting${title}`);
+        await notify(`🧠 Queued for drafting ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`, { level: 'verbose' });
+      }
+    } else if (rescue) {
+      // A dropped Melvin duplicate parks as an auto-origin draft with an empty
+      // body; only that exact shape is flipped back, so a human-written draft
+      // is never clobbered.
+      const flipped = await supabaseRequest(
+        `proposals?user_id=eq.${SUPABASE_USER_ID}&repo_owner=eq.${owner}&repo_name=eq.${repo}&issue_number=eq.${n}&state=eq.draft&origin=eq.auto&body=eq.`,
+        {
+          method: 'PATCH',
+          body: { state: 'queued', force_draft: true, draft_attempts: 0, last_error: null },
+          prefer: 'return=representation',
+        },
+      );
+      if (Array.isArray(flipped) && flipped.length > 0) {
+        log(`🚨 #${n} "${TRIGGER_NAME}" live — dropped duplicate re-queued for a rescue draft${title}`);
+        await notify(`🚨 ${TRIGGER_NAME} live — re-drafting the dropped duplicate for ${REPO}#${n}${title}\nhttps://github.com/${REPO}/issues/${n}`);
+      } else {
+        log(`#${n} rescue skipped — existing row is not a dropped auto draft`);
+      }
     } else {
       log(`#${n} already has a proposal row — not re-queued`);
     }
@@ -1057,7 +1103,7 @@ async function enqueueForDrafting(issue) {
       // Already has a row — terminal, keep it marked so we never retry.
       log(`#${n} already has a proposal row — not re-queued`);
     } else {
-      queued.delete(n); // transient failure: allow a later scan to retry
+      seen.delete(n); // transient failure: allow a later scan to retry
       log(`enqueue #${n} failed: ${msg}`);
     }
   }
@@ -1160,6 +1206,7 @@ async function discoverTick() {
   if (status === 200 && Array.isArray(data)) {
     const alertCandidates = [];
     const queueCandidates = [];
+    const rescueCandidates = [];
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
@@ -1180,9 +1227,15 @@ async function discoverTick() {
       // fresh worker doesn't enqueue the entire existing page; enqueue only
       // matches seen after that. Idempotent at the DB layer, so this set is just
       // an in-process fast path.
-      if (autoDraftEnabled() && matchesWatchGroups(new Set(issueLabels), issue) && !cloudProposals.has(n)) {
-        if (!queueSeeded) queued.add(n);
-        else if (!queued.has(n)) queueCandidates.push(issue);
+      if (autoDraftEnabled() && !cloudProposals.has(n)) {
+        const labelSetForQueue = new Set(issueLabels);
+        if (matchesWatchGroups(labelSetForQueue, issue)) {
+          if (!queueSeeded) queued.add(n);
+          else if (!queued.has(n)) queueCandidates.push(issue);
+        } else if (matchesHwRescue(labelSetForQueue, issue)) {
+          if (!queueSeeded) rescued.add(n);
+          else if (!rescued.has(n)) rescueCandidates.push(issue);
+        }
       }
 
       // Cloud mode is deliberately selective: the shared recent-issue detector
@@ -1261,12 +1314,13 @@ async function discoverTick() {
     queueSeeded = true;
     if (alertCandidates.length) void alertNewTriggerIssues(alertCandidates);
     if (queueCandidates.length) void enqueueCandidates(queueCandidates);
+    if (rescueCandidates.length) void enqueueCandidates(rescueCandidates, { rescue: true });
   }
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
 }
 
-async function enqueueCandidates(issues) {
-  for (const issue of issues) await enqueueForDrafting(issue);
+async function enqueueCandidates(issues, opts) {
+  for (const issue of issues) await enqueueForDrafting(issue, opts);
 }
 
 // ── instant Telegram alert for issues that newly gain the trigger label ───────
