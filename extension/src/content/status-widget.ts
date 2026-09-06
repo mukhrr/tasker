@@ -774,7 +774,7 @@ export class StatusWidget {
       dup.innerHTML = `
         <div><strong>🗑️ Cleared — same fix as MelvinBot's</strong></div>
         <div class="proposal-status-sub">${this.escapeHtml(dupReason)}</div>
-        <div class="proposal-status-sub">Not armed, so it won't be posted. Arm it anyway if you disagree.</div>
+        <div class="proposal-status-sub">Not armed and the draft was cleared. Run Auto-pilot to re-draft if you disagree.</div>
       `;
       body.appendChild(dup);
     }

@@ -272,6 +272,27 @@ async function subscribeToIssue(n, issue) {
   }
 }
 
+// Mirror of subscribeToIssue for the drop path: a re-drafted proposal was
+// subscribed at its first arm, and a SAME verdict should take that watch back.
+async function unsubscribeFromIssue(n, issue) {
+  if (!SUBSCRIBE_ON_ARM || !issue?.node_id) return;
+  try {
+    const { data } = await gh('/graphql', {
+      method: 'POST',
+      body: {
+        query:
+          'mutation($id:ID!){updateSubscription(input:{subscribableId:$id,state:UNSUBSCRIBED}){subscribable{viewerSubscription}}}',
+        variables: { id: issue.node_id },
+      },
+    });
+    if (data?.data?.updateSubscription?.subscribable?.viewerSubscription === 'UNSUBSCRIBED') {
+      log(`🔕 #${n} unsubscribed from the issue`);
+    }
+  } catch {
+    /* best effort — a leftover watch is annoying, not harmful */
+  }
+}
+
 // ── shell helper ───────────────────────────────────────────────────────────────
 function run(cmd, args, { cwd, env, timeoutMs, input } = {}) {
   return new Promise((resolve) => {
@@ -871,12 +892,19 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
 
   if (!interimArmed) {
-    if (DROP_MELVIN_DUPES && verdict?.kind === 'SAME') {
+    // With Help Wanted live the C+ opened the issue to contributors despite
+    // Melvin's proposal, so SAME stops being disqualifying: arm it and let the
+    // direct post below race it. Dropping here would also loop the sniper's
+    // HW rescue path, which re-queues dropped duplicates for exactly this case.
+    const hwLive = labelNames(issue.labels).includes(TRIGGER);
+    if (DROP_MELVIN_DUPES && verdict?.kind === 'SAME' && !hwLive) {
       const dropped = await updateProposal(
         claimed.id,
         {
           state: 'draft',
-          body, // keep the draft so the extension can rearm it if the verdict is wrong
+          // The body is an echo of Melvin's, so clear it; the row itself stays
+          // as the barrier that keeps the sniper from re-queueing this issue.
+          body: '',
           last_error: `Dropped: same as MelvinBot's proposal${verdict.reason ? ` — ${verdict.reason}` : ''}`.slice(0, 300),
           draft_attempts: (claimed.draft_attempts || 0) + 1,
           codex_session_id: sessionId,
@@ -888,6 +916,7 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
         return null;
       }
       log(`🗑️ #${n} dropped — same as MelvinBot's${verdict.reason ? ` (${verdict.reason})` : ''}`);
+      await unsubscribeFromIssue(n, issue);
       const lines = [
         "🗑️ Dropped — same as MelvinBot's proposal",
         `${REPO}#${n} — ${issue.title}`,
@@ -895,7 +924,7 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
         '',
       ];
       if (verdict.reason) lines.push(`Why: ${verdict.reason}`);
-      lines.push('Draft kept in Tasker — rearm it there if you disagree, or run a deep analysis to find a better fix.');
+      lines.push('Draft cleared and the issue unwatched. Run a deep analysis to find a better fix, or 🤖 Run Auto-pilot in the extension to re-draft.');
       await notify(lines.join('\n'), { replyMarkup: runAnalysisButtons(n, issueUrl) });
       return null;
     }
@@ -924,8 +953,7 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
     await notify(armedMessage({ n, title: issue.title, issueUrl, body, verdict }), {
       replyMarkup: runAnalysisButtons(n, issueUrl),
     });
-    const hasHW = labelNames(issue.labels).includes(TRIGGER);
-    if (DIRECT_POST && hasHW && settings.autoPost) {
+    if (DIRECT_POST && hwLive && settings.autoPost) {
       await directPost(armed, issue, body);
     }
     return armed;
