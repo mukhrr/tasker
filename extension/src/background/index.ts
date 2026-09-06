@@ -114,6 +114,10 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
       return handleGetAutoPilot();
     case 'SET_AUTOPILOT':
       return handleSetAutoPilot(msg.enabled);
+    case 'GET_AUTO_ANALYZE':
+      return handleGetAutoAnalyze();
+    case 'SET_AUTO_ANALYZE':
+      return handleSetAutoAnalyze(msg.enabled);
     case 'VERIFY_POSTED_COMMENT':
       return handleVerifyPostedComment(msg.proposalId);
     default:
@@ -1082,6 +1086,33 @@ async function handleSetAutoPilot(enabled: boolean): Promise<MessageResponse<{ e
     return { ok: false, error: `Auto-pilot not saved to server: ${e instanceof Error ? e.message : String(e)}` };
   }
 
+  return { ok: true, data: { enabled } };
+}
+
+// ── Auto-analyzer toggle: when a Codex draft arms with a BEATS verdict, the
+// drafter queues a deep Claude analysis automatically. Mirrored to
+// user_settings.auto_analyze_enabled so the Railway drafter honors it. ──
+const AUTO_ANALYZE_KEY = 'proposalAutoAnalyze';
+
+async function handleGetAutoAnalyze(): Promise<MessageResponse<{ enabled: boolean }>> {
+  const stored = await chrome.storage.local.get(AUTO_ANALYZE_KEY);
+  return { ok: true, data: { enabled: stored[AUTO_ANALYZE_KEY] !== false } };
+}
+
+async function handleSetAutoAnalyze(enabled: boolean): Promise<MessageResponse<{ enabled: boolean }>> {
+  await chrome.storage.local.set({ [AUTO_ANALYZE_KEY]: enabled });
+  try {
+    const supabase = getSupabaseClient();
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session.session?.user?.id;
+    if (!userId) return { ok: false, error: 'Not signed in — Auto-analyzer not changed on the server' };
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert({ id: userId, auto_analyze_enabled: enabled }, { onConflict: 'id' });
+    if (error) return { ok: false, error: `Auto-analyzer not saved to server: ${error.message}` };
+  } catch (e) {
+    return { ok: false, error: `Auto-analyzer not saved to server: ${e instanceof Error ? e.message : String(e)}` };
+  }
   return { ok: true, data: { enabled } };
 }
 

@@ -235,6 +235,15 @@ export interface SetAutoPilotRequest {
   enabled: boolean;
 }
 
+export interface GetAutoAnalyzeRequest {
+  type: 'GET_AUTO_ANALYZE';
+}
+
+export interface SetAutoAnalyzeRequest {
+  type: 'SET_AUTO_ANALYZE';
+  enabled: boolean;
+}
+
 // Verify that a 'posted' proposal's comment still exists on GitHub.
 // If GitHub returns 404 (comment deleted), the row is reverted to 'draft'
 // so the user can re-edit and repost. Body is preserved.
@@ -278,6 +287,8 @@ export type MessageRequest =
   | SetAutoPostRequest
   | GetAutoPilotRequest
   | SetAutoPilotRequest
+  | GetAutoAnalyzeRequest
+  | SetAutoAnalyzeRequest
   | VerifyPostedCommentRequest;
 
 // ── Response types ──

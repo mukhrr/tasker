@@ -518,8 +518,32 @@ if (autopilotToggle) {
   });
 }
 
+// ── Auto-analyzer toggle (BEATS arms queue a deep Claude analysis) ──
+
+const autoAnalyzeToggle = $('#auto-analyze-toggle') as HTMLInputElement | null;
+
+async function loadAutoAnalyzeState(): Promise<void> {
+  if (!autoAnalyzeToggle) return;
+  const res = await chrome.runtime.sendMessage({ type: 'GET_AUTO_ANALYZE' }) as
+    MessageResponse<{ enabled: boolean }>;
+  autoAnalyzeToggle.checked = res.ok && res.data ? res.data.enabled : true;
+}
+
+if (autoAnalyzeToggle) {
+  autoAnalyzeToggle.addEventListener('change', async () => {
+    const enabled = autoAnalyzeToggle.checked;
+    const res = await chrome.runtime.sendMessage({ type: 'SET_AUTO_ANALYZE', enabled }) as
+      MessageResponse<{ enabled: boolean }>;
+    if (!res.ok) {
+      autoAnalyzeToggle.checked = !enabled;
+      showStatus(res.error ?? 'Failed to update', 'error');
+    }
+  });
+}
+
 fetchStarCount();
 init();
 void loadSettingsIntoForm();
 void loadAutoPostState();
 void loadAutoPilotState();
+void loadAutoAnalyzeState();

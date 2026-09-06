@@ -886,6 +886,35 @@ async function armInterim(claimed, n, issue, comments, settings) {
   }
 }
 
+// Auto-analyzer: a BEATS arm queues the local Claude analyzer without waiting
+// for a Telegram tap. Queued/running rows are left alone; a done or failed one
+// is re-queued, matching the extension's Run-analysis button.
+async function queueDeepAnalysis(n) {
+  const [owner, repo] = REPO.split('/');
+  const base = `analysis_requests?user_id=eq.${SUPABASE_USER_ID}&repo_owner=eq.${owner}&repo_name=eq.${repo}&issue_number=eq.${n}`;
+  try {
+    const existing = await supabaseRequest(`${base}&select=id,state`);
+    const row = Array.isArray(existing) ? existing[0] : null;
+    if (row && (row.state === 'queued' || row.state === 'running')) return false;
+    if (row) {
+      const updated = await supabaseRequest(`${base}&state=in.(done,failed)`, {
+        method: 'PATCH',
+        body: { state: 'queued', result_summary: null, last_error: null },
+        prefer: 'return=representation',
+      });
+      return Array.isArray(updated) && updated.length > 0;
+    }
+    await supabaseRequest('analysis_requests', {
+      method: 'POST',
+      body: { user_id: SUPABASE_USER_ID, repo_owner: owner, repo_name: repo, issue_number: n, state: 'queued' },
+    });
+    return true;
+  } catch (e) {
+    log(`#${n} auto-analyze queue failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+}
+
 // Put the full draft where it belongs given the row's current state, and notify.
 // Returns the row (for the enrich pass) or null when nothing further should run.
 async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, interimArmed, verdict) {
@@ -953,6 +982,12 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
     await notify(armedMessage({ n, title: issue.title, issueUrl, body, verdict }), {
       replyMarkup: runAnalysisButtons(n, issueUrl),
     });
+    if (settings.autoAnalyze && verdict?.kind === 'BEATS') {
+      if (await queueDeepAnalysis(n)) {
+        log(`🔬 #${n} deep analysis auto-queued (BEATS)`);
+        await notify(`🔬 Auto-analyzer queued a deep Claude analysis for ${REPO}#${n}.`, { level: 'verbose' });
+      }
+    }
     if (DIRECT_POST && hwLive && settings.autoPost) {
       await directPost(armed, issue, body);
     }
@@ -1287,7 +1322,7 @@ async function wasteReport(force = false) {
 // sniper) gates POSTING. Absent row/field defaults to on.
 async function fetchSettings() {
   const query = new URLSearchParams({
-    select: 'proposal_auto_post,autopilot_enabled',
+    select: 'proposal_auto_post,autopilot_enabled,auto_analyze_enabled',
     id: `eq.${SUPABASE_USER_ID}`,
     limit: '1',
   });
@@ -1296,6 +1331,7 @@ async function fetchSettings() {
   return {
     autoPost: !s || s.proposal_auto_post !== false,
     autoPilot: !s || s.autopilot_enabled !== false,
+    autoAnalyze: !s || s.auto_analyze_enabled !== false,
   };
 }
 

@@ -67,18 +67,25 @@
           </div>
         </div>
 
-        <label class="autopost-card" for="autopost-toggle">
+        <label class="autopost-card" for="autopost-toggle" title="Master switch — applies to every armed proposal.">
           <input type="checkbox" id="autopost-toggle">
           <span class="autopost-text">
             <span class="autopost-title">Auto-post on Help Wanted</span>
             <span class="autopost-desc">Master switch — applies to every armed proposal.</span>
           </span>
         </label>
-        <label class="autopost-card" for="autopilot-toggle">
+        <label class="autopost-card" for="autopilot-toggle" title="Server drafts, validates and arms matched issues with Codex — no typing.">
           <input type="checkbox" id="autopilot-toggle">
           <span class="autopost-text">
             <span class="autopost-title">Auto-pilot</span>
             <span class="autopost-desc">Server drafts, validates &amp; arms matched issues with Codex — no typing.</span>
+          </span>
+        </label>
+        <label class="autopost-card" for="auto-analyze-toggle" title="When a Codex draft beats Melvin’s proposal, queue a deep Claude analysis automatically.">
+          <input type="checkbox" id="auto-analyze-toggle">
+          <span class="autopost-text">
+            <span class="autopost-title">Auto-analyzer</span>
+            <span class="autopost-desc">Deep Claude analysis when a draft beats Melvin’s.</span>
           </span>
         </label>
         <details id="settings-panel" class="settings">
