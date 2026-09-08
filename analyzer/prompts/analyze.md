@@ -179,9 +179,16 @@ you learned.
         preconditions: `bug.webm` comes from the live reproduction run, so it
         exists whenever you drove the bug in a browser at all, even when
         verification later fell back to Jest — keep and deliver it in that
-        case, it is the half a proposal needs most. Only `fixed.webm` depends
-        on the browser green lane; skip just that one when the fix can't be
-        shown in the browser. Delete a take only when it does not show the
+        case, it is the half a proposal needs most. `fixed.webm` is owed on the
+        same terms: if `bug.webm` exists, the fix is visible in a browser flow,
+        and the dev server still runs with your fix applied, record it — drive
+        the SAME steps once against the fixed build in a recording context and
+        capture the healthy behavior. Verifying through Jest instead of the
+        browser does NOT excuse this take; verification and evidence are
+        different jobs, and a proposal with a bug video but no fixed video
+        reads as an unproven fix. Skip `fixed.webm` only when the fixed code
+        cannot run in the browser or the fix has no visible effect in any
+        driveable flow — and say which in the summary. Delete a take only when it does not show the
         bug (blank, wrong page, died before the moment); when unsure, leave
         it — the operator triages by eye, and a partial take of the real
         symptom beats no take.

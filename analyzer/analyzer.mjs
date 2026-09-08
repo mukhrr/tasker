@@ -690,6 +690,13 @@ async function sendRunVideos(n) {
   } catch {
     return; // no folder — the run recorded nothing
   }
+  // A bug take without a fixed take means the fix was never shown on screen —
+  // surface that instead of letting the second half go quietly missing.
+  const hasBug = names.some((f) => /^bug\./i.test(f));
+  const hasFixed = names.some((f) => /^fixed\./i.test(f));
+  if (hasBug && !hasFixed) {
+    await notify(`⚠️ #${n}: bug take only — no fixed take was recorded. The run's summary should say why.`);
+  }
   for (const name of names) {
     try {
       let file = path.join(dir, name);
