@@ -1359,19 +1359,26 @@ async function getRecentLabelEvent(n, label, after, issueUpdatedAt, memo = check
   const checkKey = `${n}:${label}`;
   if (memo.get(checkKey) === issueUpdatedAt) return null;
   memo.set(checkKey, issueUpdatedAt);
-  const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=30`);
-  if (status !== 200 || !Array.isArray(data)) {
-    memo.delete(checkKey); // transient failure: allow a later retry
-    return null;
-  }
+  // Events come back OLDEST first, so a fresh label on an event-heavy issue
+  // (weeks of Overdue churn) lives on the LAST page — #98962's Help Wanted was
+  // invisible to a single per_page=30 read and the claim was wrongly released.
+  // Walk forward until a short page says we have the tail.
   let latest = null;
-  for (const event of data) {
-    if (event?.event !== 'labeled') continue;
-    if (event?.label?.name?.toLowerCase() !== label) continue;
-    const createdAt = Date.parse(event.created_at || '');
-    if (Number.isFinite(createdAt) && createdAt >= after && (latest === null || createdAt > latest)) {
-      latest = createdAt;
+  for (let page = 1; page <= 5; page++) {
+    const { status, data } = await gh(`/repos/${REPO}/issues/${n}/events?per_page=100&page=${page}`);
+    if (status !== 200 || !Array.isArray(data)) {
+      memo.delete(checkKey); // transient failure: allow a later retry
+      return null;
     }
+    for (const event of data) {
+      if (event?.event !== 'labeled') continue;
+      if (event?.label?.name?.toLowerCase() !== label) continue;
+      const createdAt = Date.parse(event.created_at || '');
+      if (Number.isFinite(createdAt) && createdAt >= after && (latest === null || createdAt > latest)) {
+        latest = createdAt;
+      }
+    }
+    if (data.length < 100) break;
   }
   return latest;
 }
