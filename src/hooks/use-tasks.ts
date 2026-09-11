@@ -150,6 +150,7 @@ export function useTasks<T extends TaskListItem = Task>(
       ...newTask,
       id: tempId,
       issue_title: null,
+      additional_bugs_fixed: 0,
       pr_url: null,
       status_group: 'todo',
       amount: null,

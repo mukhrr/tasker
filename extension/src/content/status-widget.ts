@@ -248,6 +248,8 @@ export class StatusWidget {
   }
 
   private render() {
+    this.root.style.setProperty('--tasker-count-bg', isDarkMode() ? '#21262d' : '#ffffff');
+    this.root.style.setProperty('--tasker-count-color', isDarkMode() ? '#c9d1d9' : '#57606a');
     if (this.mode === 'pr') {
       this.renderPr();
     } else {
@@ -357,6 +359,7 @@ export class StatusWidget {
 
     const btn = document.createElement('button');
     btn.className = 'tasker-btn has-status';
+    btn.style.position = 'relative';
     btn.innerHTML = `
       <span class="tasker-icon">T</span>
       <span class="dot" style="background:${colorHex}"></span>
@@ -370,6 +373,7 @@ export class StatusWidget {
       this.render();
     });
 
+    btn.appendChild(this.renderAdditionalBugsBadge(this.linkedTasks.reduce((sum, task) => sum + (task.additional_bugs_fixed ?? 0), 0)));
     wrapper.appendChild(btn);
     this.root.appendChild(wrapper);
 
@@ -518,6 +522,15 @@ export class StatusWidget {
     this.renderProposalPanel();
   }
 
+  private renderAdditionalBugsBadge(count: number): HTMLSpanElement {
+    const badge = document.createElement('span');
+    badge.textContent = String(count);
+    badge.title = `Fixes this bug + ${count} additional bug${count === 1 ? '' : 's'}. Edit in Tasker dashboard.`;
+    badge.setAttribute('aria-label', badge.title);
+    badge.style.cssText = 'position:absolute;right:-6px;top:-7px;min-width:16px;box-sizing:border-box;padding:0 4px;border:1px solid #6e7681;border-radius:999px;font-size:10px;line-height:15px;font-weight:600;text-align:center;background:var(--tasker-count-bg);color:var(--tasker-count-color);font-variant-numeric:tabular-nums';
+    return badge;
+  }
+
   private renderStatusBadge() {
     const task = this.task!;
     const currentStatus = this.statuses.find((s) => s.key === task.status);
@@ -530,6 +543,7 @@ export class StatusWidget {
 
     const badge = document.createElement('button');
     badge.className = 'status-badge';
+    badge.style.position = 'relative';
     badge.innerHTML = `
       <span class="dot" style="background:${colorHex}"></span>
       <span class="label">${this.escapeHtml(label)}</span>
@@ -541,6 +555,7 @@ export class StatusWidget {
       this.render();
     });
 
+    badge.appendChild(this.renderAdditionalBugsBadge(task.additional_bugs_fixed ?? 0));
     section.appendChild(badge);
 
     if (this.dropdownOpen) {

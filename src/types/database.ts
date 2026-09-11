@@ -24,6 +24,7 @@ export interface Task {
   issue_title: string | null;
   pr_url: string | null;
   status: TaskStatus;
+  additional_bugs_fixed: number;
   status_group: TaskStatusGroup;
   amount: number | null;
   payment_date: string | null;

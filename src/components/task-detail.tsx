@@ -1,5 +1,6 @@
 'use client';
 
+import { AdditionalBugsBadge } from '@/components/additional-bugs-badge';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -51,14 +52,16 @@ export function TaskDetail({ task }: { task: Task }) {
                     ? `${task.repo_owner}/${task.repo_name}#${task.issue_number}`
                     : shortenGitHubUrl(task.issue_url)}
                 </a>
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${colorConfig.badge}`}
-                >
+                <AdditionalBugsBadge count={task.additional_bugs_fixed ?? 0}>
                   <span
-                    className={`h-1.5 w-1.5 rounded-full ${colorConfig.dot}`}
-                  />
-                  {currentStatus?.label ?? task.status}
-                </span>
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${colorConfig.badge}`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${colorConfig.dot}`}
+                    />
+                    {currentStatus?.label ?? task.status}
+                  </span>
+                </AdditionalBugsBadge>
               </div>
             </div>
             <Button

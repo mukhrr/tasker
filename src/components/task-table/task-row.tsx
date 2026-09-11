@@ -44,15 +44,27 @@ interface TaskRowProps {
   >;
 }
 
-export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: TaskRowProps) {
+export function TaskRow({
+  task,
+  isSyncing,
+  search,
+  visibleColumnKeys,
+  ctx,
+}: TaskRowProps) {
   const isConfirmingDelete = ctx.deleteConfirmId === task.id;
 
-  const staleRowBg = getStaleRowBg(ctx.statuses, task.status, task.status_changed_at);
+  const staleRowBg = getStaleRowBg(
+    ctx.statuses,
+    task.status,
+    task.status_changed_at
+  );
 
   const selected = ctx.isSelected(task.id);
 
   return (
-    <tr className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''} ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}>
+    <tr
+      className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''} ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}
+    >
       <td className="w-10 px-3 py-2 sm:px-4">
         <Checkbox
           checked={selected}
@@ -91,7 +103,9 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
           <IssueCell
             issueUrl={task.issue_url}
             issueTitle={task.issue_title}
-            onChange={(title) => ctx.handleUpdateTask(task.id, { issue_title: title })}
+            onChange={(title) =>
+              ctx.handleUpdateTask(task.id, { issue_title: title })
+            }
             highlight={search}
           />
         )}
@@ -101,10 +115,7 @@ export function TaskRow({ task, isSyncing, search, visibleColumnKeys, ctx }: Tas
       {visibleColumnKeys
         .filter((k) => k !== 'issue')
         .map((key) => (
-          <td
-            key={key}
-            className={getCellClassName(key)}
-          >
+          <td key={key} className={getCellClassName(key)}>
             <CellContent
               columnKey={key}
               task={task}
@@ -186,7 +197,14 @@ function CellContent({
   >;
 }) {
   if (readOnly) {
-    return <ReadOnlyCell columnKey={columnKey} task={task} search={search} statuses={ctx.statuses} />;
+    return (
+      <ReadOnlyCell
+        columnKey={columnKey}
+        task={task}
+        search={search}
+        statuses={ctx.statuses}
+      />
+    );
   }
   switch (columnKey) {
     case 'pr':
@@ -206,6 +224,10 @@ function CellContent({
       ) : (
         <StatusCell
           value={task.status}
+          additionalBugsFixed={task.additional_bugs_fixed ?? 0}
+          onAdditionalBugsChange={(count) =>
+            ctx.handleUpdateTask(task.id, { additional_bugs_fixed: count })
+          }
           statuses={ctx.statuses}
           onChange={(status) => {
             const matched = ctx.statuses.find((s) => s.key === status);
@@ -302,7 +324,9 @@ function ReadOnlyCell({
       if (!s) return <span className="text-sm text-muted-foreground">—</span>;
       const color = getStatusColor(s.color);
       return (
-        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${color.badge}`}>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${color.badge}`}
+        >
           <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
           {s.label}
         </span>
@@ -318,7 +342,8 @@ function ReadOnlyCell({
 
     case 'assigned':
     case 'payment': {
-      const date = columnKey === 'assigned' ? task.assigned_date : task.payment_date;
+      const date =
+        columnKey === 'assigned' ? task.assigned_date : task.payment_date;
       return (
         <span className="text-sm text-muted-foreground">
           {date ? new Date(date).toLocaleDateString() : '—'}

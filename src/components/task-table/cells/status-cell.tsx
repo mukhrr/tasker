@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { AdditionalBugsBadge } from '@/components/additional-bugs-badge';
 import {
   Popover,
   PopoverContent,
@@ -33,6 +34,8 @@ import type { UserStatus, TaskStatusGroup } from '@/types/database';
 
 interface StatusCellProps {
   value: string;
+  additionalBugsFixed: number;
+  onAdditionalBugsChange: (count: number) => Promise<void>;
   statuses: UserStatus[];
   onChange: (status: string) => void;
   onAddStatus: (data: {
@@ -72,6 +75,8 @@ const emptyEdit = (group: TaskStatusGroup): EditState => ({
 
 export function StatusCell({
   value,
+  additionalBugsFixed,
+  onAdditionalBugsChange,
   statuses,
   onChange,
   onAddStatus,
@@ -200,27 +205,23 @@ export function StatusCell({
     </button>
   );
 
-  if (isDesktop) {
-    return (
-      <Popover
-        open={open}
-        onOpenChange={(o) => {
-          setOpen(o);
-          if (!o) {
-            setView('list');
-            setDeleteTarget(null);
-          }
-        }}
-      >
-        <PopoverTrigger render={trigger} />
-        <PopoverContent className="w-72 p-0" align="start">
-          {content}
-        </PopoverContent>
-      </Popover>
-    );
-  }
-
-  return (
+  const statusControl = isDesktop ? (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setView('list');
+          setDeleteTarget(null);
+        }
+      }}
+    >
+      <PopoverTrigger render={trigger} />
+      <PopoverContent className="w-72 p-0" align="start">
+        {content}
+      </PopoverContent>
+    </Popover>
+  ) : (
     <Drawer
       open={open}
       onOpenChange={(o) => {
@@ -237,6 +238,15 @@ export function StatusCell({
         <div className="overflow-y-auto pb-6">{content}</div>
       </DrawerContent>
     </Drawer>
+  );
+
+  return (
+    <AdditionalBugsBadge
+      count={additionalBugsFixed}
+      onChange={onAdditionalBugsChange}
+    >
+      {statusControl}
+    </AdditionalBugsBadge>
   );
 }
 
