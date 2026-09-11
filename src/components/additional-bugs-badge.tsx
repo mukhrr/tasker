@@ -72,11 +72,13 @@ export function AdditionalBugsBadge({
     }
     timer.current = setTimeout(() => void save(), 400);
   };
+  const hidden = displayedCount === 0;
+  if (hidden && !onChange) return <>{children}</>;
   return (
     <span className="group/bugs relative inline-flex mr-3">
       {children}
       <span
-        className="absolute -right-2.5 -top-2.5 z-10 flex h-[18px] items-center rounded-full border-2 border-background bg-foreground text-[11px] font-semibold text-background shadow-sm"
+        className={`absolute -right-2.5 -top-2.5 z-10 flex h-[18px] items-center rounded-full border-2 border-background bg-foreground text-[11px] font-semibold text-background shadow-sm ${hidden ? 'opacity-0 group-hover/bugs:opacity-100 group-focus-within/bugs:opacity-100' : ''}`}
         title={description}
       >
         {onChange && (

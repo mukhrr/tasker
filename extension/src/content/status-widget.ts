@@ -374,7 +374,8 @@ export class StatusWidget {
       this.render();
     });
 
-    btn.appendChild(this.renderAdditionalBugsBadge(this.linkedTasks.reduce((sum, task) => sum + (task.additional_bugs_fixed ?? 0), 0)));
+    const prBugs = this.linkedTasks.reduce((sum, task) => sum + (task.additional_bugs_fixed ?? 0), 0);
+    if (prBugs > 0) btn.appendChild(this.renderAdditionalBugsBadge(prBugs));
     wrapper.appendChild(btn);
     this.root.appendChild(wrapper);
 
@@ -556,7 +557,7 @@ export class StatusWidget {
       this.render();
     });
 
-    badge.appendChild(this.renderAdditionalBugsBadge(task.additional_bugs_fixed ?? 0));
+    if ((task.additional_bugs_fixed ?? 0) > 0) badge.appendChild(this.renderAdditionalBugsBadge(task.additional_bugs_fixed));
     section.appendChild(badge);
 
     if (this.dropdownOpen) {
