@@ -94,6 +94,7 @@ export interface TaskFilters {
 }
 
 const FILTERS_KEY = 'tasker-filters';
+const TAB_KEY = 'tasker-active-tab';
 
 const EMPTY_FILTERS: TaskFilters = { statuses: [] };
 
@@ -109,6 +110,20 @@ export function loadFilters(): TaskFilters {
 export function saveFilters(filters: TaskFilters): void {
   try {
     localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+  } catch {}
+}
+
+export function loadActiveTab(): string {
+  if (typeof window === 'undefined') return 'all';
+  try {
+    return localStorage.getItem(TAB_KEY) ?? 'all';
+  } catch {}
+  return 'all';
+}
+
+export function saveActiveTab(tab: string): void {
+  try {
+    localStorage.setItem(TAB_KEY, tab);
   } catch {}
 }
 

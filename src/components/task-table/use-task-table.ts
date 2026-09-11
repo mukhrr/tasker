@@ -17,6 +17,8 @@ import {
   saveSortConfig,
   loadFilters,
   saveFilters,
+  loadActiveTab,
+  saveActiveTab,
 } from './column-config';
 
 export function useTaskTable(userId: string) {
@@ -24,7 +26,7 @@ export function useTaskTable(userId: string) {
   const customColumns = useCustomColumns(userId);
   const statusesCrud = useStatuses(userId);
 
-  const [activeTab, setActiveTab] = useState('all');
+  const [activeTab, setActiveTabState] = useState(() => loadActiveTab());
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<{
@@ -72,6 +74,11 @@ export function useTaskTable(userId: string) {
     (key: ColumnKey) => visibleColumns.has(key),
     [visibleColumns]
   );
+
+  const setActiveTab = useCallback((tab: string) => {
+    setActiveTabState(tab);
+    saveActiveTab(tab);
+  }, []);
 
   // Filters
   const setFilters = useCallback((next: TaskFilters) => {

@@ -76,7 +76,7 @@ export function AdditionalBugsBadge({
     <span className="group/bugs relative inline-flex mr-3">
       {children}
       <span
-        className="absolute -right-2 -top-2 z-10 flex h-4 items-center rounded-full border border-border bg-background text-[10px] font-medium text-muted-foreground shadow-sm"
+        className="absolute -right-2.5 -top-2.5 z-10 flex h-[18px] items-center rounded-full border-2 border-background bg-foreground text-[11px] font-semibold text-background shadow-sm"
         title={description}
       >
         {onChange && (
@@ -88,13 +88,13 @@ export function AdditionalBugsBadge({
               event.stopPropagation();
               void change(-1);
             }}
-            className="w-0 overflow-hidden rounded-l-full opacity-0 transition-all group-hover/bugs:w-5 group-hover/bugs:opacity-100 group-focus-within/bugs:w-5 group-focus-within/bugs:opacity-100 [@media(hover:none)]:w-5 [@media(hover:none)]:opacity-100 hover:bg-muted disabled:text-muted-foreground/40"
+            className="w-0 overflow-hidden rounded-l-full opacity-0 transition-all group-hover/bugs:w-5 group-hover/bugs:opacity-100 group-focus-within/bugs:w-5 group-focus-within/bugs:opacity-100 [@media(hover:none)]:w-5 [@media(hover:none)]:opacity-100 hover:bg-foreground/80 disabled:text-background/40"
           >
             −
           </button>
         )}
         <span
-          className="min-w-4 px-1 text-center tabular-nums"
+          className="min-w-[18px] px-1 text-center tabular-nums"
           aria-label={description}
           aria-live="polite"
         >
@@ -109,7 +109,7 @@ export function AdditionalBugsBadge({
               event.stopPropagation();
               void change(1);
             }}
-            className="w-0 overflow-hidden rounded-r-full opacity-0 transition-all group-hover/bugs:w-5 group-hover/bugs:opacity-100 group-focus-within/bugs:w-5 group-focus-within/bugs:opacity-100 [@media(hover:none)]:w-5 [@media(hover:none)]:opacity-100 hover:bg-muted disabled:text-muted-foreground/40"
+            className="w-0 overflow-hidden rounded-r-full opacity-0 transition-all group-hover/bugs:w-5 group-hover/bugs:opacity-100 group-focus-within/bugs:w-5 group-focus-within/bugs:opacity-100 [@media(hover:none)]:w-5 [@media(hover:none)]:opacity-100 hover:bg-foreground/80 disabled:text-background/40"
           >
             +
           </button>

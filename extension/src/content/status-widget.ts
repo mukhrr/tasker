@@ -248,8 +248,9 @@ export class StatusWidget {
   }
 
   private render() {
-    this.root.style.setProperty('--tasker-count-bg', isDarkMode() ? '#21262d' : '#ffffff');
-    this.root.style.setProperty('--tasker-count-color', isDarkMode() ? '#c9d1d9' : '#57606a');
+    this.root.style.setProperty('--tasker-count-bg', isDarkMode() ? '#f0f6fc' : '#24292f');
+    this.root.style.setProperty('--tasker-count-color', isDarkMode() ? '#0d1117' : '#ffffff');
+    this.root.style.setProperty('--tasker-count-border', isDarkMode() ? '#0d1117' : '#ffffff');
     if (this.mode === 'pr') {
       this.renderPr();
     } else {
@@ -527,7 +528,7 @@ export class StatusWidget {
     badge.textContent = String(count);
     badge.title = `Fixes this bug + ${count} additional bug${count === 1 ? '' : 's'}. Edit in Tasker dashboard.`;
     badge.setAttribute('aria-label', badge.title);
-    badge.style.cssText = 'position:absolute;right:-6px;top:-7px;min-width:16px;box-sizing:border-box;padding:0 4px;border:1px solid #6e7681;border-radius:999px;font-size:10px;line-height:15px;font-weight:600;text-align:center;background:var(--tasker-count-bg);color:var(--tasker-count-color);font-variant-numeric:tabular-nums';
+    badge.style.cssText = 'position:absolute;right:-6px;top:-7px;min-width:16px;box-sizing:border-box;padding:0 4px;border:2px solid var(--tasker-count-border);border-radius:999px;font-size:11px;line-height:15px;font-weight:700;text-align:center;background:var(--tasker-count-bg);color:var(--tasker-count-color);font-variant-numeric:tabular-nums';
     return badge;
   }
 
