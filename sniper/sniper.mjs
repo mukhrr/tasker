@@ -1281,33 +1281,21 @@ async function discoverTick() {
           }
         }
       } else if (hasHW && updatedAgo < FIRE_FRESH_MS) {
-        // `updated_at` also changes for unrelated activity. Confirm the actual
-        // Help Wanted labeled event is newer than both startup and arm time.
-        const proposal = cloudProposals.get(n);
-        const armedAt = proposal ? Date.parse(proposal.updated_at || '') : START;
-        const after = Number.isFinite(armedAt) ? armedAt : START;
-        // Claim speculatively, overlapping the confirmation round-trip below.
-        // The claim crosses Virginia→Mumbai (~690ms) and only hides behind the
-        // boundary wait when we detected early enough to have one.
-        //
-        // One shot per issue: a falsy confirmation means the label predates our
-        // arm, so no future event exists to catch, and re-speculating on every
-        // comment would churn the row through `posting`.
+        // Fire on the page evidence alone: Help Wanted is PRESENT and the
+        // issue moved within FIRE_FRESH_MS, so the race is open now — firing
+        // on a label that turns out to be old is a late post, not a wrong one.
+        // The events read that used to gate this cost a blocking round trip
+        // (#99927 posted +3s, 8th of 10) and a silent miss skipped the race
+        // outright (#98962). fire() skips its own anchor lookup too when the
+        // boundary derived from updated_at has already passed, so the cold
+        // path POSTs with no events read at all.
         const speculate =
           !DRY_RUN && cloudProposals.has(n) && !speculativeClaimTried.has(n) && !preClaimed.has(n);
         if (speculate) {
           speculativeClaimTried.add(n);
           void preClaimCloudProposal(n);
         }
-        const hwEventMs = await getRecentLabelEvent(n, TRIGGER, after, issue.updated_at);
-        if (hwEventMs) {
-          void fire(n, issue, 'direct-hw-event', { hwEventMs });
-        } else if (speculate) {
-          // Not a fresh event — hand the row straight back to `armed`.
-          const pending = preClaimPromises.get(n);
-          if (pending) await pending.catch(() => {});
-          await releasePreClaim(n);
-        }
+        void fire(n, issue, 'direct-hw-page', { detectDateMs: Date.parse(issue.updated_at) });
       }
     }
     alertSeeded = true;
@@ -1654,7 +1642,20 @@ async function fire(n, issue, via, ctx) {
     }
     ctx = { ...ctx, hwEventMs: evAt };
   }
-  if (!Number.isFinite(ctx?.hwEventMs)) {
+  // Skip the lookup entirely when it cannot change the outcome: the real label
+  // time is ≤ detectDateMs (for direct-hw-page that's updated_at, an upper
+  // bound), so if the server clock is already past the boundary second derived
+  // from detectDateMs, the anchored target is past too and delayMs is 0 either
+  // way. On cold discovery this makes the hot path detect → claim → POST with
+  // no events read at all; the tight-window paths (detection inside the
+  // label's second) keep the lookup, where it still rescues a boundary cross.
+  let anchorSettled = false;
+  if (Number.isFinite(ctx?.detectDateMs)) {
+    const serverNow = serverNowLowerBound();
+    const detectBoundary = (Math.floor(ctx.detectDateMs / 1000) + 1) * 1000 + POST_BOUNDARY_MARGIN_MS;
+    if (serverNow !== null && serverNow >= detectBoundary) anchorSettled = true;
+  }
+  if (!Number.isFinite(ctx?.hwEventMs) && !anchorSettled) {
     const evAt = await Promise.race([
       getRecentLabelEvent(n, TRIGGER, START, issue?.updated_at, fireEventChecks).catch(() => null),
       new Promise((resolve) => setTimeout(() => resolve(null), HW_ANCHOR_TIMEOUT_MS)),
