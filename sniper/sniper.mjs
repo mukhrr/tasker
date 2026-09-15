@@ -219,6 +219,7 @@ const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids 
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
 const checkedPrecursorUpdates = new Map(); // n -> { updatedAt, attempts, lastAt } C+ comment checks per bump
 const reopenEventChecks = new Map(); // n:label -> updated_at already checked for a reopen
+const reopenNotBefore = new Map(); // n -> ts; negative reopen verdict holds until then
 const consumedPrecursorComments = new Map(); // n -> assignee comment id already spent on a tight window
 const fireEventChecks = new Map(); // fire-path memo for the real HW event lookup (kept separate so it never false-negatives)
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
@@ -258,6 +259,7 @@ const MEMO_CAPS = [
   ['consumedPrecursorComments', consumedPrecursorComments, 4000],
   ['alertEventChecks', alertEventChecks, 4000],
   ['reopenEventChecks', reopenEventChecks, 4000],
+  ['reopenNotBefore', reopenNotBefore, 4000],
   ['speculativeClaimTried', speculativeClaimTried, 5000],
   ['consumedLockEvents', consumedLockEvents, 5000],
   ['fireEventChecks', fireEventChecks, 2000],
@@ -1051,7 +1053,7 @@ async function enqueueForDrafting(issue, { rescue = false } = {}) {
     // re-check. A GitHub failure falls through and queues — a missed race costs
     // more than a wasted draft.
     // A rescue skips the history check: its trigger is present by definition,
-    // and matchesHwRescue already ruled out assigned issues.
+    // and the reopen class queues assigned issues on purpose.
     const raced = rescue ? false : await everHadTrigger(n);
     if (raced === true) {
       log(`⏭️  #${n} already had "${TRIGGER_NAME}" — race is over, not queueing`);
@@ -1347,6 +1349,10 @@ async function queueReopenedIssues(issues) {
   for (const issue of issues) {
     const n = issue.number;
     if (rescued.has(n)) continue;
+    // A negative verdict means the HW event is older than the window, which
+    // stays true until the label is re-added — don't re-walk the event log on
+    // every comment bump of a stale-HW issue that lives on the page.
+    if ((reopenNotBefore.get(n) || 0) > Date.now()) continue;
     const eventAt = await getRecentLabelEvent(
       n,
       TRIGGER,
@@ -1354,7 +1360,12 @@ async function queueReopenedIssues(issues) {
       issue.updated_at,
       reopenEventChecks,
     );
-    if (!eventAt) continue;
+    if (!eventAt) {
+      // Only a real "walked the log, nothing fresh" verdict is cached — a
+      // transient failure deletes its memo key so the next bump retries.
+      if (reopenEventChecks.has(`${n}:${TRIGGER}`)) reopenNotBefore.set(n, Date.now() + REOPEN_FRESH_MS);
+      continue;
+    }
     const blockers = [
       ...labelNames(issue.labels).filter((l) => activeExcludeLabels.has(l)),
       ...((issue.assignees || []).length ? [`${issue.assignees.length} assigned`] : []),
