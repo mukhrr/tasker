@@ -141,6 +141,7 @@ const TG_API = (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').repl
 // low-latency replacement for the extension's chrome.alarms poller (>=30s).
 const ALERT_NEW_TRIGGER = bool('ALERT_NEW_TRIGGER', true);
 const ALERT_FRESH_MS = int('ALERT_FRESH_MS', 600000); // ignore label events older than this
+const REOPEN_FRESH_MS = int('REOPEN_FRESH_MS', 600000); // treat HW re-added this recently as a reopened race
 
 // Auto-draft: queue label-matched issues into Supabase for the drafter worker.
 // Groups are '+'-joined labels (AND within a group) separated by '|' (OR across
@@ -966,6 +967,12 @@ function matchesHwRescue(labelSet, issue) {
   if ((issue?.assignees || []).length > 0) return false;
   if ([...labelSet].some((l) => DEAD_LABELS.has(l))) return false;
   if (activeExcludeLabels.size && [...labelSet].some((l) => activeExcludeLabels.has(l))) return false;
+  return matchesRescueGroups(labelSet);
+}
+
+// Group match with the trigger itself counting as satisfied — the label sets
+// of rescue-class issues carry Help Wanted where a watch group expects it.
+function matchesRescueGroups(labelSet) {
   return activeWatchGroups.some((group) => group.every((label) => label === TRIGGER || labelSet.has(label)));
 }
 
@@ -1207,10 +1214,12 @@ async function discoverTick() {
     const alertCandidates = [];
     const queueCandidates = [];
     const rescueCandidates = [];
+    const reopenCandidates = [];
     for (const issue of data) {
       if (issue.pull_request) continue; // the issues endpoint also returns PRs
       const n = issue.number;
       const issueLabels = labelNames(issue.labels);
+      const updatedAgo = Date.now() - Date.parse(issue.updated_at);
 
       // Collect trigger-label alert candidates for EVERY issue (armed or not)
       // without awaiting — verification happens after the loop so alerting can
@@ -1235,6 +1244,20 @@ async function discoverTick() {
         } else if (matchesHwRescue(labelSetForQueue, issue)) {
           if (!queueSeeded) rescued.add(n);
           else if (!rescued.has(n)) rescueCandidates.push(issue);
+        } else if (
+          labelSetForQueue.has(TRIGGER) &&
+          !isDead &&
+          matchesRescueGroups(labelSetForQueue) &&
+          updatedAgo < REOPEN_FRESH_MS
+        ) {
+          // Help Wanted on an issue the two matchers above rejected — blocked
+          // only by assignees or an excluded label (#98319: stale `Reviewing`
+          // plus the C+ still assigned from the previous cycle). A FRESH Help
+          // Wanted event means the team reopened it to contributors and the
+          // blockers are leftovers, so verify the event time after the loop
+          // and rescue-queue on a hit. Dead labels stay absolute.
+          if (!queueSeeded) rescued.add(n);
+          else if (!rescued.has(n)) reopenCandidates.push(issue);
         }
       }
 
@@ -1245,7 +1268,6 @@ async function discoverTick() {
       const names = issueLabels;
       const hasLock = names.includes(LOCK);
       const hasHW = names.includes(TRIGGER);
-      const updatedAgo = Date.now() - Date.parse(issue.updated_at);
       if (hasLock && !hasHW && updatedAgo < FRESH_LOCK_MS) {
         const proposal = cloudProposals.get(n);
         const armedAt = proposal ? Date.parse(proposal.updated_at || '') : 0;
@@ -1303,12 +1325,39 @@ async function discoverTick() {
     if (alertCandidates.length) void alertNewTriggerIssues(alertCandidates);
     if (queueCandidates.length) void enqueueCandidates(queueCandidates);
     if (rescueCandidates.length) void enqueueCandidates(rescueCandidates, { rescue: true });
+    if (reopenCandidates.length) void queueReopenedIssues(reopenCandidates);
   }
   setTimeout(discoverTick, DISCOVERY_INTERVAL_MS);
 }
 
 async function enqueueCandidates(issues, opts) {
   for (const issue of issues) await enqueueForDrafting(issue, opts);
+}
+
+// Confirm a suspected reopen (fresh Help Wanted over stale blockers) against
+// the label event log, then rescue-queue it. Own memo map: the alert path's
+// `alerted` set is once-forever, so sharing its reads would miss a label that
+// was removed and re-added after a first alert.
+const reopenEventChecks = new Map();
+async function queueReopenedIssues(issues) {
+  for (const issue of issues) {
+    const n = issue.number;
+    if (rescued.has(n)) continue;
+    const eventAt = await getRecentLabelEvent(
+      n,
+      TRIGGER,
+      Date.now() - REOPEN_FRESH_MS,
+      issue.updated_at,
+      reopenEventChecks,
+    );
+    if (!eventAt) continue;
+    const blockers = [
+      ...labelNames(issue.labels).filter((l) => activeExcludeLabels.has(l)),
+      ...((issue.assignees || []).length ? [`${issue.assignees.length} assigned`] : []),
+    ].join(', ');
+    log(`🔁 #${n} reopened to contributors — "${TRIGGER_NAME}" re-added over [${blockers}]`);
+    await enqueueForDrafting(issue, { rescue: true });
+  }
 }
 
 // ── instant Telegram alert for issues that newly gain the trigger label ───────
