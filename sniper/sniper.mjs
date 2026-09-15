@@ -63,6 +63,8 @@ const DISCOVERY_INTERVAL_MS = int('DISCOVERY_INTERVAL_MS', 400);
 const TIGHT_INTERVAL_MS = int('TIGHT_INTERVAL_MS', 50); // poll once External is seen
 const TIGHT_WINDOW_MS = int('TIGHT_WINDOW_MS', 15000); // max time to tight-poll one issue
 const FRESH_LOCK_MS = int('FRESH_LOCK_MS', 20000); // only lock issues updated this recently
+const PRECURSOR_RECHECKS = int('PRECURSOR_RECHECKS', 5); // comment reads per issue bump
+const PRECURSOR_RECHECK_GAP_MS = int('PRECURSOR_RECHECK_GAP_MS', 1000); // spacing between those reads
 const FIRE_FRESH_MS = int('FIRE_FRESH_MS', 8000); // catch-up fire only if HW this fresh
 const POST_BOUNDARY_MARGIN_MS = int('POST_BOUNDARY_MARGIN_MS', 75); // past the second boundary after HW
 const POST_LATENCY_COMP_CAP_MS = int('POST_LATENCY_COMP_CAP_MS', 12); // max send-early compensation; 0 disables
@@ -215,7 +217,7 @@ const validatedCloudProposalIds = new Map(); // proposal id -> last GitHub open/
 const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt }
 const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
-const checkedPrecursorUpdates = new Map(); // n -> issue.updated_at already checked for a C+ comment
+const checkedPrecursorUpdates = new Map(); // n -> { updatedAt, attempts, lastAt } C+ comment checks per bump
 const consumedPrecursorComments = new Map(); // n -> assignee comment id already spent on a tight window
 const fireEventChecks = new Map(); // fire-path memo for the real HW event lookup (kept separate so it never false-negatives)
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
@@ -1431,8 +1433,21 @@ async function freshAssigneeCommentId(n, issue) {
     .map((a) => a?.login)
     .filter((l) => l && !l.endsWith('[bot]'));
   if (!assignees.length) return null;
-  if (checkedPrecursorUpdates.get(n) === issue.updated_at) return null;
-  checkedPrecursorUpdates.set(n, issue.updated_at);
+  // A few spaced reads per issue bump, not one: the first read races the
+  // comment's read replica (discovery sees the bump within ~400ms, before the
+  // comments list reflects it), and a single empty read must not switch the
+  // precursor off for the whole bump — #100703's "C+ Help Wanted" comment led
+  // its label by 9s and was never seen.
+  let memo = checkedPrecursorUpdates.get(n);
+  if (memo?.updatedAt === issue.updated_at) {
+    if (memo.attempts >= PRECURSOR_RECHECKS) return null;
+    if (Date.now() - memo.lastAt < PRECURSOR_RECHECK_GAP_MS) return null;
+    memo.attempts += 1;
+    memo.lastAt = Date.now();
+  } else {
+    memo = { updatedAt: issue.updated_at, attempts: 1, lastAt: Date.now() };
+    checkedPrecursorUpdates.set(n, memo);
+  }
   // `since` because the per-issue comments endpoint ignores sort/direction —
   // per_page=1 alone returns the OLDEST comment (verified live on #98308).
   const since = new Date(Date.now() - FRESH_LOCK_MS).toISOString();
@@ -1449,7 +1464,19 @@ async function freshAssigneeCommentId(n, issue) {
     if (!Number.isFinite(at) || Date.now() - at > FRESH_LOCK_MS) continue;
     if (c.id <= (consumedPrecursorComments.get(n) || 0)) continue;
     consumedPrecursorComments.set(n, c.id);
+    memo.attempts = PRECURSOR_RECHECKS; // found — later ticks needn't re-read
     return c.id;
+  }
+  if (memo.attempts >= PRECURSOR_RECHECKS) {
+    // The discriminator for the next missed race: this line present means the
+    // check ran and found no qualifying comment; absent means the branch
+    // never ran at all (list-index lag, or the proposal wasn't armed).
+    const newest = data[data.length - 1];
+    const newestAge = newest ? Math.round((Date.now() - Date.parse(newest.created_at || '')) / 1000) : null;
+    log(
+      `🫥 #${n} precursor gave up after ${memo.attempts} reads — ${data.length} comment(s) in window` +
+        (newest ? `, newest ${newestAge}s old by ${newest?.user?.login}` : ''),
+    );
   }
   return null;
 }
