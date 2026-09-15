@@ -1109,6 +1109,24 @@ async function failDraft(row, error, { terminal = false, requireState } = {}) {
 
 async function directPost(row, issue, body) {
   const n = row.issue_number;
+  // Re-check the live issue: drafting takes minutes, the caller's `issue` is
+  // from draft start, and a rescue row's force_draft bypasses the dead-label
+  // drop above — dead labels must stay absolute all the way to the post.
+  const { status: freshStatus, data: fresh } = await gh(`/repos/${REPO}/issues/${n}`);
+  if (freshStatus === 200 && fresh) {
+    const freshLabels = labelNames(fresh.labels);
+    const dead = freshLabels.find((l) => DEAD_LABELS.has(l));
+    if (fresh.state !== 'open' || dead) {
+      const why = fresh.state !== 'open' ? 'issue is closed' : `issue is labelled "${dead}"`;
+      await updateProposal(row.id, { state: 'draft', last_error: `Direct post skipped: ${why}.` });
+      log(`🚫 #${n} direct-post skipped — ${why}, dropped to draft`);
+      return;
+    }
+    if (!freshLabels.includes(TRIGGER)) {
+      log(`#${n} direct-post skipped — "${TRIGGER}" no longer on the issue, staying armed`);
+      return;
+    }
+  }
   const claimed = await updateProposal(row.id, { state: 'posting' }, { requireState: 'armed' });
   if (!claimed) {
     log(`#${n} direct-post skipped — not armed`);
