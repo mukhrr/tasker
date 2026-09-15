@@ -218,6 +218,7 @@ const cloudValidationBackoff = new Map(); // proposal id -> { attempts, retryAt 
 const armedBodyCache = new Map(); // proposal id -> { updatedAt, body }; avoids re-fetching the body every sync
 const checkedLabelUpdates = new Map(); // "issue:label" -> issue.updated_at already verified
 const checkedPrecursorUpdates = new Map(); // n -> { updatedAt, attempts, lastAt } C+ comment checks per bump
+const reopenEventChecks = new Map(); // n:label -> updated_at already checked for a reopen
 const consumedPrecursorComments = new Map(); // n -> assignee comment id already spent on a tight window
 const fireEventChecks = new Map(); // fire-path memo for the real HW event lookup (kept separate so it never false-negatives)
 const consumedLockEvents = new Map(); // issue number -> External event timestamp already raced
@@ -256,6 +257,7 @@ const MEMO_CAPS = [
   ['checkedPrecursorUpdates', checkedPrecursorUpdates, 4000],
   ['consumedPrecursorComments', consumedPrecursorComments, 4000],
   ['alertEventChecks', alertEventChecks, 4000],
+  ['reopenEventChecks', reopenEventChecks, 4000],
   ['speculativeClaimTried', speculativeClaimTried, 5000],
   ['consumedLockEvents', consumedLockEvents, 5000],
   ['fireEventChecks', fireEventChecks, 2000],
@@ -1249,6 +1251,7 @@ async function discoverTick() {
         } else if (
           labelSetForQueue.has(TRIGGER) &&
           !isDead &&
+          !posted.has(n) &&
           matchesRescueGroups(labelSetForQueue) &&
           updatedAgo < REOPEN_FRESH_MS
         ) {
@@ -1340,7 +1343,6 @@ async function enqueueCandidates(issues, opts) {
 // the label event log, then rescue-queue it. Own memo map: the alert path's
 // `alerted` set is once-forever, so sharing its reads would miss a label that
 // was removed and re-added after a first alert.
-const reopenEventChecks = new Map();
 async function queueReopenedIssues(issues) {
   for (const issue of issues) {
     const n = issue.number;
