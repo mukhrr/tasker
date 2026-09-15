@@ -144,9 +144,10 @@ const INTERIM_CODEX_MODEL = process.env.INTERIM_CODEX_MODEL || CODEX_MODEL;
 // Posting a comment subscribes you automatically, but that is far too late.
 const SUBSCRIBE_ON_ARM = bool('SUBSCRIBE_ON_ARM', true);
 // A SAME verdict is Codex admitting, after reading Melvin's proposal, that it
-// couldn't beat it — racing that draft would just echo the bot. Drop instead
-// of arming (the pre-7d0d059 review-gate behavior, now on Codex's own verdict).
-const DROP_MELVIN_DUPES = bool('DROP_MELVIN_DUPES', true);
+// couldn't beat it. The draft still arms — Help Wanted landing anyway means
+// the C+ opened the issue to contributors despite Melvin, and a posted echo
+// can still win — but the watch is taken back so dupes stop paging the inbox.
+const UNSUB_MELVIN_DUPES = bool('UNSUB_MELVIN_DUPES', true);
 
 // ── state ───────────────────────────────────────────────────────────────────
 let backoffUntil = 0; // Codex usage-limit backoff
@@ -645,7 +646,7 @@ function armedMessage({ n, title, issueUrl, body, verdict }) {
   if (verdict?.reason) lines.push(`Why: ${verdict.reason}`);
   lines.push(
     verdict?.kind === 'SAME'
-      ? "It adds nothing over Melvin's, so it's probably not worth posting — disarm it in Tasker if you agree."
+      ? "It adds nothing over Melvin's — kept armed in case the issue opens to contributors anyway, but the issue is unwatched. Disarm it in Tasker if you'd rather sit this one out."
       : "It's armed and will be posted when the issue opens to contributors.",
   );
   lines.push('Tap below to run a deep Claude analysis and verify it.');
@@ -921,44 +922,14 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
   const issueUrl = `https://github.com/${REPO}/issues/${n}`;
 
   if (!interimArmed) {
-    // With Help Wanted live the C+ opened the issue to contributors despite
-    // Melvin's proposal, so SAME stops being disqualifying: arm it and let the
-    // direct post below race it. Dropping here would also loop the sniper's
-    // HW rescue path, which re-queues dropped duplicates for exactly this case.
     const hwLive = labelNames(issue.labels).includes(TRIGGER);
-    if (DROP_MELVIN_DUPES && verdict?.kind === 'SAME' && !hwLive) {
-      const dropped = await updateProposal(
-        claimed.id,
-        {
-          state: 'draft',
-          // The body is an echo of Melvin's, so clear it; the row itself stays
-          // as the barrier that keeps the sniper from re-queueing this issue.
-          body: '',
-          last_error: `Dropped: same as MelvinBot's proposal${verdict.reason ? ` — ${verdict.reason}` : ''}`.slice(0, 300),
-          draft_attempts: (claimed.draft_attempts || 0) + 1,
-          codex_session_id: sessionId,
-        },
-        { requireState: 'drafting' },
-      );
-      if (!dropped) {
-        log(`#${n} dup drop skipped — row changed under us (manual edit?)`);
-        return null;
-      }
-      log(`🗑️ #${n} dropped — same as MelvinBot's${verdict.reason ? ` (${verdict.reason})` : ''}`);
-      await unsubscribeFromIssue(n, issue);
-      const lines = [
-        "🗑️ Dropped — same as MelvinBot's proposal",
-        `${REPO}#${n} — ${issue.title}`,
-        issueUrl,
-        '',
-      ];
-      if (verdict.reason) lines.push(`Why: ${verdict.reason}`);
-      lines.push('Draft cleared and the issue unwatched. Run a deep analysis to find a better fix, or 🤖 Run Auto-pilot in the extension to re-draft.');
-      await notify(lines.join('\n'), { replyMarkup: runAnalysisButtons(n, issueUrl) });
-      return null;
-    }
+    // A SAME draft arms like any other (dropping it cost real races: HW can
+    // still open the issue to contributors, and re-drafting arrived minutes
+    // late) — it just loses the watch below instead. A later post, direct or
+    // sniped, re-subscribes automatically on comment creation.
+    const melvinDupe = UNSUB_MELVIN_DUPES && verdict?.kind === 'SAME';
 
-    // Original path: arm drafting → armed, direct-post if Help Wanted present.
+    // Arm drafting → armed, direct-post if Help Wanted present.
     const armed = await updateProposal(
       claimed.id,
       {
@@ -975,7 +946,8 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
       return null;
     }
     log(`📝 #${n} armed${sessionId ? ` [codex ${sessionId}]` : ''}${resumeHint(sessionId)}`);
-    await subscribeToIssue(n, issue);
+    if (melvinDupe) await unsubscribeFromIssue(n, issue);
+    else await subscribeToIssue(n, issue);
     // Essential, not verbose: the Melvin comparison is the point of the draft,
     // and it is the only place that verdict surfaces now that the Claude review
     // gate is off.
@@ -1009,6 +981,9 @@ async function finalizeFullDraft(claimed, n, issue, body, sessionId, settings, i
       { requireState: 'armed' },
     );
     if (updated) log(`📝 #${n} full draft swapped into the armed interim (${body.length} chars)`);
+    // The interim subscribed at its arm; the full draft's verdict is the
+    // first Melvin comparison, so take the watch back here on a dupe.
+    if (UNSUB_MELVIN_DUPES && verdict?.kind === 'SAME') await unsubscribeFromIssue(n, issue);
     return updated || row;
   }
   if (row.state === 'posted' && row.github_comment_id) {
