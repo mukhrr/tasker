@@ -129,12 +129,24 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     const signalEvents = events.filter((e) => SIGNAL_EVENTS.has(e.event));
 
+    // Open issue handed to someone else: the bounty is lost even though
+    // nothing closed. Computed here so the model does not have to infer it.
+    const assignedToOther =
+      issue.state === 'open' &&
+      !!username &&
+      issue.assignees.length > 0 &&
+      !issue.assignees.some(
+        (a) => a.login.toLowerCase() === username.toLowerCase()
+      ) &&
+      !prData;
+
     // Build analysis prompt with all context. Compact JSON: the model reads it
     // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
       currentStatus: task.status,
       isFirstSync,
       wasManuallyEdited,
+      assignedToOther,
       githubUsername: username,
       issueTitle: issue.title,
       issueData: JSON.stringify({

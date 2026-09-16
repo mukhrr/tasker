@@ -101,7 +101,7 @@ Match the GitHub state to the most specific status whose description fits. Evide
 1. Payment or completion signals (statuses in the Complete group)
 2. PR state: merged, changes requested, under review
 3. Assignment to the developer
-4. Issue closed without the developer's PR merged
+4. Bounty lost: issue closed without the developer's PR merged, or the open issue is assigned to another contributor while the developer has no PR (Help Wanted removed and someone else assigned). Use the Complete-group status for abandoned/closed work.
 5. Proposal-stage signals (reviewer feedback, requests to update, interest)
 6. Otherwise the first status in the To-do group
 
@@ -153,6 +153,7 @@ export function buildAnalysisPrompt(data: {
   discoveredPrUrl?: string | null;
   discoveredAssignedDate?: string | null;
   wasManuallyEdited?: boolean;
+  assignedToOther?: boolean;
 }): string {
   let prompt = '';
 
@@ -163,6 +164,9 @@ export function buildAnalysisPrompt(data: {
 
   if (data.wasManuallyEdited) {
     prompt += `User changed the status by hand since the last sync: **yes**\n`;
+  }
+  if (data.assignedToOther) {
+    prompt += `Issue is open and assigned to another contributor, not the developer, and the developer has no PR: **yes** (the bounty went to someone else)\n`;
   }
 
   prompt += '\n';
