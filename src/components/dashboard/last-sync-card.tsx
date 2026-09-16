@@ -268,9 +268,18 @@ export function LastSyncCard({ userId }: { userId: string }) {
           };
 
   const visibleChanges = showAll ? changes : changes.slice(0, 4);
+  const busy = inFlight || syncing;
 
   return (
-    <Card>
+    <Card className="relative">
+      {busy && (
+        // Same sweep as Skeleton, laid over the stale numbers while a run
+        // is in flight so the card reads as "updating", not "done".
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 animate-shimmer bg-[linear-gradient(110deg,transparent_35%,var(--color-foreground)_50%,transparent_65%)] bg-[length:200%_100%] opacity-[0.06]"
+        />
+      )}
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="grid gap-1">
           <CardTitle>Last Sync</CardTitle>
@@ -297,7 +306,9 @@ export function LastSyncCard({ userId }: { userId: string }) {
         </div>
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-4">
+      <CardContent
+        className={`flex flex-col gap-4 transition-opacity ${busy ? 'opacity-60' : ''}`}
+      >
         {log.status === 'failed' && (
           <div className="flex gap-2.5 rounded-lg bg-destructive/8 px-3.5 py-3 ring-1 ring-destructive/25">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
