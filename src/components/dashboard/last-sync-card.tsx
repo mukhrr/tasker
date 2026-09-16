@@ -55,7 +55,6 @@ const BACKEND_LABELS: Record<AiBackend, string> = {
   codex_cli: 'Codex CLI',
 };
 
-// Statuses whose arrival means the developer has something to do.
 const ACTION_STATUSES = new Set(['changes_required', 'awaiting_payment']);
 
 function shortRef(issueUrl: string): string {
@@ -273,8 +272,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
   return (
     <Card className="relative">
       {busy && (
-        // Same sweep as Skeleton, laid over the stale numbers while a run
-        // is in flight so the card reads as "updating", not "done".
+        // Skeleton's sweep over the stale numbers while a run is in flight.
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-10 animate-shimmer bg-[linear-gradient(110deg,transparent_35%,var(--color-foreground)_50%,transparent_65%)] bg-[length:200%_100%] opacity-[0.06]"

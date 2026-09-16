@@ -37,7 +37,6 @@ export function useTaskTable(userId: string) {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [syncReady, setSyncReady] = useState(true); // optimistic default
 
-  // Whether the chosen AI backend has its credential (API key or CLI login)
   useEffect(() => {
     fetch('/api/settings', { cache: 'no-store' })
       .then((res) => res.json())

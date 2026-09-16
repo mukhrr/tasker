@@ -15,7 +15,6 @@ type CredentialColumns = Pick<
   | 'codex_auth_encrypted'
 >;
 
-// Whether the selected backend has the credential it needs to run a sync.
 export function syncReady(s: Partial<CredentialColumns> | null): boolean {
   if (!s) return false;
   switch (s.ai_backend ?? 'api') {

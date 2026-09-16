@@ -11,8 +11,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // ?id= reads one queued/running row while the toolbar waits on it;
-  // without it, the latest row.
+  // ?id= lets the toolbar poll the exact row it queued.
   const id = new URL(request.url).searchParams.get('id');
   let query = supabase.from('sync_logs').select('*').eq('user_id', user.id);
   query = id

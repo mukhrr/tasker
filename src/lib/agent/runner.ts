@@ -13,7 +13,6 @@ export interface RunSyncOptions {
   // Web routes pass the session's credentials; cron and the syncer worker
   // leave this out and the runner reads them from user_settings.
   credentials?: SyncCredentials;
-  // Defaults to the Anthropic API with the user's stored key.
   analyzer?: Analyzer;
   // A sync_logs row already claimed by the caller (the worker's queue).
   syncLogId?: string;

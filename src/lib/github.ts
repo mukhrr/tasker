@@ -118,8 +118,8 @@ export async function fetchPRReviews(
   );
 }
 
-// Names of CI checks that failed on a commit (GitHub Actions check runs plus
-// legacy commit statuses). Empty when everything passed or is still running.
+// Empty while checks are still running, so callers see "no failures" until
+// CI has actually finished.
 export async function fetchFailingChecks(
   owner: string,
   repo: string,

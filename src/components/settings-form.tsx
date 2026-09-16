@@ -30,8 +30,6 @@ async function postSettings(body: Record<string, unknown>) {
   }
 }
 
-// Paste-a-secret panel shared by the two CLI backends: connected state with
-// Change/Remove, or an input with Save.
 function CliCredential({
   id,
   label,
