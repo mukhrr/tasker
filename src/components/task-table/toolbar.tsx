@@ -96,6 +96,7 @@ export function Toolbar({
       .then((res) => res.json())
       .then((data) => {
         if (!data) return;
+        if (data.status === 'queued' || data.status === 'running') return;
         const time = data.completed_at || data.started_at;
         if (time) {
           setSyncStatus({
@@ -198,10 +199,16 @@ export function Toolbar({
 
         {/* Right: Sync status + Filter + Sort + Columns + Sync Now */}
         <div className="flex items-center gap-2">
-          {displayStatus && (
+          {syncing ? (
             <span className="text-xs text-muted-foreground whitespace-nowrap">
-              Synced {timeAgo(displayStatus.time)}
+              Sync in progress
             </span>
+          ) : (
+            displayStatus && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                Synced {timeAgo(displayStatus.time)}
+              </span>
+            )
           )}
           <Popover>
             <PopoverTrigger

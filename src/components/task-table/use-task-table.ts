@@ -44,6 +44,40 @@ export function useTaskTable(userId: string) {
       .then((data) => setSyncReady(!!data.sync_ready))
       .catch(() => {});
   }, []);
+
+  // A run started elsewhere (dashboard card, worker auto-sync, another tab)
+  // should spin this button too: attach to any queued/running row on mount.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/sync/status', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then(async (log) => {
+        if (!log || (log.status !== 'queued' && log.status !== 'running'))
+          return;
+        setSyncing(true);
+        try {
+          const data = await waitForQueuedSync(log.id);
+          if (cancelled) return;
+          setLastSyncResult(
+            data.errors.length
+              ? { failed: true, error: `${data.errors.length} tasks failed` }
+              : { failed: false }
+          );
+        } catch (err) {
+          if (cancelled) return;
+          setLastSyncResult({
+            failed: true,
+            error: err instanceof Error ? err.message : 'Sync failed',
+          });
+        } finally {
+          if (!cancelled) setSyncing(false);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() =>
     loadVisibleColumns()
   );
