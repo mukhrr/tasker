@@ -32,6 +32,9 @@ const GraphState = Annotation.Root({
   tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
   analyze: Annotation<Analyzer>,
+  // Called as soon as a task's result is in, so partial progress survives
+  // an abort (usage limit, timeout) instead of being lost with the run.
+  onUpdate: Annotation<(update: TaskUpdate) => Promise<void>>,
   githubUsername: Annotation<string>,
   userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
@@ -275,6 +278,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
       };
+      await state.onUpdate(update);
       return { updates: [...state.updates, update] };
     }
 

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { createSyncGraph } from './graph';
+import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import type { Task, UserStatus } from '@/types/database';
@@ -124,97 +124,82 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           .single()
       ).data;
 
+  let tasksUpdated = 0;
+
   try {
     const graph = createSyncGraph();
 
-    const result = await graph.invoke({
-      tasks: tasks as Task[],
-      githubToken,
-      analyze,
-      githubUsername,
-      userStatuses: (finalStatuses as UserStatus[]) ?? [],
-      currentIndex: 0,
-      updates: [],
-      errors: [],
-    });
+    const applyUpdate = async (update: TaskUpdate) => {
+      if (update.confidence < 0.6) return;
+      const currentTask = tasks.find((t) => t.id === update.taskId);
+      if (!currentTask) return;
 
-    let tasksUpdated = 0;
+      const updateData: Record<string, unknown> = {
+        ai_summary: update.summary,
+        last_synced_at: new Date().toISOString(),
+      };
 
-    // Apply updates
-    for (const update of result.updates) {
-      if (update.confidence >= 0.6) {
-        const currentTask = tasks.find((t) => t.id === update.taskId);
-        if (!currentTask) continue;
+      // Skip AI status override if user manually edited since last sync
+      const wasManuallyEdited =
+        currentTask.last_synced_at &&
+        new Date(currentTask.updated_at) > new Date(currentTask.last_synced_at);
 
-        const updateData: Record<string, unknown> = {
-          ai_summary: update.summary,
-          last_synced_at: new Date().toISOString(),
-        };
+      // A status the user maintains by hand (description says "manually")
+      // is never moved by the sync, whatever the model suggests.
+      const isManualStatus = (finalStatuses as UserStatus[])?.some(
+        (s) =>
+          s.key === currentTask.status && /manually/i.test(s.description ?? '')
+      );
 
-        // Skip AI status override if user manually edited since last sync
-        const wasManuallyEdited =
-          currentTask.last_synced_at &&
-          new Date(currentTask.updated_at) >
-            new Date(currentTask.last_synced_at);
-
-        // A status the user maintains by hand (description says "manually")
-        // is never moved by the sync, whatever the model suggests.
-        const isManualStatus = (finalStatuses as UserStatus[])?.some(
-          (s) =>
-            s.key === currentTask.status &&
-            /manually/i.test(s.description ?? '')
+      // Status change at high confidence
+      if (
+        update.suggestedStatus !== currentTask.status &&
+        update.confidence >= 0.75 &&
+        !wasManuallyEdited &&
+        !isManualStatus
+      ) {
+        updateData.status = update.suggestedStatus;
+        updateData.status_changed_at = new Date().toISOString();
+        // Derive status_group from user's statuses
+        const matchedStatus = (finalStatuses as UserStatus[])?.find(
+          (s) => s.key === update.suggestedStatus
         );
-
-        // Status change at high confidence
-        if (
-          update.suggestedStatus !== currentTask.status &&
-          update.confidence >= 0.75 &&
-          !wasManuallyEdited &&
-          !isManualStatus
-        ) {
-          updateData.status = update.suggestedStatus;
-          updateData.status_changed_at = new Date().toISOString();
-          // Derive status_group from user's statuses
-          const matchedStatus = (finalStatuses as UserStatus[])?.find(
-            (s) => s.key === update.suggestedStatus
-          );
-          if (matchedStatus) {
-            updateData.status_group = matchedStatus.group_name;
-          }
+        if (matchedStatus) {
+          updateData.status_group = matchedStatus.group_name;
         }
-
-        // Rich fields — only update if AI provided a value (non-null)
-        if (update.issue_title !== undefined && update.issue_title !== null) {
-          updateData.issue_title = update.issue_title;
-        }
-
-        if (update.pr_url !== undefined && update.pr_url !== null) {
-          updateData.pr_url = update.pr_url;
-        }
-
-        if (
-          update.assigned_date !== undefined &&
-          update.assigned_date !== null
-        ) {
-          updateData.assigned_date = update.assigned_date;
-        }
-
-        if (update.payment_date !== undefined && update.payment_date !== null) {
-          updateData.payment_date = update.payment_date;
-        }
-
-        if (update.amount !== undefined && update.amount !== null) {
-          // Only set amount if not already set by user
-          if (!currentTask.amount) {
-            updateData.amount = update.amount;
-          }
-        }
-
-        await supabase.from('tasks').update(updateData).eq('id', update.taskId);
-
-        tasksUpdated++;
       }
-    }
+
+      // Rich fields — only update if AI provided a value (non-null)
+      if (update.issue_title != null)
+        updateData.issue_title = update.issue_title;
+      if (update.pr_url != null) updateData.pr_url = update.pr_url;
+      if (update.assigned_date != null)
+        updateData.assigned_date = update.assigned_date;
+      if (update.payment_date != null)
+        updateData.payment_date = update.payment_date;
+      // Only set amount if not already set by user
+      if (update.amount != null && !currentTask.amount)
+        updateData.amount = update.amount;
+
+      await supabase.from('tasks').update(updateData).eq('id', update.taskId);
+      tasksUpdated++;
+    };
+
+    const result = await graph.invoke(
+      {
+        tasks: tasks as Task[],
+        githubToken,
+        analyze,
+        onUpdate: applyUpdate,
+        githubUsername,
+        userStatuses: (finalStatuses as UserStatus[]) ?? [],
+        currentIndex: 0,
+        updates: [],
+        errors: [],
+      },
+      // Two graph steps per task; LangGraph's default of 25 dies at 13 tasks.
+      { recursionLimit: tasks.length * 2 + 10 }
+    );
 
     // Update sync log
     if (syncLog) {
@@ -238,6 +223,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           status: 'failed',
           completed_at: new Date().toISOString(),
           error_message: err instanceof Error ? err.message : String(err),
+          // Tasks already applied before the abort stay applied; record them.
+          bounties_updated: tasksUpdated,
         })
         .eq('id', syncLog.id);
     }
