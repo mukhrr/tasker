@@ -14,7 +14,7 @@ No test framework is configured yet.
 
 - `src/app/(dashboard)/` — Protected routes (tasks, settings). Layout checks Supabase session; redirects to `/auth/login` if unauthenticated. Includes `dashboard/` (stats/analytics) and `tasks/[id]/` (single task detail).
 - `src/app/auth/` — Login, signup, OAuth callback. Layout has decorative left panel.
-- `src/app/api/` — API routes: `sync/` (POST triggers AI sync), `sync/task/` (POST single-task sync), `sync/status/` (GET), `settings/` (GET/POST), `cron/sync/` (GET, bearer-token protected).
+- `src/app/api/` — API routes: `sync/` (POST; runs the sync for API-key users, returns `202 {queued}` for CLI users), `sync/task/` (POST single-task, same split), `sync/status/` (GET latest or `?id=`), `settings/` (GET/POST, includes `ai_backend` and the CLI credentials), `cron/sync/` (GET, bearer-token protected; API-key users only).
 - `src/app/privacy/` — Privacy policy (public page).
 
 ### Supabase Three-Client Pattern
@@ -28,6 +28,8 @@ No test framework is configured yet.
 LangGraph StateGraph that loops over tasks: `fetchGithubData → advanceOrFinish → (loop or END)`. Each iteration fetches GitHub issue/PR/comments/reviews/events, calls the model with a system prompt built from the user's status taxonomy (`prompts.ts`), and returns `{suggestedStatus, confidence, summary, ...fields}`. Runner applies updates at confidence ≥ 0.6 (summary only) or ≥ 0.75 (status change).
 
 The model call is an `Analyzer` (`llm.ts`: `(system, user) => Promise<string>`). `user_settings.ai_backend` picks it: `api` runs `anthropicAnalyzer` inside the web app; `claude_cli` / `codex_cli` cannot run on Vercel, so the routes insert a `queued` row in `sync_logs` and the Railway worker in `syncer/` claims it and runs `runSync` with a CLI analyzer (`syncer/analyzers.ts`). `lib/agent/backend.ts` has the shared gate (`syncReady`, `enqueueSync`).
+
+Auto-sync: `user_settings.auto_sync_enabled` + `sync_interval_hours`; a user is due when the latest `sync_logs.started_at` is older than the interval (`schedule.ts` `isSyncDue`). CLI users are scheduled by the syncer worker every tick; API-key users by `GET /api/cron/sync`, whose GitHub Actions schedule is paused (`.github/workflows/sync-cron.yml`). One sync per user in flight; the toolbar polls `sync_logs` for queued runs (`lib/sync-poll.ts`). Full write-up: README "How sync works".
 
 ### Task Table (`components/task-table/`)
 
