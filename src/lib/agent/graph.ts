@@ -35,6 +35,7 @@ const GraphState = Annotation.Root({
   // Called as soon as a task's result is in, so partial progress survives
   // an abort (usage limit, timeout) instead of being lost with the run.
   onUpdate: Annotation<(update: TaskUpdate) => Promise<void>>,
+  onProgress: Annotation<(done: number, total: number) => Promise<void>>,
   githubUsername: Annotation<string>,
   userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
@@ -303,6 +304,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 }
 
 async function advanceOrFinish(state: State): Promise<Partial<State>> {
+  await state.onProgress(state.currentIndex + 1, state.tasks.length);
   return { currentIndex: state.currentIndex + 1 };
 }
 

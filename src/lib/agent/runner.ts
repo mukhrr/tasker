@@ -204,6 +204,18 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         githubToken,
         analyze,
         onUpdate: applyUpdate,
+        onProgress: async (done, total) => {
+          if (!syncLog) return;
+          // Live counters for the dashboard card; the final update below
+          // rewrites details in full, so nothing here needs to be complete.
+          await supabase
+            .from('sync_logs')
+            .update({
+              bounties_updated: tasksUpdated,
+              details: { progress: { done, total }, statusChanges },
+            })
+            .eq('id', syncLog.id);
+        },
         githubUsername,
         userStatuses: (finalStatuses as UserStatus[]) ?? [],
         currentIndex: 0,
@@ -226,6 +238,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             updates: result.updates,
             errors: result.errors,
             statusChanges,
+            progress: { done: tasks.length, total: tasks.length },
           },
         })
         .eq('id', syncLog.id);
