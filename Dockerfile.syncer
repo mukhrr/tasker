@@ -11,8 +11,10 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-# tsx is a devDependency; Railway sets NODE_ENV=production.
-RUN npm ci --include=dev --no-audit --no-fund
+# npm install, not ci: package-lock has a pre-existing commander dedupe that
+# ci rejects. --include=dev because Railway sets NODE_ENV=production and tsx
+# is a devDependency.
+RUN npm install --include=dev --no-audit --no-fund
 
 COPY tsconfig.json tsconfig.syncer.json ./
 COPY src/lib ./src/lib
