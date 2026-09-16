@@ -1,6 +1,7 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
 import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
 import type { Analyzer } from './llm';
+import { userSetStatus } from './manual';
 import {
   fetchIssue,
   fetchPR,
@@ -157,9 +158,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     }
 
     // Detect if user manually edited the task since last sync
-    const wasManuallyEdited =
-      !!task.last_synced_at &&
-      new Date(task.updated_at) > new Date(task.last_synced_at);
+    const wasManuallyEdited = userSetStatus(task);
 
     const signalEvents = events.filter((e) => SIGNAL_EVENTS.has(e.event));
 

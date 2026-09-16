@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
+import { userSetStatus } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import type { Task, UserStatus } from '@/types/database';
 
@@ -169,9 +170,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       };
 
       // Skip AI status override if user manually edited since last sync
-      const wasManuallyEdited =
-        currentTask.last_synced_at &&
-        new Date(currentTask.updated_at) > new Date(currentTask.last_synced_at);
+      const wasManuallyEdited = userSetStatus(currentTask);
 
       // A status the user maintains by hand (description says "manually")
       // is never moved by the sync, whatever the model suggests.
