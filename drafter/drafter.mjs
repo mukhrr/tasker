@@ -389,6 +389,23 @@ async function refreshRepo() {
     return;
   }
   await run('git', ['reset', '--hard', 'origin/main', '--quiet'], { cwd: REPO_DIR, timeoutMs: 60_000 });
+  await repackIfFragmented();
+}
+
+// The clone is --filter=blob:none, so every blob Codex opens mid-investigation
+// is fetched into its own pack and auto-gc never catches up: the volume filled
+// to 5 GB with 68k packs (2026-09-16). Consolidate once the count grows.
+const REPACK_PACK_LIMIT = 50;
+async function repackIfFragmented() {
+  let packs = 0;
+  try {
+    packs = (await readdir(path.join(REPO_DIR, '.git', 'objects', 'pack'))).filter((f) => f.endsWith('.pack')).length;
+  } catch {
+    return;
+  }
+  if (packs <= REPACK_PACK_LIMIT) return;
+  const res = await run('git', ['repack', '-a', '-d', '-q'], { cwd: REPO_DIR, timeoutMs: 600_000 });
+  log(res.code === 0 ? `git repack: ${packs} packs → 1` : `git repack failed: ${res.stderr.slice(0, 200)}`);
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────────────
