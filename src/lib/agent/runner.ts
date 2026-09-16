@@ -157,11 +157,20 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           new Date(currentTask.updated_at) >
             new Date(currentTask.last_synced_at);
 
+        // A status the user maintains by hand (description says "manually")
+        // is never moved by the sync, whatever the model suggests.
+        const isManualStatus = (finalStatuses as UserStatus[])?.some(
+          (s) =>
+            s.key === currentTask.status &&
+            /manually/i.test(s.description ?? '')
+        );
+
         // Status change at high confidence
         if (
           update.suggestedStatus !== currentTask.status &&
           update.confidence >= 0.75 &&
-          !wasManuallyEdited
+          !wasManuallyEdited &&
+          !isManualStatus
         ) {
           updateData.status = update.suggestedStatus;
           updateData.status_changed_at = new Date().toISOString();

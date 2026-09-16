@@ -10,6 +10,7 @@ import {
   parseIssueUrl,
   parsePrUrl,
   findLinkedPR,
+  fetchFailingChecks,
 } from '@/lib/github';
 import type { Task, TaskStatus, UserStatus } from '@/types/database';
 
@@ -46,6 +47,14 @@ const FATAL_ERROR_RE =
   /401|authentication|invalid x-api-key|invalid_api_key|rate limit|usage limit|quota|not logged in|invalid.*token|exited \d+|timed out/i;
 
 export const COMMENT_WINDOW = 8;
+// Checks that fail until a reviewer acts (Expensify's checklist and
+// independent-approval gates) are not the developer's to fix.
+const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
+const DEPLOY_COMMENT_RE = /deployed to (production|staging)|🚀/i;
+
+function isBot(user: { login: string; type?: string }): boolean {
+  return user.type === 'Bot' || /\[bot\]$|-bot$|^claude$/i.test(user.login);
+}
 const EVENT_WINDOW = 30;
 // Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
 const SIGNAL_EVENTS = new Set([
@@ -109,6 +118,23 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       }
     }
 
+    // CI and merge state are what changes_required keys on; only an open,
+    // unmerged PR needs them.
+    let failingChecks: string[] = [];
+    if (prData && prData.state === 'open' && !prData.merged) {
+      const prParsed = parsePrUrl(prData.html_url);
+      if (prParsed) {
+        failingChecks = (
+          await fetchFailingChecks(
+            prParsed.owner,
+            prParsed.repo,
+            prData.head.sha,
+            token
+          )
+        ).filter((name) => !REVIEWER_GATE_CHECK_RE.test(name));
+      }
+    }
+
     // Find assignment date from events
     let assignedDate: string | null = null;
     if (username) {
@@ -128,6 +154,18 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       new Date(task.updated_at) > new Date(task.last_synced_at);
 
     const signalEvents = events.filter((e) => SIGNAL_EVENTS.has(e.event));
+
+    // Bot reviews (Claude reviewers, melvin) never decide approved or
+    // changes_required; only a human C+ does.
+    const humanReviews = (reviews ?? []).filter((r) => !isBot(r.user));
+
+    // The production-deploy comment starts the 7-day payment clock and is
+    // often older than the last few comments, so keep it whatever its age.
+    const recent = comments.slice(-COMMENT_WINDOW);
+    const deployComments = comments.filter(
+      (c) => !recent.includes(c) && DEPLOY_COMMENT_RE.test(c.body)
+    );
+    const promptComments = [...deployComments, ...recent];
 
     // Open issue handed to someone else: the bounty is lost even though
     // nothing closed. Computed here so the model does not have to infer it.
@@ -171,20 +209,22 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
             user: prData.user.login,
             created_at: prData.created_at,
             updated_at: prData.updated_at,
+            merge_conflicts: prData.mergeable_state === 'dirty',
+            failing_checks: failingChecks,
           })
         : undefined,
-      comments: comments.length
+      comments: promptComments.length
         ? JSON.stringify(
-            comments.slice(-COMMENT_WINDOW).map((c) => ({
+            promptComments.map((c) => ({
               user: c.user.login,
               body: c.body.slice(0, 500),
               created_at: c.created_at,
             }))
           )
         : undefined,
-      reviews: reviews?.length
+      reviews: humanReviews.length
         ? JSON.stringify(
-            reviews.slice(-3).map((r) => ({
+            humanReviews.slice(-3).map((r) => ({
               user: r.user.login,
               state: r.state,
               body: r.body?.slice(0, 300),

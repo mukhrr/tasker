@@ -4,6 +4,7 @@ import type {
   GitHubComment,
   GitHubReview,
   GitHubEvent,
+  GitHubCheckRun,
 } from '@/types/github';
 
 const GITHUB_API = 'https://api.github.com';
@@ -115,6 +116,40 @@ export async function fetchPRReviews(
     `/repos/${owner}/${repo}/pulls/${number}/reviews`,
     token
   );
+}
+
+// Names of CI checks that failed on a commit (GitHub Actions check runs plus
+// legacy commit statuses). Empty when everything passed or is still running.
+export async function fetchFailingChecks(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string
+): Promise<string[]> {
+  const [checks, status] = await Promise.all([
+    githubFetch<{ check_runs: GitHubCheckRun[] }>(
+      `/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
+      token
+    ).catch(() => ({ check_runs: [] as GitHubCheckRun[] })),
+    githubFetch<{ statuses: { context: string; state: string }[] }>(
+      `/repos/${owner}/${repo}/commits/${sha}/status`,
+      token
+    ).catch(() => ({ statuses: [] })),
+  ]);
+  const failed = new Set<string>();
+  for (const c of checks.check_runs) {
+    if (
+      c.conclusion === 'failure' ||
+      c.conclusion === 'timed_out' ||
+      c.conclusion === 'action_required'
+    ) {
+      failed.add(c.name);
+    }
+  }
+  for (const s of status.statuses) {
+    if (s.state === 'failure' || s.state === 'error') failed.add(s.context);
+  }
+  return [...failed];
 }
 
 export async function fetchIssueEvents(

@@ -71,12 +71,34 @@ export const TASK_UPDATE_SCHEMA = {
 function statusRules(keys: Set<string>): string {
   const rules: string[] = [];
   if (keys.has('changes_required')) {
-    rules.push(`**changes_required**: only when ALL are true:
-1. The developer's PR has a review with state "CHANGES_REQUESTED"
-2. The developer has NOT pushed after that review (compare the PR's updated_at with the review's submitted_at)
-3. The latest review is not APPROVED
-If the developer pushed after the review, use **reviewing** instead. A review the developer left on someone else's PR never counts.`);
+    rules.push(`**changes_required**: the developer's open PR needs their action for any of:
+1. \`failing_checks\` is non-empty (TypeScript, tests, lint, or any CI job) or \`merge_conflicts\` is true
+2. A human reviewer's latest review is CHANGES_REQUESTED and the developer has not pushed since (compare the PR's updated_at with the review's submitted_at)
+Bot reviews (Claude reviewers, melvin) never count, and a review the developer left on someone else's PR never counts. When you choose this status, the summary MUST list exactly what has to change: the failing check names, "merge conflicts", or the reviewer's requests. If the developer already pushed after the request and checks pass, use **reviewing**.`);
   }
+  if (keys.has('approved')) {
+    rules.push(
+      `**approved**: the PR is open, not merged, and the latest human review (the C+ reviewer) is APPROVED with no failing checks. Bot approvals do not count.`
+    );
+  }
+  if (keys.has('reviewing')) {
+    rules.push(
+      `**reviewing**: the developer's PR is open, not draft, checks pass, no conflicts, no unaddressed change requests, and no human APPROVED review yet. The developer is waiting on the C+ reviewer.`
+    );
+  }
+  if (keys.has('awaiting_payment')) {
+    rules.push(
+      `**awaiting_payment**: the PR is merged AND a comment says it was deployed to production AND that deploy is at least 7 days old (payment is due 7 days after the production deploy). Merged but not yet deployed to production, or deployed less than 7 days ago, stays **merged**.`
+    );
+  }
+  if (keys.has('hold')) {
+    rules.push(
+      `**hold**: the issue or PR is explicitly blocked on something outside the developer's control: a pending design decision, backend changes, or another PR/issue that must land first. Look for comments saying hold, blocked, waiting on, or a HOLD label/title prefix.`
+    );
+  }
+  rules.push(
+    `**Manual statuses**: a status whose description says it is set manually is never suggested. If the current status is one of them, return it unchanged.`
+  );
   if (keys.has('paid')) {
     rules.push(
       `**paid**: only when the issue is **closed** AND a comment explicitly confirms payment ("paid", "payment sent", "payout", "invoice paid", a bounty bot payment comment). An open issue is NEVER paid, whatever the PR or comments about upcoming payment say.`

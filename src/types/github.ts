@@ -2,6 +2,7 @@ export interface GitHubUser {
   login: string;
   id: number;
   avatar_url: string;
+  type?: 'User' | 'Bot' | 'Organization';
 }
 
 export interface GitHubLabel {
@@ -37,6 +38,24 @@ export interface GitHubPullRequest {
   updated_at: string;
   closed_at: string | null;
   body: string | null;
+  head: { sha: string };
+  // 'dirty' means merge conflicts; null while GitHub is still computing it.
+  mergeable: boolean | null;
+  mergeable_state: string;
+}
+
+export interface GitHubCheckRun {
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'skipped'
+    | 'timed_out'
+    | 'action_required'
+    | null;
 }
 
 export interface GitHubComment {
