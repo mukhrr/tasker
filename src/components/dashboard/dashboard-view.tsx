@@ -85,12 +85,12 @@ export function DashboardView({
         />
       </div>
 
+      <LastSyncCard userId={userId} />
+
       <div className="grid gap-4 lg:grid-cols-2">
         <EarningsChart data={stats.earningsOverTime} />
         <StatusChart data={stats.tasksByStatusGroup} />
       </div>
-
-      <LastSyncCard userId={userId} />
 
       <ActivityChart data={stats.monthlyActivity} />
     </div>
