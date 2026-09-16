@@ -25,11 +25,17 @@ No test framework is configured yet.
 
 ### AI Sync Agent (`lib/agent/`)
 
-LangGraph StateGraph that loops over tasks: `fetchGithubData → advanceOrFinish → (loop or END)`. Each iteration fetches GitHub issue/PR/comments/reviews/events, calls Claude with a system prompt defining the 12-status taxonomy, and returns `{suggestedStatus, confidence, summary}`. Runner applies updates at confidence ≥ 0.6 (summary only) or ≥ 0.75 (status change).
+LangGraph StateGraph that loops over tasks: `fetchGithubData → advanceOrFinish → (loop or END)`. Each iteration fetches GitHub issue/PR/comments/reviews/events, calls the model with a system prompt built from the user's status taxonomy (`prompts.ts`), and returns `{suggestedStatus, confidence, summary, ...fields}`. Runner applies updates at confidence ≥ 0.6 (summary only) or ≥ 0.75 (status change).
+
+The model call is an `Analyzer` (`llm.ts`: `(system, user) => Promise<string>`). `user_settings.ai_backend` picks it: `api` runs `anthropicAnalyzer` inside the web app; `claude_cli` / `codex_cli` cannot run on Vercel, so the routes insert a `queued` row in `sync_logs` and the Railway worker in `syncer/` claims it and runs `runSync` with a CLI analyzer (`syncer/analyzers.ts`). `lib/agent/backend.ts` has the shared gate (`syncReady`, `enqueueSync`).
 
 ### Task Table (`components/task-table/`)
 
 Notion-style inline-editable table. Cell components in `cells/` subfolder (status-cell, url-cell, text-cell, date-cell, amount-cell, note-cell). Each cell handles its own edit mode. The table uses `useTasks` and `useCustomColumns` hooks for CRUD with optimistic updates and Supabase Realtime subscriptions.
+
+### Workers
+
+`syncer/` (Railway, CLI-backend sync, see `syncer/README.md`), `drafter/` (Railway, Codex proposal drafts), `sniper/` (label racing), `analyzer/` (runs on the Mac with Claude Code). `Dockerfile.syncer` builds from the repo root because the worker imports `src/lib` via tsx.
 
 ### Browser Extension (`extension/`)
 

@@ -6,9 +6,125 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import type { User } from '@supabase/supabase-js';
-import type { UserSettings } from '@/types/database';
+import type { AiBackend, UserSettings } from '@/types/database';
+
+const BACKEND_LABELS: Record<AiBackend, string> = {
+  api: 'Claude API key',
+  claude_cli: 'Claude CLI',
+  codex_cli: 'Codex CLI',
+};
+
+async function postSettings(body: Record<string, unknown>) {
+  const res = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to save');
+  }
+}
+
+// Paste-a-secret panel shared by the two CLI backends: connected state with
+// Change/Remove, or an input with Save.
+function CliCredential({
+  id,
+  label,
+  hint,
+  placeholder,
+  multiline,
+  connected,
+  saving,
+  onSave,
+  onRemove,
+}: {
+  id: string;
+  label: string;
+  hint: React.ReactNode;
+  placeholder: string;
+  multiline?: boolean;
+  connected: boolean;
+  saving: boolean;
+  onSave: (value: string) => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(false);
+
+  const save = async () => {
+    if (!value.trim()) return;
+    await onSave(value.trim());
+    setValue('');
+    setEditing(false);
+  };
+
+  return (
+    <div className="space-y-3">
+      <Label htmlFor={id}>{label}</Label>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+      {connected && !editing ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <span className="text-sm">Connected. Stored encrypted.</span>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setEditing(true)}>
+              Change
+            </Button>
+            <Button variant="ghost" onClick={onRemove} disabled={saving}>
+              Remove
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+          {multiline ? (
+            <Textarea
+              id={id}
+              placeholder={placeholder}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              rows={4}
+              className="font-mono text-xs"
+            />
+          ) : (
+            <Input
+              id={id}
+              type="password"
+              placeholder={placeholder}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={save}
+              disabled={saving || !value.trim()}
+              className="flex-1 sm:flex-none"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+            {editing && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditing(false);
+                  setValue('');
+                }}
+                className="flex-1 sm:flex-none"
+              >
+                Cancel
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SettingsForm({
   user,
@@ -29,6 +145,44 @@ export function SettingsForm({
   );
 
   const [hasApiKey, setHasApiKey] = useState(!!settings?.ai_api_key_encrypted);
+  const [backend, setBackend] = useState<AiBackend>(
+    settings?.ai_backend ?? 'api'
+  );
+  const [hasClaudeToken, setHasClaudeToken] = useState(
+    !!settings?.claude_oauth_token_encrypted
+  );
+  const [hasCodexAuth, setHasCodexAuth] = useState(
+    !!settings?.codex_auth_encrypted
+  );
+
+  const changeBackend = async (next: AiBackend) => {
+    const prev = backend;
+    setBackend(next);
+    try {
+      await postSettings({ ai_backend: next });
+      toast.success(`Sync will use ${BACKEND_LABELS[next]}`);
+    } catch {
+      setBackend(prev);
+      toast.error('Failed to switch backend');
+    }
+  };
+
+  const saveCredential = async (
+    body: Record<string, unknown>,
+    onDone: () => void,
+    okMessage: string
+  ) => {
+    setSaving(true);
+    try {
+      await postSettings(body);
+      onDone();
+      toast.success(okMessage);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
   const [maskedKey, setMaskedKey] = useState(initialApiKeyMasked);
   const [isEditingKey, setIsEditingKey] = useState(false);
   const oauthUsername = user.user_metadata?.user_name as string | undefined;
@@ -88,10 +242,86 @@ export function SettingsForm({
         <CardContent className="pt-6">
           <h2 className="text-lg font-semibold">AI Configuration</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Provide your Claude API key for AI-powered status detection
+            Status detection runs on an Anthropic API key, or on your own Claude
+            Code or Codex subscription
           </p>
           <Separator className="my-4" />
-          <div className="space-y-3">
+          <Tabs
+            value={backend}
+            onValueChange={(v) => changeBackend(v as AiBackend)}
+            className="mb-4"
+          >
+            <TabsList className="w-full sm:w-auto">
+              {(Object.keys(BACKEND_LABELS) as AiBackend[]).map((b) => (
+                <TabsTrigger key={b} value={b}>
+                  {BACKEND_LABELS[b]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          {backend === 'claude_cli' && (
+            <CliCredential
+              id="claude-token"
+              label="Claude Code login token"
+              hint={
+                <>
+                  Run <code className="font-mono">claude setup-token</code> in
+                  your terminal and paste the token it prints. Syncs run on the
+                  Tasker worker with your Claude subscription.
+                </>
+              }
+              placeholder="sk-ant-oat01-..."
+              connected={hasClaudeToken}
+              saving={saving}
+              onSave={(v) =>
+                saveCredential(
+                  { claude_oauth_token: v },
+                  () => setHasClaudeToken(true),
+                  'Claude CLI connected'
+                )
+              }
+              onRemove={() =>
+                saveCredential(
+                  { clear_claude_token: true },
+                  () => setHasClaudeToken(false),
+                  'Claude CLI disconnected'
+                )
+              }
+            />
+          )}
+          {backend === 'codex_cli' && (
+            <CliCredential
+              id="codex-auth"
+              label="Codex login (auth.json)"
+              hint={
+                <>
+                  Run <code className="font-mono">codex login</code>, then paste
+                  the contents of{' '}
+                  <code className="font-mono">~/.codex/auth.json</code>. Syncs
+                  run on the Tasker worker with your ChatGPT plan.
+                </>
+              }
+              placeholder='{"auth_mode":"chatgpt","tokens":{...}}'
+              multiline
+              connected={hasCodexAuth}
+              saving={saving}
+              onSave={(v) =>
+                saveCredential(
+                  { codex_auth_json: v },
+                  () => setHasCodexAuth(true),
+                  'Codex CLI connected'
+                )
+              }
+              onRemove={() =>
+                saveCredential(
+                  { clear_codex_auth: true },
+                  () => setHasCodexAuth(false),
+                  'Codex CLI disconnected'
+                )
+              }
+            />
+          )}
+          <div className={backend === 'api' ? 'space-y-3' : 'hidden'}>
             <Label htmlFor="api-key">Claude API Key</Label>
             {hasApiKey && !isEditingKey ? (
               <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
@@ -237,6 +467,8 @@ export function SettingsForm({
                 <Label>Auto-sync</Label>
                 <p className="text-xs text-muted-foreground">
                   Automatically sync task statuses from GitHub
+                  {backend !== 'api' &&
+                    `, on the Tasker worker with your ${BACKEND_LABELS[backend]} login`}
                 </p>
               </div>
               <button

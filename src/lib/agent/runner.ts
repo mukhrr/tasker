@@ -1,51 +1,58 @@
 import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph } from './graph';
-import { decrypt } from '@/lib/encryption';
+import { anthropicAnalyzer, type Analyzer } from './llm';
+import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import type { Task, UserStatus } from '@/types/database';
 
 interface SyncCredentials {
-  apiKey: string;
   githubToken: string;
   githubUsername: string;
 }
 
-export async function runSync(
-  userId: string,
-  credentials?: SyncCredentials,
-  taskId?: string
-) {
+export interface RunSyncOptions {
+  // Web routes pass the session's credentials; cron and the syncer worker
+  // leave this out and the runner reads them from user_settings.
+  credentials?: SyncCredentials;
+  // Defaults to the Anthropic API with the user's stored key.
+  analyzer?: Analyzer;
+  // A sync_logs row already claimed by the caller (the worker's queue).
+  syncLogId?: string;
+  taskId?: string;
+}
+
+export async function runSync(userId: string, opts: RunSyncOptions = {}) {
+  const { credentials, syncLogId, taskId } = opts;
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  let apiKey: string;
+  let analyze = opts.analyzer;
   let githubToken: string;
   let githubUsername: string;
 
-  if (credentials) {
-    apiKey = credentials.apiKey;
-    githubToken = credentials.githubToken;
-    githubUsername = credentials.githubUsername;
-  } else {
-    // Fallback for cron route (uses service role key to bypass RLS)
-    const { data: settings } = await supabase
-      .from('user_settings')
-      .select('*')
-      .eq('id', userId)
-      .single();
+  const needsSettings = !credentials || !analyze;
+  const { data: settings } = needsSettings
+    ? await supabase.from('user_settings').select('*').eq('id', userId).single()
+    : { data: null };
 
+  if (!analyze) {
     if (!settings?.ai_api_key_encrypted) {
       throw new Error('No AI API key configured. Go to Settings to add one.');
     }
+    analyze = anthropicAnalyzer(decrypt(settings.ai_api_key_encrypted));
+  }
 
+  if (credentials) {
+    githubToken = credentials.githubToken;
+    githubUsername = credentials.githubUsername;
+  } else {
     if (!settings?.github_token_encrypted) {
       throw new Error('No GitHub token. Please reconnect with GitHub OAuth.');
     }
 
-    apiKey = decrypt(settings.ai_api_key_encrypted);
-    githubToken = decrypt(settings.github_token_encrypted);
+    githubToken = decryptIfEncrypted(settings.github_token_encrypted);
 
     // Get github_username from settings or profile
     githubUsername = settings.github_username || '';
@@ -103,12 +110,19 @@ export async function runSync(
           .order('group_name')
           .order('position');
 
-  // Create sync log
-  const { data: syncLog } = await supabase
-    .from('sync_logs')
-    .insert({ user_id: userId, status: 'running' })
-    .select()
-    .single();
+  const syncLog = syncLogId
+    ? { id: syncLogId }
+    : (
+        await supabase
+          .from('sync_logs')
+          .insert({
+            user_id: userId,
+            status: 'running',
+            task_id: taskId ?? null,
+          })
+          .select('id')
+          .single()
+      ).data;
 
   try {
     const graph = createSyncGraph();
@@ -116,7 +130,7 @@ export async function runSync(
     const result = await graph.invoke({
       tasks: tasks as Task[],
       githubToken,
-      apiKey,
+      analyze,
       githubUsername,
       userStatuses: (finalStatuses as UserStatus[]) ?? [],
       currentIndex: 0,

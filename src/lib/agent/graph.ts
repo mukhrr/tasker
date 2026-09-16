@@ -1,7 +1,6 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
-import { ChatAnthropic } from '@langchain/anthropic';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
+import type { Analyzer } from './llm';
 import {
   fetchIssue,
   fetchPR,
@@ -31,7 +30,7 @@ export interface TaskUpdate {
 const GraphState = Annotation.Root({
   tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
-  apiKey: Annotation<string>,
+  analyze: Annotation<Analyzer>,
   githubUsername: Annotation<string>,
   userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
@@ -40,6 +39,27 @@ const GraphState = Annotation.Root({
 });
 
 type State = typeof GraphState.State;
+
+// Anthropic API auth/quota failures plus the CLI backends' equivalents
+// (see syncer/analyzers.ts): all mean every remaining task would fail too.
+const FATAL_ERROR_RE =
+  /401|authentication|invalid x-api-key|invalid_api_key|rate limit|usage limit|quota|not logged in|invalid.*token|exited \d+|timed out/i;
+
+export const COMMENT_WINDOW = 8;
+const EVENT_WINDOW = 30;
+// Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
+const SIGNAL_EVENTS = new Set([
+  'assigned',
+  'unassigned',
+  'labeled',
+  'unlabeled',
+  'closed',
+  'reopened',
+  'referenced',
+  'cross-referenced',
+  'connected',
+  'merged',
+]);
 
 async function fetchGithubData(state: State): Promise<Partial<State>> {
   const task = state.tasks[state.currentIndex];
@@ -107,53 +127,47 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       !!task.last_synced_at &&
       new Date(task.updated_at) > new Date(task.last_synced_at);
 
-    // Build analysis prompt with all context
+    const signalEvents = events.filter((e) => SIGNAL_EVENTS.has(e.event));
+
+    // Build analysis prompt with all context. Compact JSON: the model reads it
+    // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
       currentStatus: task.status,
       isFirstSync,
       wasManuallyEdited,
       githubUsername: username,
       issueTitle: issue.title,
-      issueData: JSON.stringify(
-        {
-          title: issue.title,
-          state: issue.state,
-          assignees: issue.assignees.map((a) => a.login),
-          labels: issue.labels.map((l) => l.name),
-          created_at: issue.created_at,
-          updated_at: issue.updated_at,
-          closed_at: issue.closed_at,
-        },
-        null,
-        2
-      ),
+      issueData: JSON.stringify({
+        title: issue.title,
+        state: issue.state,
+        body: issue.body?.slice(0, 600) ?? null,
+        assignees: issue.assignees.map((a) => a.login),
+        labels: issue.labels.map((l) => l.name),
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+        closed_at: issue.closed_at,
+      }),
       prData: prData
-        ? JSON.stringify(
-            {
-              title: prData.title,
-              state: prData.state,
-              merged: prData.merged,
-              merged_at: prData.merged_at,
-              draft: prData.draft,
-              review_comments: prData.review_comments,
-              html_url: prData.html_url,
-              user: prData.user.login,
-              created_at: prData.created_at,
-              updated_at: prData.updated_at,
-            },
-            null,
-            2
-          )
+        ? JSON.stringify({
+            title: prData.title,
+            state: prData.state,
+            merged: prData.merged,
+            merged_at: prData.merged_at,
+            draft: prData.draft,
+            review_comments: prData.review_comments,
+            html_url: prData.html_url,
+            user: prData.user.login,
+            created_at: prData.created_at,
+            updated_at: prData.updated_at,
+          })
         : undefined,
       comments: comments.length
         ? JSON.stringify(
-            comments.slice(-3).map((c) => ({
+            comments.slice(-COMMENT_WINDOW).map((c) => ({
               user: c.user.login,
               body: c.body.slice(0, 500),
               created_at: c.created_at,
-            })),
-            null,
-            2
+            }))
           )
         : undefined,
       reviews: reviews?.length
@@ -163,21 +177,17 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
               state: r.state,
               body: r.body?.slice(0, 300),
               submitted_at: r.submitted_at,
-            })),
-            null,
-            2
+            }))
           )
         : undefined,
-      events: events.length
+      events: signalEvents.length
         ? JSON.stringify(
-            events.slice(-30).map((e) => ({
+            signalEvents.slice(-EVENT_WINDOW).map((e) => ({
               event: e.event,
               actor: e.actor.login,
               created_at: e.created_at,
               assignee: e.assignee?.login,
-            })),
-            null,
-            2
+            }))
           )
         : undefined,
       // Pre-extracted data for the AI to confirm or override
@@ -191,24 +201,10 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     const prompt = buildAnalysisPrompt(analysisData);
 
-    // Call Claude
-    const model = new ChatAnthropic({
-      model: 'claude-sonnet-4-6',
-      apiKey: state.apiKey,
-      maxTokens: 1024,
-    });
-
-    const systemPrompt = buildSystemPrompt(state.userStatuses);
-
-    const response = await model.invoke([
-      new SystemMessage(systemPrompt),
-      new HumanMessage(prompt),
-    ]);
-
-    const content =
-      typeof response.content === 'string'
-        ? response.content
-        : response.content.map((c) => ('text' in c ? c.text : '')).join('');
+    const content = await state.analyze(
+      buildSystemPrompt(state.userStatuses),
+      prompt
+    );
 
     // Parse JSON from response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -240,13 +236,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     const message = err instanceof Error ? err.message : String(err);
 
     // Detect fatal config errors — no point processing more tasks
-    if (
-      message.includes('401') ||
-      message.includes('authentication') ||
-      message.includes('invalid x-api-key') ||
-      message.includes('invalid_api_key') ||
-      message.includes('rate limit')
-    ) {
+    if (FATAL_ERROR_RE.test(message)) {
       throw err;
     }
 

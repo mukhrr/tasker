@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { runSync } from '@/lib/agent/runner';
+import { isSyncDue } from '@/lib/agent/schedule';
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization');
@@ -14,11 +15,12 @@ export async function GET(request: Request) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  // Find users with auto_sync_enabled and their sync interval
+  // CLI-backend users are scheduled by the syncer worker, not this cron.
   const { data: users } = await supabase
     .from('user_settings')
     .select('id, sync_interval_hours')
-    .eq('auto_sync_enabled', true);
+    .eq('auto_sync_enabled', true)
+    .eq('ai_backend', 'api');
 
   if (!users || users.length === 0) {
     return NextResponse.json({ message: 'No users to sync' });
@@ -36,14 +38,9 @@ export async function GET(request: Request) {
       .limit(1)
       .single();
 
-    if (lastSync) {
-      const hoursSinceLastSync =
-        (Date.now() - new Date(lastSync.started_at).getTime()) /
-        (1000 * 60 * 60);
-      if (hoursSinceLastSync < (user.sync_interval_hours || 6)) {
-        results.push({ userId: user.id, status: 'skipped' });
-        continue;
-      }
+    if (!isSyncDue(lastSync?.started_at, user.sync_interval_hours)) {
+      results.push({ userId: user.id, status: 'skipped' });
+      continue;
     }
 
     try {

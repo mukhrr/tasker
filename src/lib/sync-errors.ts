@@ -12,6 +12,18 @@ const ERROR_PATTERNS: [RegExp, string][] = [
     'Rate limited. Try again in a few minutes.',
   ],
   [
+    /usage limit|quota/i,
+    'CLI usage limit reached. Wait for your plan to reset.',
+  ],
+  [
+    /not logged in|invalid.*(oauth|token)|login expired|refresh token/i,
+    'CLI login expired. Reconnect Claude or Codex in Settings.',
+  ],
+  [
+    /timed out|exited \d+/i,
+    'Sync worker could not complete the CLI run. Try again.',
+  ],
+  [
     /GitHub API error: 401/i,
     'GitHub token expired. Reconnect GitHub in Settings.',
   ],

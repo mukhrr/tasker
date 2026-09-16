@@ -23,7 +23,11 @@ import {
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import { BUILT_IN_COLUMNS } from './column-config';
 import type { UserStatus } from '@/types/database';
-import { getStatusColor, getStatusesByGroup, STATUS_GROUP_LABELS } from '@/lib/status';
+import {
+  getStatusColor,
+  getStatusesByGroup,
+  STATUS_GROUP_LABELS,
+} from '@/lib/status';
 
 function timeAgo(date: string): string {
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -49,7 +53,7 @@ export function Toolbar({
   onSearchChange,
   onSync,
   syncing,
-  hasApiKey,
+  syncReady,
   visibleColumns,
   onToggleColumn,
   columnOrder,
@@ -68,7 +72,7 @@ export function Toolbar({
   onSearchChange: (search: string) => void;
   onSync: () => void;
   syncing: boolean;
-  hasApiKey: boolean;
+  syncReady: boolean;
   visibleColumns: Set<ColumnKey>;
   onToggleColumn: (key: ColumnKey) => void;
   columnOrder: ColumnKey[];
@@ -172,248 +176,260 @@ export function Toolbar({
 
   return (
     <div className="space-y-2">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      {/* Left: Tabs + Search */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Tabs value={activeTab} onValueChange={onTabChange}>
-          <TabsList>
-            {tabs.map((tab) => (
-              <TabsTrigger key={tab.value} value={tab.value}>
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <Input
-          placeholder="Search tasks..."
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="h-8 w-full text-sm sm:w-[200px]"
-        />
-      </div>
-
-      {/* Right: Sync status + Filter + Sort + Columns + Sync Now */}
-      <div className="flex items-center gap-2">
-        {displayStatus && (
-          <span className="text-xs text-muted-foreground whitespace-nowrap">
-            Synced {timeAgo(displayStatus.time)}
-          </span>
-        )}
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button variant="outline" size="sm" className="gap-2">
-                <Filter className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Filter</span>
-                {activeFilterCount > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </Button>
-            }
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        {/* Left: Tabs + Search */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Tabs value={activeTab} onValueChange={onTabChange}>
+            <TabsList>
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value}>
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <Input
+            placeholder="Search tasks..."
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="h-8 w-full text-sm sm:w-[200px]"
           />
-          <PopoverContent align="end" className="w-64 p-3">
-            <div className="flex items-center justify-between pb-2">
-              <p className="text-xs font-medium text-muted-foreground">
-                Filter tasks
-              </p>
-              {activeFilterCount > 0 && (
-                <button
-                  onClick={() => onFiltersChange({ statuses: [] })}
-                  className="text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Clear all
-                </button>
-              )}
-            </div>
+        </div>
 
-            {/* Status filter */}
-            <div className="border-t pt-2">
-              <p className="pb-1.5 text-xs font-medium">Status</p>
-              <div className="max-h-40 space-y-0.5 overflow-y-auto">
-                {Object.entries(getStatusesByGroup(statuses)).map(
-                  ([group, groupStatuses]) =>
-                    groupStatuses.length > 0 && (
-                      <div key={group}>
-                        <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                          {STATUS_GROUP_LABELS[group as keyof typeof STATUS_GROUP_LABELS]}
-                        </p>
-                        {groupStatuses.map((s) => {
-                          const active = filters.statuses.includes(s.key);
-                          const color = getStatusColor(s.color);
-                          return (
-                            <button
-                              key={s.key}
-                              onClick={() => {
-                                const next = active
-                                  ? filters.statuses.filter((k) => k !== s.key)
-                                  : [...filters.statuses, s.key];
-                                onFiltersChange({ ...filters, statuses: next });
-                              }}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-muted"
-                            >
-                              <span
-                                className={`h-2 w-2 shrink-0 rounded-full ${color.dot}`}
-                              />
-                              <span className="flex-1 truncate text-left">
-                                {s.label}
-                              </span>
-                              {active && (
-                                <Check className="h-3.5 w-3.5 text-primary" />
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )
-                )}
-              </div>
-            </div>
-
-          </PopoverContent>
-        </Popover>
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button variant="outline" size="sm" className="gap-2">
-                <ArrowUpDown className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Sort</span>
-              </Button>
-            }
-          />
-          <PopoverContent align="end" className="w-48 p-2">
-            <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
-              Sort by
-            </p>
-            {(
-              [
-                { key: 'priority', label: 'Priority' },
-                { key: 'created_at', label: 'Date created' },
-                { key: 'updated_at', label: 'Last updated' },
-                ...BUILT_IN_COLUMNS.map((c) => ({
-                  key: c.key,
-                  label: c.label,
-                })),
-              ] as { key: SortConfig['key']; label: string }[]
-            ).map((item) => {
-              const isActive = sortConfig.key === item.key;
-              return (
-                <button
-                  key={item.key}
-                  onClick={() =>
-                    onSortChange({
-                      key: item.key,
-                      direction: isActive
-                        ? sortConfig.direction === 'asc'
-                          ? 'desc'
-                          : 'asc'
-                        : item.key === 'priority'
-                          ? 'desc'
-                          : 'asc',
-                    })
-                  }
-                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted"
-                >
-                  <span className={isActive ? 'font-medium' : ''}>
-                    {item.label}
-                  </span>
-                  {isActive && (
-                    <span className="text-xs text-muted-foreground">
-                      {sortConfig.direction === 'asc' ? '↑' : '↓'}
+        {/* Right: Sync status + Filter + Sort + Columns + Sync Now */}
+        <div className="flex items-center gap-2">
+          {displayStatus && (
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              Synced {timeAgo(displayStatus.time)}
+            </span>
+          )}
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Filter className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Filter</span>
+                  {activeFilterCount > 0 && (
+                    <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                      {activeFilterCount}
                     </span>
                   )}
-                </button>
-              );
-            })}
-          </PopoverContent>
-        </Popover>
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button variant="outline" size="sm" className="gap-2">
-                <Columns3 className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Columns</span>
-              </Button>
-            }
-          />
-          <PopoverContent align="end" className="w-52 p-2">
-            <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
-              Toggle & reorder columns
-            </p>
-            {reorderableColumns.map((col, idx) => (
-              <div
-                key={col.key}
-                draggable
-                onDragStart={() => handleDragStart(idx)}
-                onDragOver={(e) => handleDragOver(e, idx)}
-                onDragEnd={handleDrop}
-                className={`flex items-center gap-1.5 rounded-md px-1 py-1.5 text-sm transition-colors hover:bg-muted ${
-                  dragIdx === idx ? 'opacity-50' : ''
-                }`}
-              >
-                <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing" />
-                <button
-                  onClick={() => onToggleColumn(col.key)}
-                  className="flex flex-1 items-center gap-2"
-                >
-                  {visibleColumns.has(col.key) ? (
-                    <Eye className="h-3.5 w-3.5 text-foreground" />
-                  ) : (
-                    <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                  <span
-                    className={
-                      visibleColumns.has(col.key) ? '' : 'text-muted-foreground'
-                    }
+                </Button>
+              }
+            />
+            <PopoverContent align="end" className="w-64 p-3">
+              <div className="flex items-center justify-between pb-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Filter tasks
+                </p>
+                {activeFilterCount > 0 && (
+                  <button
+                    onClick={() => onFiltersChange({ statuses: [] })}
+                    className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    {col.label}
-                  </span>
-                </button>
+                    Clear all
+                  </button>
+                )}
               </div>
-            ))}
-          </PopoverContent>
-        </Popover>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onSync}
-          disabled={syncing || !hasApiKey}
-          title={!hasApiKey ? 'Add your Claude API key in Settings first' : undefined}
-          className="ml-auto gap-2 sm:ml-0"
-        >
-          <RefreshCw
-            className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`}
-          />
-          {syncing ? 'Syncing...' : !hasApiKey ? 'API Key Required' : 'Sync Now'}
-        </Button>
+
+              {/* Status filter */}
+              <div className="border-t pt-2">
+                <p className="pb-1.5 text-xs font-medium">Status</p>
+                <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                  {Object.entries(getStatusesByGroup(statuses)).map(
+                    ([group, groupStatuses]) =>
+                      groupStatuses.length > 0 && (
+                        <div key={group}>
+                          <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            {
+                              STATUS_GROUP_LABELS[
+                                group as keyof typeof STATUS_GROUP_LABELS
+                              ]
+                            }
+                          </p>
+                          {groupStatuses.map((s) => {
+                            const active = filters.statuses.includes(s.key);
+                            const color = getStatusColor(s.color);
+                            return (
+                              <button
+                                key={s.key}
+                                onClick={() => {
+                                  const next = active
+                                    ? filters.statuses.filter(
+                                        (k) => k !== s.key
+                                      )
+                                    : [...filters.statuses, s.key];
+                                  onFiltersChange({
+                                    ...filters,
+                                    statuses: next,
+                                  });
+                                }}
+                                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-muted"
+                              >
+                                <span
+                                  className={`h-2 w-2 shrink-0 rounded-full ${color.dot}`}
+                                />
+                                <span className="flex-1 truncate text-left">
+                                  {s.label}
+                                </span>
+                                {active && (
+                                  <Check className="h-3.5 w-3.5 text-primary" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )
+                  )}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm" className="gap-2">
+                  <ArrowUpDown className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Sort</span>
+                </Button>
+              }
+            />
+            <PopoverContent align="end" className="w-48 p-2">
+              <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
+                Sort by
+              </p>
+              {(
+                [
+                  { key: 'priority', label: 'Priority' },
+                  { key: 'created_at', label: 'Date created' },
+                  { key: 'updated_at', label: 'Last updated' },
+                  ...BUILT_IN_COLUMNS.map((c) => ({
+                    key: c.key,
+                    label: c.label,
+                  })),
+                ] as { key: SortConfig['key']; label: string }[]
+              ).map((item) => {
+                const isActive = sortConfig.key === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() =>
+                      onSortChange({
+                        key: item.key,
+                        direction: isActive
+                          ? sortConfig.direction === 'asc'
+                            ? 'desc'
+                            : 'asc'
+                          : item.key === 'priority'
+                            ? 'desc'
+                            : 'asc',
+                      })
+                    }
+                    className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted"
+                  >
+                    <span className={isActive ? 'font-medium' : ''}>
+                      {item.label}
+                    </span>
+                    {isActive && (
+                      <span className="text-xs text-muted-foreground">
+                        {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </PopoverContent>
+          </Popover>
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Columns3 className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Columns</span>
+                </Button>
+              }
+            />
+            <PopoverContent align="end" className="w-52 p-2">
+              <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">
+                Toggle & reorder columns
+              </p>
+              {reorderableColumns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  draggable
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDragEnd={handleDrop}
+                  className={`flex items-center gap-1.5 rounded-md px-1 py-1.5 text-sm transition-colors hover:bg-muted ${
+                    dragIdx === idx ? 'opacity-50' : ''
+                  }`}
+                >
+                  <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing" />
+                  <button
+                    onClick={() => onToggleColumn(col.key)}
+                    className="flex flex-1 items-center gap-2"
+                  >
+                    {visibleColumns.has(col.key) ? (
+                      <Eye className="h-3.5 w-3.5 text-foreground" />
+                    ) : (
+                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                    <span
+                      className={
+                        visibleColumns.has(col.key)
+                          ? ''
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {col.label}
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </PopoverContent>
+          </Popover>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onSync}
+            disabled={syncing || !syncReady}
+            title={
+              !syncReady ? 'Connect an AI backend in Settings first' : undefined
+            }
+            className="ml-auto gap-2 sm:ml-0"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`}
+            />
+            {syncing ? 'Syncing...' : !syncReady ? 'Connect AI' : 'Sync Now'}
+          </Button>
+        </div>
       </div>
-    </div>
-    {activeFilterCount > 0 && (
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-xs text-muted-foreground">Filtered by:</span>
-        {filters.statuses.map((key) => {
-          const s = statuses.find((st) => st.key === key);
-          if (!s) return null;
-          const color = getStatusColor(s.color);
-          return (
-            <span
-              key={key}
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${color.badge}`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
-              {s.label}
-              <button
-                onClick={() => removeStatusFilter(key)}
-                className="ml-0.5 hover:opacity-70"
+      {activeFilterCount > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Filtered by:</span>
+          {filters.statuses.map((key) => {
+            const s = statuses.find((st) => st.key === key);
+            if (!s) return null;
+            const color = getStatusColor(s.color);
+            return (
+              <span
+                key={key}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${color.badge}`}
               >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          );
-        })}
-      </div>
-    )}
+                <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
+                {s.label}
+                <button
+                  onClick={() => removeStatusFilter(key)}
+                  className="ml-0.5 hover:opacity-70"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

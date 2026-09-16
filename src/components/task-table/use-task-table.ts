@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useTasks } from '@/hooks/use-tasks';
 import { useCustomColumns } from '@/hooks/use-custom-columns';
 import { useStatuses } from '@/hooks/use-statuses';
+import { waitForQueuedSync } from '@/lib/sync-poll';
 import { getStatusGroup, getStaleDays, getStaleOverdueMs } from '@/lib/status';
 import type { Task, TaskStatusGroup } from '@/types/database';
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
@@ -34,13 +35,13 @@ export function useTaskTable(userId: string) {
     error?: string;
   } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState(true); // optimistic default
+  const [syncReady, setSyncReady] = useState(true); // optimistic default
 
-  // Check if user has API key configured
+  // Whether the chosen AI backend has its credential (API key or CLI login)
   useEffect(() => {
-    fetch('/api/settings')
+    fetch('/api/settings', { cache: 'no-store' })
       .then((res) => res.json())
-      .then((data) => setHasApiKey(!!data.has_api_key))
+      .then((data) => setSyncReady(!!data.sync_ready))
       .catch(() => {});
   }, []);
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(() =>
@@ -302,18 +303,21 @@ export function useTaskTable(userId: string) {
 
   // Handlers
   const handleSync = useCallback(async () => {
-    if (!hasApiKey) {
-      toast.error('Add your Claude API key in Settings to enable sync.');
+    if (!syncReady) {
+      toast.error('Connect an AI backend in Settings to enable sync.');
       return;
     }
     setSyncing(true);
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
-      const data = await res.json();
+      let data = await res.json();
       if (!res.ok) {
         const msg = data.error || 'Sync failed';
         setLastSyncResult({ failed: true, error: msg });
         throw new Error(msg);
+      }
+      if (res.status === 202) {
+        data = await waitForQueuedSync(data.syncLogId);
       }
       if (data.errors?.length) {
         setLastSyncResult({
@@ -334,7 +338,7 @@ export function useTaskTable(userId: string) {
     } finally {
       setSyncing(false);
     }
-  }, [hasApiKey]);
+  }, [syncReady]);
 
   const handleAddTask = useCallback(
     async (issueUrl: string) => {
@@ -402,7 +406,7 @@ export function useTaskTable(userId: string) {
 
   const handleSyncTask = useCallback(
     async (id: string) => {
-      if (!hasApiKey) {
+      if (!syncReady) {
         toast.error('Add your Claude API key in Settings to enable sync.');
         return;
       }
@@ -413,7 +417,7 @@ export function useTaskTable(userId: string) {
         toast.error(err instanceof Error ? err.message : 'Sync failed');
       }
     },
-    [tasksCrud, hasApiKey]
+    [tasksCrud, syncReady]
   );
 
   return {
@@ -448,7 +452,7 @@ export function useTaskTable(userId: string) {
     // Sync
     syncing,
     lastSyncResult,
-    hasApiKey,
+    syncReady,
     handleSync,
 
     // Archive

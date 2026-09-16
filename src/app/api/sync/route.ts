@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { runSync } from '@/lib/agent/runner';
-import { decrypt } from '@/lib/encryption';
+import { anthropicAnalyzer } from '@/lib/agent/llm';
+import {
+  enqueueSync,
+  isCliBackend,
+  NOT_READY_MESSAGE,
+  syncReady,
+} from '@/lib/agent/backend';
+import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import { friendlySyncError } from '@/lib/sync-errors';
+import type { UserSettings } from '@/types/database';
 
 export async function POST() {
   const supabase = await createClient();
@@ -15,15 +23,17 @@ export async function POST() {
   }
 
   // Fetch settings with the authenticated client (RLS-safe)
-  const { data: settings } = await supabase
+  const { data } = await supabase
     .from('user_settings')
     .select('*')
     .eq('id', user.id)
     .single();
+  const settings = data as UserSettings | null;
+  const backend = settings?.ai_backend ?? 'api';
 
-  if (!settings?.ai_api_key_encrypted) {
+  if (!syncReady(settings)) {
     return NextResponse.json(
-      { error: 'No AI API key configured. Go to Settings to add one.' },
+      { error: NOT_READY_MESSAGE[backend] },
       { status: 400 }
     );
   }
@@ -47,13 +57,28 @@ export async function POST() {
     );
   }
 
+  if (isCliBackend(backend)) {
+    const queued = await enqueueSync(supabase, user.id, backend);
+    if (!queued.ok) {
+      return NextResponse.json(
+        { error: queued.error },
+        { status: queued.status }
+      );
+    }
+    return NextResponse.json(
+      { queued: true, syncLogId: queued.syncLogId },
+      { status: 202 }
+    );
+  }
+
   // Check for concurrent sync
   const { data: runningSync } = await supabase
     .from('sync_logs')
     .select('id')
     .eq('user_id', user.id)
-    .eq('status', 'running')
-    .single();
+    .in('status', ['queued', 'running'])
+    .limit(1)
+    .maybeSingle();
 
   if (runningSync) {
     return NextResponse.json(
@@ -63,12 +88,12 @@ export async function POST() {
   }
 
   try {
-    const apiKey = decrypt(settings.ai_api_key_encrypted);
-    const githubToken = settings.github_token_encrypted;
     const result = await runSync(user.id, {
-      apiKey,
-      githubToken,
-      githubUsername,
+      analyzer: anthropicAnalyzer(decrypt(settings.ai_api_key_encrypted!)),
+      credentials: {
+        githubToken: decryptIfEncrypted(settings.github_token_encrypted),
+        githubUsername,
+      },
     });
 
     if (result.errors?.length && result.tasks_updated === 0) {

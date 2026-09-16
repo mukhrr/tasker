@@ -46,3 +46,11 @@ export function decrypt(ciphertext: string): string {
   ]);
   return decrypted.toString('utf8');
 }
+
+const ENCRYPTED_RE = /^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/;
+
+// github_token_encrypted holds plaintext when written by the OAuth callback and
+// ciphertext when written by the extension endpoint; accept both.
+export function decryptIfEncrypted(value: string): string {
+  return ENCRYPTED_RE.test(value) ? decrypt(value) : value;
+}

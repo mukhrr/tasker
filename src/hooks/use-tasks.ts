@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { issueKey, parseIssueUrl } from '@/lib/github';
+import { waitForQueuedSync } from '@/lib/sync-poll';
 import type { Task, TaskStatus } from '@/types/database';
 
 const supabase = createClient();
@@ -113,6 +114,10 @@ export function useTasks<T extends TaskListItem = Task>(
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Sync failed');
+      }
+      if (res.status === 202) {
+        const { syncLogId } = await res.json();
+        await waitForQueuedSync(syncLogId);
       }
       await fetchTasks();
     } catch (err) {

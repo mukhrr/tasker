@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { runSync } from '@/lib/agent/runner';
-import { decrypt } from '@/lib/encryption';
+import { anthropicAnalyzer } from '@/lib/agent/llm';
+import {
+  enqueueSync,
+  isCliBackend,
+  NOT_READY_MESSAGE,
+  syncReady,
+} from '@/lib/agent/backend';
+import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import { friendlySyncError } from '@/lib/sync-errors';
+import type { UserSettings } from '@/types/database';
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -19,15 +27,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'taskId is required' }, { status: 400 });
   }
 
-  const { data: settings } = await supabase
+  const { data } = await supabase
     .from('user_settings')
     .select('*')
     .eq('id', user.id)
     .single();
+  const settings = data as UserSettings | null;
+  const backend = settings?.ai_backend ?? 'api';
 
-  if (!settings?.ai_api_key_encrypted || !settings?.github_token_encrypted) {
+  if (!syncReady(settings)) {
     return NextResponse.json(
-      { error: 'Missing API key or GitHub token' },
+      { error: NOT_READY_MESSAGE[backend] },
+      { status: 400 }
+    );
+  }
+
+  if (!settings?.github_token_encrypted) {
+    return NextResponse.json(
+      { error: 'No GitHub token. Please reconnect with GitHub OAuth.' },
       { status: 400 }
     );
   }
@@ -44,14 +61,29 @@ export async function POST(request: Request) {
     );
   }
 
-  try {
-    const apiKey = decrypt(settings.ai_api_key_encrypted);
-    const githubToken = settings.github_token_encrypted;
-    const result = await runSync(
-      user.id,
-      { apiKey, githubToken, githubUsername },
-      taskId
+  if (isCliBackend(backend)) {
+    const queued = await enqueueSync(supabase, user.id, backend, taskId);
+    if (!queued.ok) {
+      return NextResponse.json(
+        { error: queued.error },
+        { status: queued.status }
+      );
+    }
+    return NextResponse.json(
+      { queued: true, syncLogId: queued.syncLogId },
+      { status: 202 }
     );
+  }
+
+  try {
+    const result = await runSync(user.id, {
+      analyzer: anthropicAnalyzer(decrypt(settings.ai_api_key_encrypted!)),
+      credentials: {
+        githubToken: decryptIfEncrypted(settings.github_token_encrypted),
+        githubUsername,
+      },
+      taskId,
+    });
 
     if (result.errors?.length && result.tasks_updated === 0) {
       return NextResponse.json(

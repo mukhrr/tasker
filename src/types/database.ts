@@ -77,13 +77,23 @@ export interface CustomFieldValue {
   value: string | null;
 }
 
+export type AiBackend = 'api' | 'claude_cli' | 'codex_cli';
+
 export interface UserSettings {
   id: string;
   ai_api_key_encrypted: string | null;
+  ai_backend: AiBackend;
+  claude_oauth_token_encrypted: string | null;
+  codex_auth_encrypted: string | null;
   auto_sync_enabled: boolean;
   sync_interval_hours: number;
   github_token_encrypted: string | null;
   github_username: string | null;
+  proposal_auto_post: boolean;
+  autopilot_enabled: boolean;
+  auto_analyze_enabled: boolean;
+  watched_label_groups: unknown;
+  excluded_labels: unknown;
   created_at: string;
   updated_at: string;
 }
@@ -93,8 +103,10 @@ export interface SyncLog {
   user_id: string;
   started_at: string;
   completed_at: string | null;
-  status: 'running' | 'completed' | 'failed';
-  tasks_updated: number;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  bounties_updated: number;
+  task_id: string | null;
+  backend: AiBackend | null;
   error_message: string | null;
   details: Record<string, unknown>;
   created_at: string;

@@ -1,6 +1,26 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { encrypt, decrypt } from '@/lib/encryption';
+import { syncReady } from '@/lib/agent/backend';
+import type { AiBackend } from '@/types/database';
+
+const BACKENDS: AiBackend[] = ['api', 'claude_cli', 'codex_cli'];
+
+// `codex login` writes {"auth_mode":"chatgpt","tokens":{...}} or an API-key
+// variant; anything else is a paste of the wrong file.
+function isCodexAuthJson(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw);
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      (typeof parsed.tokens?.access_token === 'string' ||
+        typeof parsed.OPENAI_API_KEY === 'string')
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function GET() {
   const supabase = await createClient();
@@ -29,6 +49,10 @@ export async function GET() {
         id: user.id,
         has_api_key: false,
         api_key_masked: null,
+        ai_backend: 'api',
+        has_claude_token: false,
+        has_codex_auth: false,
+        sync_ready: false,
         auto_sync_enabled: false,
         sync_interval_hours: 6,
         github_username: githubUsername,
@@ -57,6 +81,10 @@ export async function GET() {
       id: settings.id,
       has_api_key: !!settings.ai_api_key_encrypted,
       api_key_masked: apiKeyMasked,
+      ai_backend: settings.ai_backend ?? 'api',
+      has_claude_token: !!settings.claude_oauth_token_encrypted,
+      has_codex_auth: !!settings.codex_auth_encrypted,
+      sync_ready: syncReady(settings),
       auto_sync_enabled: settings.auto_sync_enabled,
       sync_interval_hours: settings.sync_interval_hours,
       github_username: githubUsername,
@@ -91,6 +119,44 @@ export async function POST(request: Request) {
 
   if (body.ai_api_key) {
     updates.ai_api_key_encrypted = encrypt(body.ai_api_key);
+  }
+
+  if (body.ai_backend !== undefined) {
+    if (!BACKENDS.includes(body.ai_backend)) {
+      return NextResponse.json(
+        { error: 'Unknown AI backend' },
+        { status: 400 }
+      );
+    }
+    updates.ai_backend = body.ai_backend;
+  }
+
+  if (body.claude_oauth_token !== undefined) {
+    const token = String(body.claude_oauth_token).trim();
+    if (!token.startsWith('sk-ant-oat')) {
+      return NextResponse.json(
+        { error: 'That is not a Claude setup-token (expected sk-ant-oat...)' },
+        { status: 400 }
+      );
+    }
+    updates.claude_oauth_token_encrypted = encrypt(token);
+  }
+  if (body.clear_claude_token) {
+    updates.claude_oauth_token_encrypted = null;
+  }
+
+  if (body.codex_auth_json !== undefined) {
+    const raw = String(body.codex_auth_json).trim();
+    if (!isCodexAuthJson(raw)) {
+      return NextResponse.json(
+        { error: 'That is not a Codex auth.json (run `codex login` first)' },
+        { status: 400 }
+      );
+    }
+    updates.codex_auth_encrypted = encrypt(raw);
+  }
+  if (body.clear_codex_auth) {
+    updates.codex_auth_encrypted = null;
   }
 
   if (body.auto_sync_enabled !== undefined) {
