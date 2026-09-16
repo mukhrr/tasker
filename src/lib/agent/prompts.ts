@@ -140,11 +140,13 @@ Return ONLY a JSON object, no prose and no code fences, with ALL of these fields
   "issue_title": "<the GitHub issue title, exactly>",
   "pr_url": "<the developer's PR URL for this issue, or null>",
   "assigned_date": "<ISO date the developer was assigned, or null>",
-  "payment_date": "<ISO date of payment if a comment states it, or null>",
+  "payment_date": "<ISO date payment is due or was made, or null>",
   "amount": <bounty amount in USD from the title, labels, body or comments, or null>
 }
 
 Return null for any field you cannot confirm; null keeps the existing value. Only return pr_url when you are confident the PR is the developer's PR for this issue.
+
+payment_date: once the PR is merged and a comment says it was deployed to production, set it to that deploy comment's date plus 7 days (Expensify pays 7 days after the production deploy). If a comment states an actual payment date, that wins. Otherwise null.
 
 ## Confidence
 
