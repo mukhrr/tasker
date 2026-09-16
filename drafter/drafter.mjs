@@ -18,7 +18,7 @@
  * the row to state='draft' for a human to rescue (with a Telegram ping).
  */
 
-import { readFile, writeFile, mkdir, cp, readdir, open } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, cp, readdir, open, rm, stat } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -1449,6 +1449,7 @@ async function tick() {
 async function loop() {
   try {
     await tick();
+    void pruneSessions().catch((e) => log(`session prune failed: ${e instanceof Error ? e.message : String(e)}`));
   } catch (e) {
     log(`tick failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -1457,6 +1458,29 @@ async function loop() {
     process.exit(0);
   }
   setTimeout(() => void loop(), POLL_INTERVAL_MS);
+}
+
+// Rollout files are what `codex exec resume` replays; keep two months so a
+// recent draft can still be continued, drop the rest. Once a day, DB-free.
+const SESSION_KEEP_DAYS = int('SESSION_KEEP_DAYS', 60);
+let lastSessionPruneAt = 0;
+async function pruneSessions() {
+  if (Date.now() - lastSessionPruneAt < 24 * 60 * 60 * 1000) return;
+  lastSessionPruneAt = Date.now();
+  const dir = path.join(CODEX_HOME, 'sessions');
+  if (!existsSync(dir)) return;
+  const cutoff = Date.now() - SESSION_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  let bytes = 0;
+  for (const rel of await readdir(dir, { recursive: true })) {
+    const file = path.join(dir, rel);
+    const st = await stat(file).catch(() => null);
+    if (!st?.isFile() || st.mtimeMs >= cutoff) continue;
+    await rm(file, { force: true });
+    removed++;
+    bytes += st.size;
+  }
+  if (removed) log(`🧹 pruned ${removed} codex session file(s) older than ${SESSION_KEEP_DAYS}d (${Math.round(bytes / 1_048_576)} MB)`);
 }
 
 // Only recycle with no draft in flight: a claimed row would otherwise sit in

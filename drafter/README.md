@@ -123,6 +123,11 @@ Go-live order:
   off by default: **switch the service's restart policy to ALWAYS first**, because
   under the default ON_FAILURE a clean exit reads as a finished job and the drafter
   stays down.
+- **The volume is the other bill.** The App clone is `--filter=blob:none`, so every
+  blob Codex reads mid-investigation arrives as its own pack; the drafter repacks
+  after a fetch once more than 50 packs exist. Codex rollout files (what
+  `codex exec resume` replays) are pruned daily after `SESSION_KEEP_DAYS` (60).
+  Both were needed after the volume hit 5 GB on 2026-09-16 (68k packs).
 - `CODEX_UNSAFE_SANDBOX=true` bypasses the Codex sandbox — only if Landlock/seccomp
   fails in Railway's kernel (the process is already isolated in its own container).
 - Edit `prompts/draft.md` and `prompts/enrich.md` to tune voice and depth; they encode
