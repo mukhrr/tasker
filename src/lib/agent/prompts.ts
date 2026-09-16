@@ -74,7 +74,7 @@ function statusRules(keys: Set<string>): string {
     rules.push(`**changes_required**: the developer's open PR needs their action for any of:
 1. \`failing_checks\` is non-empty (TypeScript, tests, lint, or any CI job) or \`merge_conflicts\` is true
 2. A human reviewer's latest review is CHANGES_REQUESTED and the developer has not pushed since (compare the PR's updated_at with the review's submitted_at)
-Bot reviews (Claude reviewers, melvin) never count, and a review the developer left on someone else's PR never counts. When you choose this status, the summary MUST list exactly what has to change: the failing check names, "merge conflicts", or the reviewer's requests. If the developer already pushed after the request and checks pass, use **reviewing**.`);
+Bot reviews (Claude reviewers, melvin) never count, and a review the developer left on someone else's PR never counts. \`failing_checks\` null means GitHub did not report CI state: do not infer passing, keep the current status unless reviews say otherwise. When you choose this status, the summary MUST list exactly what has to change: the failing check names, "merge conflicts", or the reviewer's requests. If the developer already pushed after the request and checks pass, use **reviewing**.`);
   }
   if (keys.has('approved')) {
     rules.push(

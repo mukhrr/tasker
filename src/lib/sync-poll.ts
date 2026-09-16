@@ -5,16 +5,25 @@ import { friendlySyncError } from '@/lib/sync-errors';
 export async function waitForQueuedSync(
   syncLogId: string,
   intervalMs = 3000,
-  timeoutMs = 15 * 60 * 1000
+  timeoutMs = 60 * 60 * 1000
 ): Promise<{ tasks_updated: number; errors: string[] }> {
   const deadline = Date.now() + timeoutMs;
+  let misses = 0;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
     const res = await fetch(`/api/sync/status?id=${syncLogId}`, {
       cache: 'no-store',
     });
-    const log = await res.json().catch(() => null);
-    if (!log) continue;
+    if (res.status === 401) throw new Error('Session expired. Sign in again.');
+    const log = res.ok ? await res.json().catch(() => null) : null;
+    if (!log) {
+      // A few blips are fine; a dead route or vanished row is not.
+      if (++misses >= 5) {
+        throw new Error(`Could not read sync status (HTTP ${res.status})`);
+      }
+      continue;
+    }
+    misses = 0;
     if (log.status === 'completed') {
       const errors = (log.details?.errors as string[] | undefined) ?? [];
       return { tasks_updated: log.bounties_updated ?? 0, errors };

@@ -73,7 +73,7 @@ export async function enqueueSync(
     return {
       ok: false,
       status: 500,
-      error: error?.message ?? 'Failed to queue sync',
+      error: 'Failed to queue sync',
     };
   }
   return { ok: true, syncLogId: data.id };

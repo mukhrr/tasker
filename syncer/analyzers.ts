@@ -150,7 +150,11 @@ export function claudeCliAnalyzer(
         `claude returned non-JSON output: ${res.stdout.slice(0, 200)}`
       );
     }
-    if (envelope.is_error || typeof envelope.result !== 'string') {
+    if (
+      envelope.is_error ||
+      typeof envelope.result !== 'string' ||
+      !envelope.result.trim()
+    ) {
       const detail = String(envelope.result).slice(0, 300);
       if (/usage limit|rate limit|quota/i.test(detail)) {
         throw new Error('claude usage limit reached');
@@ -216,14 +220,17 @@ export function codexCliAnalyzer(
       env: { ...baseEnv(), CODEX_HOME: codexHome },
     });
 
+    let refreshed: string | null = null;
     try {
-      const refreshed = await readFile(authPath, 'utf8');
-      if (refreshed !== current) {
-        current = refreshed;
-        await store.onAuthChanged(refreshed);
-      }
+      refreshed = await readFile(authPath, 'utf8');
     } catch {
       /* auth.json unreadable; the next run reseeds it from the DB */
+    }
+    if (refreshed && refreshed !== current) {
+      // Adopt the rotated token only once the DB has it, or a later run
+      // would overwrite the good on-disk file with the stale DB copy.
+      await store.onAuthChanged(refreshed);
+      current = refreshed;
     }
 
     const failure = classify('codex', res);
@@ -231,6 +238,8 @@ export function codexCliAnalyzer(
     let body = '';
     try {
       body = (await readFile(outFile, 'utf8')).trim();
+    } catch {
+      body = '';
     } finally {
       await rm(outFile, { force: true });
     }

@@ -118,24 +118,30 @@ export async function fetchPRReviews(
   );
 }
 
-// Empty while checks are still running, so callers see "no failures" until
-// CI has actually finished.
+// Empty while checks are still running; null when GitHub refused or failed
+// the request, which callers must not treat as passing.
 export async function fetchFailingChecks(
   owner: string,
   repo: string,
   sha: string,
   token: string
-): Promise<string[]> {
-  const [checks, status] = await Promise.all([
-    githubFetch<{ check_runs: GitHubCheckRun[] }>(
-      `/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
-      token
-    ).catch(() => ({ check_runs: [] as GitHubCheckRun[] })),
-    githubFetch<{ statuses: { context: string; state: string }[] }>(
-      `/repos/${owner}/${repo}/commits/${sha}/status`,
-      token
-    ).catch(() => ({ statuses: [] })),
-  ]);
+): Promise<string[] | null> {
+  let checks: { check_runs: GitHubCheckRun[] };
+  let status: { statuses: { context: string; state: string }[] };
+  try {
+    [checks, status] = await Promise.all([
+      githubFetch<{ check_runs: GitHubCheckRun[] }>(
+        `/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
+        token
+      ),
+      githubFetch<{ statuses: { context: string; state: string }[] }>(
+        `/repos/${owner}/${repo}/commits/${sha}/status`,
+        token
+      ),
+    ]);
+  } catch {
+    return null;
+  }
   const failed = new Set<string>();
   for (const c of checks.check_runs) {
     if (

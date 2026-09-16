@@ -21,7 +21,7 @@ const ERROR_PATTERNS: [RegExp, string][] = [
   ],
   [/recursion limit/i, 'Sync stopped early. Retry to continue.'],
   [
-    /timed out|exited \d+/i,
+    /timed out|exited -?\d+/i,
     'Sync worker could not complete the CLI run. Try again.',
   ],
   [

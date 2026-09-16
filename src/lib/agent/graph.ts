@@ -48,13 +48,14 @@ type State = typeof GraphState.State;
 // Anthropic API auth/quota failures plus the CLI backends' equivalents
 // (see syncer/analyzers.ts): all mean every remaining task would fail too.
 const FATAL_ERROR_RE =
-  /401|authentication|invalid x-api-key|invalid_api_key|rate limit|usage limit|quota|not logged in|invalid.*token|exited \d+|timed out/i;
+  /\b401\b|authentication|invalid x-api-key|invalid_api_key|rate limit|^(claude|codex) (usage limit|not logged in)|Task write failed/i;
 
 export const COMMENT_WINDOW = 8;
 // Checks that fail until a reviewer acts (Expensify's checklist and
 // independent-approval gates) are not the developer's to fix.
 const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
-const DEPLOY_COMMENT_RE = /deployed to (production|staging)|🚀/i;
+const DEPLOY_COMMENT_RE = /deployed to (production|staging)|🚀.*deploy/i;
+const HELP_WANTED_RE = /help\s*-?\s*wanted/i;
 
 function isBot(user: { login: string; type?: string }): boolean {
   return user.type === 'Bot' || /\[bot\]$|-bot$|^claude$/i.test(user.login);
@@ -124,18 +125,21 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     // CI and merge state are what changes_required keys on; only an open,
     // unmerged PR needs them.
-    let failingChecks: string[] = [];
+    // null = GitHub did not answer (403/404/5xx); the prompt must not read
+    // that as "checks pass".
+    let failingChecks: string[] | null = [];
     if (prData && prData.state === 'open' && !prData.merged) {
       const prParsed = parsePrUrl(prData.html_url);
       if (prParsed) {
-        failingChecks = (
-          await fetchFailingChecks(
-            prParsed.owner,
-            prParsed.repo,
-            prData.head.sha,
-            token
-          )
-        ).filter((name) => !REVIEWER_GATE_CHECK_RE.test(name));
+        failingChecks =
+          (
+            await fetchFailingChecks(
+              prParsed.owner,
+              prParsed.repo,
+              prData.head.sha,
+              token
+            )
+          )?.filter((name) => !REVIEWER_GATE_CHECK_RE.test(name)) ?? null;
       }
     }
 
@@ -173,9 +177,18 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     // Open issue handed to someone else: the bounty is lost even though
     // nothing closed. Computed here so the model does not have to infer it.
+    // Expensify issues carry the BZ member and an internal engineer as
+    // assignees from day one, so "assignees without me" alone means nothing.
+    // The lost-bounty signal is Help Wanted having been removed again.
+    const helpWantedRemoved =
+      events.some(
+        (e) =>
+          e.event === 'unlabeled' && HELP_WANTED_RE.test(e.label?.name ?? '')
+      ) && !issue.labels.some((l) => HELP_WANTED_RE.test(l.name));
     const assignedToOther =
       issue.state === 'open' &&
       !!username &&
+      helpWantedRemoved &&
       issue.assignees.length > 0 &&
       !issue.assignees.some(
         (a) => a.login.toLowerCase() === username.toLowerCase()

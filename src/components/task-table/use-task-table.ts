@@ -440,7 +440,7 @@ export function useTaskTable(userId: string) {
   const handleSyncTask = useCallback(
     async (id: string) => {
       if (!syncReady) {
-        toast.error('Add your Claude API key in Settings to enable sync.');
+        toast.error('Connect an AI backend in Settings to enable sync.');
         return;
       }
       try {

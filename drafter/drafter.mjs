@@ -389,23 +389,30 @@ async function refreshRepo() {
     return;
   }
   await run('git', ['reset', '--hard', 'origin/main', '--quiet'], { cwd: REPO_DIR, timeoutMs: 60_000 });
-  await repackIfFragmented();
 }
 
 // The clone is --filter=blob:none, so every blob Codex opens mid-investigation
 // is fetched into its own pack and auto-gc never catches up: the volume filled
-// to 5 GB with 68k packs (2026-09-16). Consolidate once the count grows.
+// to 5 GB with 68k packs (2026-09-16). Consolidate once the count grows, but
+// never with a draft claimed: a repack can take minutes and the sniper race
+// starts the moment a row is claimed.
 const REPACK_PACK_LIMIT = 50;
 async function repackIfFragmented() {
+  if (draftsInFlight > 0) return;
   let packs = 0;
   try {
     packs = (await readdir(path.join(REPO_DIR, '.git', 'objects', 'pack'))).filter((f) => f.endsWith('.pack')).length;
-  } catch {
+  } catch (e) {
+    log(`repack check failed: ${e instanceof Error ? e.message : String(e)}`);
     return;
   }
   if (packs <= REPACK_PACK_LIMIT) return;
   const res = await run('git', ['repack', '-a', '-d', '-q'], { cwd: REPO_DIR, timeoutMs: 600_000 });
-  log(res.code === 0 ? `git repack: ${packs} packs → 1` : `git repack failed: ${res.stderr.slice(0, 200)}`);
+  log(
+    res.code === 0
+      ? `git repack: ${packs} packs → 1`
+      : `git repack failed (code=${res.code} timedOut=${res.timedOut}): ${res.stderr.slice(0, 200)}`,
+  );
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────────────
@@ -1450,6 +1457,7 @@ async function loop() {
   try {
     await tick();
     void pruneSessions().catch((e) => log(`session prune failed: ${e instanceof Error ? e.message : String(e)}`));
+    void repackIfFragmented().catch((e) => log(`repack failed: ${e instanceof Error ? e.message : String(e)}`));
   } catch (e) {
     log(`tick failed: ${e instanceof Error ? e.message : String(e)}`);
   }

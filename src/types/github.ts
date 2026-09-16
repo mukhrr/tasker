@@ -84,4 +84,5 @@ export interface GitHubEvent {
   actor: GitHubUser;
   created_at: string;
   assignee?: GitHubUser;
+  label?: { name: string };
 }

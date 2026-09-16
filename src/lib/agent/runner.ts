@@ -17,10 +17,13 @@ export interface RunSyncOptions {
   // A sync_logs row already claimed by the caller (the worker's queue).
   syncLogId?: string;
   taskId?: string;
+  // Set when the worker re-queues a run its container was killed during:
+  // tasks synced since this time were already done by the first attempt.
+  resumeAfter?: string;
 }
 
 export async function runSync(userId: string, opts: RunSyncOptions = {}) {
-  const { credentials, syncLogId, taskId } = opts;
+  const { credentials, syncLogId, taskId, resumeAfter } = opts;
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -80,9 +83,28 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
     query = query.not('status', 'in', '("paid","wasted")');
   }
 
-  const { data: tasks } = await query;
+  if (resumeAfter && !taskId) {
+    query = query.or(`last_synced_at.is.null,last_synced_at.lt.${resumeAfter}`);
+  }
+
+  const { data: tasks, error: tasksError } = await query;
+  if (tasksError)
+    throw new Error(`Could not load tasks: ${tasksError.message}`);
 
   if (!tasks || tasks.length === 0) {
+    // The worker already flipped its row to running; close it or the user
+    // is blocked by "sync in progress" until the reaper gets to it.
+    if (syncLogId) {
+      await supabase
+        .from('sync_logs')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          bounties_updated: 0,
+          details: { updates: [], errors: [], statusChanges: [] },
+        })
+        .eq('id', syncLogId);
+    }
     return { tasks_updated: 0, errors: [] };
   }
 
@@ -167,12 +189,6 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       ) {
         updateData.status = update.suggestedStatus;
         updateData.status_changed_at = new Date().toISOString();
-        statusChanges.push({
-          taskId: update.taskId,
-          from: currentTask.status,
-          to: update.suggestedStatus,
-          confidence: update.confidence,
-        });
         // Derive status_group from user's statuses
         const matchedStatus = (finalStatuses as UserStatus[])?.find(
           (s) => s.key === update.suggestedStatus
@@ -194,7 +210,23 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       if (update.amount != null && !currentTask.amount)
         updateData.amount = update.amount;
 
-      await supabase.from('tasks').update(updateData).eq('id', update.taskId);
+      const { error } = await supabase
+        .from('tasks')
+        .update(updateData)
+        .eq('id', update.taskId);
+      if (error) {
+        throw new Error(
+          `Task write failed for ${update.taskId}: ${error.message}`
+        );
+      }
+      if (updateData.status) {
+        statusChanges.push({
+          taskId: update.taskId,
+          from: currentTask.status,
+          to: update.suggestedStatus,
+          confidence: update.confidence,
+        });
+      }
       tasksUpdated++;
     };
 
@@ -212,7 +244,10 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             .from('sync_logs')
             .update({
               bounties_updated: tasksUpdated,
-              details: { progress: { done, total }, statusChanges },
+              details: {
+                progress: { done, total, at: new Date().toISOString() },
+                statusChanges,
+              },
             })
             .eq('id', syncLog.id);
         },
@@ -241,7 +276,10 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             progress: { done: tasks.length, total: tasks.length },
           },
         })
-        .eq('id', syncLog.id);
+        .eq('id', syncLog.id)
+        // A row the worker re-queued after losing this container must not
+        // be flipped back by a stale process.
+        .eq('status', 'running');
     }
 
     return { tasks_updated: tasksUpdated, errors: result.errors };
@@ -257,7 +295,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           bounties_updated: tasksUpdated,
           details: { statusChanges },
         })
-        .eq('id', syncLog.id);
+        .eq('id', syncLog.id)
+        .eq('status', 'running');
     }
     throw err;
   }

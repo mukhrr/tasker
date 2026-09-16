@@ -105,6 +105,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
   const [settings, setSettings] = useState<SyncSettings | null>(null);
   const [tasks, setTasks] = useState<Record<string, TaskRef>>({});
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
@@ -114,10 +115,28 @@ export function LastSyncCard({ userId }: { userId: string }) {
   );
 
   const load = useCallback(async () => {
-    const [logRes, settingsRes] = await Promise.all([
-      fetch('/api/sync/status', { cache: 'no-store' }),
-      fetch('/api/settings', { cache: 'no-store' }),
-    ]);
+    let logRes: Response;
+    let settingsRes: Response;
+    try {
+      [logRes, settingsRes] = await Promise.all([
+        fetch('/api/sync/status', { cache: 'no-store' }),
+        fetch('/api/settings', { cache: 'no-store' }),
+      ]);
+    } catch {
+      setLoadError('Could not reach the server');
+      setLoaded(true);
+      return;
+    }
+    if (!logRes.ok || !settingsRes.ok) {
+      setLoadError(
+        logRes.status === 401 || settingsRes.status === 401
+          ? 'Session expired. Sign in again.'
+          : `Could not load sync status (HTTP ${logRes.ok ? settingsRes.status : logRes.status})`
+      );
+      setLoaded(true);
+      return;
+    }
+    setLoadError(null);
     const nextLog = (await logRes.json().catch(() => null)) as SyncLog | null;
     const nextSettings = (await settingsRes
       .json()
@@ -174,6 +193,23 @@ export function LastSyncCard({ userId }: { userId: string }) {
   };
 
   if (!loaded) return null;
+
+  if (loadError) {
+    return (
+      <Card>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="grid gap-1">
+            <CardTitle>Last Sync</CardTitle>
+            <CardDescription>{loadError}</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   const backend = settings?.ai_backend ?? 'api';
   const inFlight = log?.status === 'queued' || log?.status === 'running';
@@ -236,9 +272,10 @@ export function LastSyncCard({ userId }: { userId: string }) {
         )
       : null;
 
+  const backendLabel = BACKEND_LABELS[log.backend ?? backend] ?? 'Claude API';
   const description = inFlight
     ? [
-        BACKEND_LABELS[log.backend ?? backend],
+        backendLabel,
         progress ? `${progress.done} of ${progress.total} tasks` : null,
         log.status === 'queued'
           ? 'waiting for the worker'
@@ -247,7 +284,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
         .filter(Boolean)
         .join(' · ')
     : [
-        BACKEND_LABELS[log.backend ?? backend],
+        backendLabel,
         log.task_id
           ? 'single task'
           : updates.length
@@ -359,6 +396,24 @@ export function LastSyncCard({ userId }: { userId: string }) {
             tone="danger"
           />
         </div>
+
+        {errors.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground">
+              Errors
+            </p>
+            {errors.slice(0, 5).map((e, i) => (
+              <p key={i} className="truncate text-xs text-destructive">
+                {friendlySyncError(e)}
+              </p>
+            ))}
+            {errors.length > 5 && (
+              <p className="text-xs text-muted-foreground">
+                and {errors.length - 5} more
+              </p>
+            )}
+          </div>
+        )}
 
         {(changes.length > 0 || actions.length > 0) && (
           <div className="grid gap-6 lg:grid-cols-2">

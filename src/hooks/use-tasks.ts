@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { issueKey, parseIssueUrl } from '@/lib/github';
 import { waitForQueuedSync } from '@/lib/sync-poll';
+import { friendlySyncError } from '@/lib/sync-errors';
 import type { Task, TaskStatus } from '@/types/database';
 
 const supabase = createClient();
@@ -117,7 +118,10 @@ export function useTasks<T extends TaskListItem = Task>(
       }
       if (res.status === 202) {
         const { syncLogId } = await res.json();
-        await waitForQueuedSync(syncLogId);
+        const result = await waitForQueuedSync(syncLogId);
+        if (result.tasks_updated === 0 && result.errors.length) {
+          throw new Error(friendlySyncError(result.errors[0]));
+        }
       }
       await fetchTasks();
     } catch (err) {

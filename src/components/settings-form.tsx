@@ -159,9 +159,11 @@ export function SettingsForm({
     try {
       await postSettings({ ai_backend: next });
       toast.success(`Sync will use ${BACKEND_LABELS[next]}`);
-    } catch {
+    } catch (err) {
       setBackend(prev);
-      toast.error('Failed to switch backend');
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to switch backend'
+      );
     }
   };
 
