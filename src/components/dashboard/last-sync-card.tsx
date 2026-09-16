@@ -209,6 +209,9 @@ export function LastSyncCard({ userId }: { userId: string }) {
   const errors = (log.details?.errors as string[] | undefined) ?? [];
   const changes =
     (log.details?.statusChanges as StatusChange[] | undefined) ?? [];
+  const progress = log.details?.progress as
+    | { done: number; total: number }
+    | undefined;
   const skipped = updates.filter((u) => u.confidence < 0.6).length;
   const actions = updates.filter(
     (u) => u.confidence >= 0.6 && ACTION_STATUSES.has(u.suggestedStatus)
@@ -234,7 +237,15 @@ export function LastSyncCard({ userId }: { userId: string }) {
       : null;
 
   const description = inFlight
-    ? `${BACKEND_LABELS[log.backend ?? backend]} · running since ${formatDistanceToNowStrict(new Date(log.started_at))} ago`
+    ? [
+        BACKEND_LABELS[log.backend ?? backend],
+        progress ? `${progress.done} of ${progress.total} tasks` : null,
+        log.status === 'queued'
+          ? 'waiting for the worker'
+          : `running for ${formatDistanceToNowStrict(new Date(log.started_at))}`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
     : [
         BACKEND_LABELS[log.backend ?? backend],
         log.task_id
@@ -304,6 +315,18 @@ export function LastSyncCard({ userId }: { userId: string }) {
         </div>
       </CardHeader>
 
+      {inFlight && (
+        <div className="mx-4 h-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-chart-1 transition-[width] duration-500"
+            style={{
+              width: progress?.total
+                ? `${Math.max(2, Math.round((progress.done / progress.total) * 100))}%`
+                : '2%',
+            }}
+          />
+        </div>
+      )}
       <CardContent
         className={`flex flex-col gap-4 transition-opacity ${busy ? 'opacity-60' : ''}`}
       >
