@@ -19,6 +19,7 @@ const ERROR_PATTERNS: [RegExp, string][] = [
     /not logged in|invalid.*(oauth|token)|login expired|refresh token/i,
     'CLI login expired. Reconnect Claude or Codex in Settings.',
   ],
+  [/recursion limit/i, 'Sync stopped early. Retry to continue.'],
   [
     /timed out|exited \d+/i,
     'Sync worker could not complete the CLI run. Try again.',

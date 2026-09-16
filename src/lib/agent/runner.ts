@@ -125,6 +125,14 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       ).data;
 
   let tasksUpdated = 0;
+  // from → to per applied status change; the dashboard's Last Sync card
+  // shows these, and the model output alone does not carry the old status.
+  const statusChanges: {
+    taskId: string;
+    from: string;
+    to: string;
+    confidence: number;
+  }[] = [];
 
   try {
     const graph = createSyncGraph();
@@ -160,6 +168,12 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       ) {
         updateData.status = update.suggestedStatus;
         updateData.status_changed_at = new Date().toISOString();
+        statusChanges.push({
+          taskId: update.taskId,
+          from: currentTask.status,
+          to: update.suggestedStatus,
+          confidence: update.confidence,
+        });
         // Derive status_group from user's statuses
         const matchedStatus = (finalStatuses as UserStatus[])?.find(
           (s) => s.key === update.suggestedStatus
@@ -209,7 +223,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           status: 'completed',
           completed_at: new Date().toISOString(),
           bounties_updated: tasksUpdated,
-          details: { updates: result.updates, errors: result.errors },
+          details: {
+            updates: result.updates,
+            errors: result.errors,
+            statusChanges,
+          },
         })
         .eq('id', syncLog.id);
     }
@@ -225,6 +243,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           error_message: err instanceof Error ? err.message : String(err),
           // Tasks already applied before the abort stay applied; record them.
           bounties_updated: tasksUpdated,
+          details: { statusChanges },
         })
         .eq('id', syncLog.id);
     }

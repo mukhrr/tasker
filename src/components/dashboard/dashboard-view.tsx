@@ -6,6 +6,7 @@ import { useDashboardStats } from '@/hooks/use-dashboard-stats';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard } from './stat-card';
 import { StatusChart } from './status-chart';
+import { LastSyncCard } from './last-sync-card';
 import { DASHBOARD_TASK_COLUMNS, type DashboardTask } from '@/types/database';
 
 // Lazy-load the recharts-based charts so recharts stays out of the initial bundle
@@ -88,6 +89,8 @@ export function DashboardView({
         <EarningsChart data={stats.earningsOverTime} />
         <StatusChart data={stats.tasksByStatusGroup} />
       </div>
+
+      <LastSyncCard userId={userId} />
 
       <ActivityChart data={stats.monthlyActivity} />
     </div>
