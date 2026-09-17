@@ -81,7 +81,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
   if (taskId) {
     query = query.eq('id', taskId);
   } else {
-    query = query.not('status', 'in', '("paid","wasted")');
+    // Archived rows are the user's "done with this"; never spend a model
+    // call on them or move their status.
+    query = query
+      .not('status', 'in', '("paid","wasted")')
+      .eq('archived', false);
   }
 
   if (resumeAfter && !taskId) {
