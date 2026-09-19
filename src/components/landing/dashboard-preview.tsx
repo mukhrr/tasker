@@ -7,7 +7,7 @@ const STATS = [
   { title: 'Total Earned', value: '$4,250', desc: '12 completed', accent: '#34d399' },
   { title: 'Pending', value: '$2,100', desc: '5 active tasks', accent: '#818cf8' },
   { title: 'Active Tasks', value: '8', accent: '#f59e0b' },
-  { title: 'Completed', value: '12', desc: 'of 20 total', accent: '#22d3ee' },
+  { title: 'Last Month Earned', value: '$1,400', desc: 'Aug 2025 · 4 completed', accent: '#22d3ee' },
 ];
 
 const AREA_POINTS = [

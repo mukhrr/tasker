@@ -7,6 +7,12 @@ export interface DashboardStats {
   pendingAmount: number;
   activeCount: number;
   completedCount: number;
+  /** Amount earned in the previous calendar month */
+  lastMonthEarned: number;
+  /** Tasks completed in the previous calendar month */
+  lastMonthCompletedCount: number;
+  /** Signed change vs the month before last */
+  lastMonthDelta: number;
   earningsOverTime: { month: string; amount: number }[];
   tasksByStatusGroup: { name: string; value: number; group: TaskStatusGroup }[];
   monthlyActivity: { month: string; created: number; completed: number }[];
@@ -59,6 +65,20 @@ export function useDashboardStats(
       month: format(parseISO(key + '-01'), 'MMM yyyy'),
       amount: earningsMap.get(key)!,
     }));
+
+    // Previous calendar month — earnings, tasks completed, and change vs the
+    // month before it
+    const lastMonthKey = format(startOfMonth(subMonths(now, 1)), 'yyyy-MM');
+    const prevMonthKey = format(startOfMonth(subMonths(now, 2)), 'yyyy-MM');
+    const lastMonthEarned = earningsMap.get(lastMonthKey) ?? 0;
+    const lastMonthDelta =
+      lastMonthEarned - (earningsMap.get(prevMonthKey) ?? 0);
+    const lastMonthCompletedCount = completeTasks.filter((t) => {
+      const dateStr = t.payment_date ?? t.created_at;
+      return dateStr
+        ? format(parseISO(dateStr), 'yyyy-MM') === lastMonthKey
+        : false;
+    }).length;
 
     // Tasks by status group
     const groupLabels: Record<TaskStatusGroup, string> = {
@@ -123,6 +143,9 @@ export function useDashboardStats(
       pendingAmount,
       activeCount,
       completedCount,
+      lastMonthEarned,
+      lastMonthCompletedCount,
+      lastMonthDelta,
       earningsOverTime,
       tasksByStatusGroup,
       monthlyActivity,

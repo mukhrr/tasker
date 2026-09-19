@@ -62,6 +62,18 @@ export function DashboardView({
       : undefined;
   const earningsTrend = months.map((m) => m.amount);
 
+  const lastMonthLabel = months[months.length - 2]?.month ?? 'last month';
+  const lastMonthDelta =
+    stats.lastMonthDelta !== 0
+      ? {
+          text: `${stats.lastMonthDelta > 0 ? '+' : '-'}$${Math.abs(
+            stats.lastMonthDelta
+          ).toLocaleString()} vs prior month`,
+          direction:
+            stats.lastMonthDelta > 0 ? ('up' as const) : ('down' as const),
+        }
+      : undefined;
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -79,9 +91,10 @@ export function DashboardView({
         />
         <StatCard title="Active Tasks" value={String(stats.activeCount)} />
         <StatCard
-          title="Completed"
-          value={String(stats.completedCount)}
-          description={`of ${tasks.length} total`}
+          title="Last Month Earned"
+          value={`$${stats.lastMonthEarned.toLocaleString()}`}
+          description={`${lastMonthLabel} · ${stats.lastMonthCompletedCount} completed`}
+          delta={lastMonthDelta}
         />
       </div>
 
