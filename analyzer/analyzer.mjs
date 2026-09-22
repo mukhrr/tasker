@@ -18,7 +18,7 @@
  *         node --env-file=.env analyzer.mjs
  */
 
-import { readFile, writeFile, readdir, open, rm, stat } from 'node:fs/promises';
+import { readFile, writeFile, readdir, open, rm, rmdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -667,11 +667,13 @@ async function browserRedGreenCheck(n, files, overlap) {
 }
 
 // ── run videos ───────────────────────────────────────────────────────────────
-// The prompt has Claude record its red/green verification runs (bug happening,
-// bug gone) into ~/.tasker/videos/issue-<n>. GitHub has no API for comment
+// The prompt has Claude record one clean take per state (bug happening, bug
+// gone) with the App checkout's before-after-record skill mechanics into
+// ~/.tasker/videos/issue-<n>. GitHub has no API for comment
 // attachments, so the takes go to Telegram and the user drags them into the
-// proposal by hand. The folder is wiped when a run starts, so a stale take can
-// never pass as the current one.
+// proposal by hand. Telegram is the only copy: a take is deleted once the
+// upload is accepted, and the folder is wiped again when a run starts, so
+// nothing accumulates on the Mac and a stale take can never pass as current.
 const VIDEO_ROOT = path.join(homedir(), '.tasker', 'videos');
 const TG_UPLOAD_LIMIT = 49 * 1024 * 1024; // bot API rejects uploads at 50MB
 
@@ -698,14 +700,16 @@ async function sendRunVideos(n) {
     await notify(`⚠️ #${n}: bug take only — no fixed take was recorded. The run's summary should say why.`);
   }
   for (const name of names) {
+    const original = path.join(dir, name);
+    let mp4 = null;
     try {
-      let file = path.join(dir, name);
+      let file = original;
       // Telegram streams mp4 inline; webm arrives as a bare file. Transcode
       // when ffmpeg is around so the ping is watchable in one tap, fall back
       // to sending the webm as a document when it isn't.
       let sendAs = /\.webm$/i.test(name) ? 'document' : 'video';
       if (sendAs === 'document' && (await haveFfmpeg())) {
-        const mp4 = path.join(tmpdir(), `tasker-video-${n}-${name.replace(/\.webm$/i, '')}.mp4`);
+        mp4 = path.join(tmpdir(), `tasker-video-${n}-${name.replace(/\.webm$/i, '')}.mp4`);
         const t = await run(
           'ffmpeg',
           ['-y', '-i', file, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mp4],
@@ -734,12 +738,21 @@ async function sendRunVideos(n) {
         body: form,
         signal: AbortSignal.timeout(120_000),
       });
-      if (res.ok) log(`🎬 #${n} sent ${name} to Telegram`);
-      else log(`🎬 #${n} ${name} upload failed (${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}) — left in ${dir}`);
+      if (res.ok) {
+        log(`🎬 #${n} sent ${name} to Telegram`);
+        await rm(original, { force: true }).catch(() => {});
+      } else {
+        log(`🎬 #${n} ${name} upload failed (${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}) — left in ${dir}`);
+      }
     } catch (e) {
       log(`🎬 #${n} ${name} send errored: ${e instanceof Error ? e.message : String(e)} — left in ${dir}`);
+    } finally {
+      if (mp4) await rm(mp4, { force: true }).catch(() => {});
     }
   }
+  // Only takes Telegram refused (over the limit, failed upload) stay behind;
+  // an empty folder has nothing to keep.
+  await rmdir(dir).catch(() => {});
 }
 
 async function processRequest(req) {

@@ -122,7 +122,17 @@ you learned.
         workspace / expense / split / message the repro steps mention. Most
         "cannot reproduce" outcomes are really "didn't set up the data"; the
         setup is part of the reproduction.
-     5. Reproduce the reported steps and capture screenshots.
+     5. Reproduce the reported steps and capture screenshots. Work from
+        the written steps first. Only if they do not reproduce the bug and
+        the issue body links a `github.com/user-attachments` video, watch
+        it before giving up: open the raw URL in your headed Chrome, seek
+        with `document.querySelector('video').currentTime = <s>`,
+        screenshot, read the PNG, repeat every second or two. The written
+        steps are often vaguer than the video ("click the reaction button"
+        can be three different elements), so this is where you find the
+        element the reporter actually used and which steps were
+        keyboard-only, then retry. Never watch the video when the steps
+        already reproduced.
      6. **Verify the fix in the browser — record the repro, then replay it.**
         Your headed-Chrome Playwright script from steps 2–5 is the RED
         baseline, and it is already a drive file in waiting: port its
@@ -149,49 +159,88 @@ you learned.
         — and say which in the summary. If the browser lane is unavailable
         (Cloudflare challenge unsolved / offline), the Jest red/green
         remains the verification floor for both paths.
-        **Record the two runs that matter.** The red baseline run (bug
-        happening) and a green pass after the fix (bug gone) are the only
-        video evidence anyone in the thread will have. `repro record` and
-        `repro run` capture no video, so both takes come from your own
-        Playwright contexts: the live reproduction run, and one re-run of
-        the same steps after `--expect-fixed` passes (it doubles as an
-        eyeball check on the green verdict).
-        Launch the verification context with
-        `recordVideo: { dir: <absolute path>, size: { width: 1280, height: 720 } }`
-        pointing at
-        `~/.tasker/videos/issue-<<<ISSUE_NUMBER>>>/` (expand the ~ yourself,
-        Playwright treats it as a literal relative path), AND set
-        `viewport: { width: 1280, height: 720 }` on that same context — the
-        two sizes must match, and `viewport: null` is not allowed on a
-        recording context. On any mismatch Playwright scales the page into a
-        corner of the frame and pads the rest with gray, which reads as a
-        broken take. Don't resize the window mid-recording for the same
-        reason. After the
-        context closes rename each take with `video.saveAs(...)` (grab
-        `page.video()` before closing): `bug.webm` for the run that shows the
-        bug, `fixed.webm` for the re-run with the fix. Keep takes short: start
-        the recorded run from the last seeded state, not from sign-in.
-        Everything in that folder is sent to the operator's Telegram when the
-        run completes so they can attach it to the proposal by hand (GitHub
-        takes comment uploads only through the web UI). Recording is a
-        byproduct of runs you were already doing — never spend exploration
-        time on a separate camera pass. The two takes have different
-        preconditions: `bug.webm` comes from the live reproduction run, so it
-        exists whenever you drove the bug in a browser at all, even when
-        verification later fell back to Jest — keep and deliver it in that
-        case, it is the half a proposal needs most. `fixed.webm` is owed on the
-        same terms: if `bug.webm` exists, the fix is visible in a browser flow,
-        and the dev server still runs with your fix applied, record it — drive
-        the SAME steps once against the fixed build in a recording context and
-        capture the healthy behavior. Verifying through Jest instead of the
-        browser does NOT excuse this take; verification and evidence are
-        different jobs, and a proposal with a bug video but no fixed video
-        reads as an unproven fix. Skip `fixed.webm` only when the fixed code
-        cannot run in the browser or the fix has no visible effect in any
-        driveable flow — and say which in the summary. Delete a take only when it does not show the
-        bug (blank, wrong page, died before the moment); when unsure, leave
-        it — the operator triages by eye, and a partial take of the real
-        symptom beats no take.
+        **Record the two takes that matter — with the before-after-record
+        skill's mechanics.** `bug.webm` (bug happening) and `fixed.webm` (bug
+        gone) are the only video evidence anyone in the thread will have, and
+        they are compared side by side with the reporter's own recording, so
+        they must look hand-recorded. This checkout ships that know-how at
+        `.claude/skills/before-after-record/` — read `SKILL.md` and
+        `references/cursor-overlay.md` and `references/recording-mechanics.md`
+        before the first take and apply them inside your own Playwright
+        script (not the Playwright MCP: its browser is `--isolated` and
+        carries no session). Four of the skill's steps do NOT apply here and
+        are overridden by this prompt: no `git stash` (the bug take is
+        recorded before the fix exists, and the analyzer stashes touched
+        files itself after you exit — a mid-run stash collides with it), no
+        stop-and-hand-over gate (nobody is watching; the profile is signed
+        in from step 2, a signed-out profile is handled there, never inside
+        a take), no `~/Desktop/<prefix>-before-web.mp4` output, and no
+        `SendUserFile`. What does apply, verbatim:
+        - **Cursor overlay + human movement.** Inject the overlay from
+          `cursor-overlay.md` with `context.addInitScript` before the first
+          page, and drive every mouse step with `humanHover` / `humanClick`
+          from the same file. `locator.click()`, `locator.hover()`,
+          straight-line `mouse.move`, `evaluate(el.click())` and keyboard
+          activation of a mouse step are banned inside a take. Keyboard
+          steps use `keyboard.press` / `keyboard.type(text, {delay: 45-110})`
+          only, mouse parked. Classify each repro step mouse vs keyboard
+          from the written steps (or the reporter's video, if step 5 had
+          to fall back to it) and keep that classification.
+          One exception: the crash-safe rule in step 7 still wins for the
+          step expected to crash the page — `humanMove` the pointer onto the
+          target and dwell as usual, then dispatch the click from
+          `evaluate` under a timeout instead of `mouse.down/up`, so the
+          cursor visibly arrives and a crash cannot hang the take.
+        - **Pacing.** 500-900 ms still between actions, 600-1200 ms after a
+          modal or navigation before the pointer moves, hold 1-1.5 s on the
+          final state before closing. No `page.goto()` mid-flow (5-8 s
+          splash reload); start the take from the last seeded state.
+        - **Validate messy, ship clean.** Your exploration run from steps
+          2-5 is the messy pass and is never shipped. Once every selector
+          and wait is confirmed, re-drive the same steps once, in one smooth
+          pass, in a fresh recording context — that single clean re-drive
+          per take is the only extra camera time allowed.
+        - **Recording context.** One Chrome per profile dir, so close the
+          exploration browser (and never overlap with `repro record`, which
+          uses the same profile), then relaunch the SAME persistent profile
+          with recording on: `chromium.launchPersistentContext(
+          '<expanded ~>/.tasker/pw-profile', { channel: 'chrome',
+          headless: false, viewport: { width: 1280, height: 720 },
+          recordVideo: { dir: '<expanded ~>/.tasker/videos/issue-<<<ISSUE_NUMBER>>>/',
+          size: { width: 1280, height: 720 } } })`. Expand the `~` yourself
+          (Playwright treats it as a literal relative path). `viewport` and
+          `recordVideo.size` must match and `viewport: null` is not allowed
+          on a recording context — any mismatch letterboxes the page into a
+          corner with gray padding, which reads as a broken take. Don't
+          resize mid-recording. Clear the dismissable overlays listed in
+          `references/expensify-app-setup.md` before the first step.
+        - **Naming.** After the context closes, `video.saveAs(...)` (grab
+          `page.video()` before closing) to `bug.webm` for the take that
+          shows the bug and `fixed.webm` for the re-drive on the fixed
+          build. Everything in that folder is transcoded and sent to the
+          operator's Telegram when the run completes (GitHub takes comment
+          uploads only through the web UI), so the names and the folder are
+          the contract — nothing else in it is picked up.
+        - **Last-frame check.** For each take run
+          `ffmpeg -y -sseof -2 -i <take> -update 1 -frames:v 1 <scratch>/last.png`
+          and read the PNG: `bug.webm` must show the actual symptom (not
+          "nothing happened", which can also be a broken selector) and
+          `fixed.webm` the healthy behaviour. Re-drive once if it doesn't.
+        The two takes have different preconditions. `bug.webm` is owed
+        whenever you drove the bug in a browser at all, even when
+        verification later fell back to Jest — it is the half a proposal
+        needs most. `fixed.webm` is owed on the same terms: if `bug.webm`
+        exists, the fix is visible in a browser flow, and the dev server
+        still runs with your fix applied, drive the SAME steps once against
+        the fixed build and capture the healthy behaviour. Verifying through
+        Jest instead of the browser does NOT excuse this take; verification
+        and evidence are different jobs, and a proposal with a bug video but
+        no fixed video reads as an unproven fix. Skip `fixed.webm` only when
+        the fixed code cannot run in the browser or the fix has no visible
+        effect in any driveable flow — and say which in the summary. Delete
+        a take only when it does not show the bug (blank, wrong page, died
+        before the moment); when unsure, leave it — the operator triages by
+        eye, and a partial take of the real symptom beats no take.
      7. **Crash-safe interaction rule:** when the NEXT interaction is the one
         expected to trigger the bug (crash, freeze, render loop), never fire
         it as a bare Playwright click (`browser_click` / `locator.click()`) —
