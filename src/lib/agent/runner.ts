@@ -112,7 +112,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         })
         .eq('id', syncLogId);
     }
-    return { tasks_updated: 0, errors: [] };
+    return { tasks_updated: 0, errors: [], skipped: 0 };
   }
 
   // Fetch user's custom statuses for the AI prompt
@@ -289,6 +289,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             statusChanges,
             progress: { done: tasks.length, total: tasks.length },
             jev: jevObservations,
+            skipped: result.skipped.length,
           },
         })
         .eq('id', syncLog.id)
@@ -297,7 +298,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         .eq('status', 'running');
     }
 
-    return { tasks_updated: tasksUpdated, errors: result.errors };
+    return {
+      tasks_updated: tasksUpdated,
+      errors: result.errors,
+      skipped: result.skipped.length,
+    };
   } catch (err) {
     if (syncLog) {
       await supabase

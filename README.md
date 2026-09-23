@@ -72,6 +72,9 @@ Open [http://localhost:3000](http://localhost:3000).
 | `SUPABASE_SERVICE_ROLE_KEY`     | Yes      | Supabase service role key (server-only)       |
 | `ENCRYPTION_KEY`                | Yes      | 32-byte hex string for AES-256-GCM encryption |
 | `CRON_SECRET`                   | Yes      | Bearer token for cron endpoint auth           |
+| `JEV_MODE`                      | No       | `off` (default), `shadow` or `on` — Jev tier  |
+| `CLOUDFLARE_ACCOUNT_ID`         | No       | Workers AI account for the Jev tier           |
+| `CLOUDFLARE_AI_TOKEN`           | No       | Workers AI token for the Jev tier             |
 
 Generate an encryption key:
 

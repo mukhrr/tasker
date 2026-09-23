@@ -64,3 +64,6 @@ volume mounted at `/data`.
 | `CODEX_UNSAFE_SANDBOX`                                  | `true` on Railway                                        |
 | `CLI_TIMEOUT_MS`                                        | per-task CLI cap (default 120000)                        |
 | `POLL_INTERVAL_MS`                                      | tick interval (default 15000)                            |
+| `JEV_MODE`                                              | `off` \| `shadow` \| `on`, default `off`                 |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN`          | Workers AI, for the Jev decision tier                    |
+| `JEV_GATE_THRESHOLD`                                    | material-change cutoff, default `0.3`                    |

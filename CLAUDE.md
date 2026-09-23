@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-No test framework is configured yet.
+`npm test` runs Vitest over `src/**/*.test.ts` (the agent's pure logic: facts, gate, questions, the Jev client). Nothing else has tests.
 
 ## Architecture
 
@@ -28,6 +28,8 @@ No test framework is configured yet.
 LangGraph StateGraph that loops over tasks: `fetchGithubData → advanceOrFinish → (loop or END)`. Each iteration fetches GitHub issue/PR/comments/reviews/events, calls the model with a system prompt built from the user's status taxonomy (`prompts.ts`), and returns `{suggestedStatus, confidence, summary, ...fields}`. Runner applies updates at confidence ≥ 0.6 (summary only) or ≥ 0.75 (status change).
 
 The model call is an `Analyzer` (`llm.ts`: `(system, user) => Promise<string>`). `user_settings.ai_backend` picks it: `api` runs `anthropicAnalyzer` inside the web app; `claude_cli` / `codex_cli` cannot run on Vercel, so the routes insert a `queued` row in `sync_logs` and the Railway worker in `syncer/` claims it and runs `runSync` with a CLI analyzer (`syncer/analyzers.ts`). `lib/agent/backend.ts` has the shared gate (`syncReady`, `enqueueSync`).
+
+A `Decider` (`jev.ts`) optionally runs before the analyzer: a deterministic change gate (`gate.ts`), then Jev via Cloudflare Workers AI for a material-change Noul and a status Choice built from the user's taxonomy (`questions.ts`). Date comparisons are precomputed in `facts.ts` because Jev cannot do them. `JEV_MODE` is `off` (default), `shadow` (records both answers in `sync_logs.details.jev`) or `on` (Jev decides and the gate skips). Any Jev failure falls back to the LLM path. Design: `docs/superpowers/specs/2026-09-22-jev-decision-tier-design.md`.
 
 Auto-sync: `user_settings.auto_sync_enabled` + `sync_interval_hours`; a user is due when the latest `sync_logs.started_at` is older than the interval (`schedule.ts` `isSyncDue`). CLI users are scheduled by the syncer worker every tick; API-key users by `GET /api/cron/sync`, whose GitHub Actions schedule is paused (`.github/workflows/sync-cron.yml`). One sync per user in flight; the toolbar polls `sync_logs` for queued runs (`lib/sync-poll.ts`). Full write-up: README "How sync works".
 
