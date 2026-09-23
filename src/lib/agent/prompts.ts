@@ -1,4 +1,5 @@
 import type { UserStatus, TaskStatusGroup } from '@/types/database';
+import type { TaskFacts } from './facts';
 
 const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {
   todo: 'To-do',
@@ -73,7 +74,7 @@ function statusRules(keys: Set<string>): string {
   if (keys.has('changes_required')) {
     rules.push(`**changes_required**: the developer's open PR needs their action for any of:
 1. \`failing_checks\` is non-empty (TypeScript, tests, lint, or any CI job) or \`merge_conflicts\` is true
-2. A human reviewer's latest review is CHANGES_REQUESTED and the developer has not pushed since (compare the PR's updated_at with the review's submitted_at)
+2. \`latest_human_review_state\` is CHANGES_REQUESTED and \`pushed_after_changes_requested\` is false
 Bot reviews (Claude reviewers, melvin) never count, and a review the developer left on someone else's PR never counts. \`failing_checks\` null means GitHub did not report CI state: do not infer passing, keep the current status unless reviews say otherwise. When you choose this status, the summary MUST list exactly what has to change: the failing check names, "merge conflicts", or the reviewer's requests. If the developer already pushed after the request and checks pass, use **reviewing**.`);
   }
   if (keys.has('approved')) {
@@ -88,7 +89,7 @@ Bot reviews (Claude reviewers, melvin) never count, and a review the developer l
   }
   if (keys.has('awaiting_payment')) {
     rules.push(
-      `**awaiting_payment**: the PR is merged AND a comment says it was deployed to production AND that deploy is at least 7 days old (payment is due 7 days after the production deploy). Merged but not yet deployed to production, or deployed less than 7 days ago, stays **merged**.`
+      `**awaiting_payment**: the PR is merged AND \`payment_overdue_days\` is present and >= 0 (payment is due 7 days after the production deploy). Merged with no production deploy, or \`payment_overdue_days\` below 0, stays **merged**.`
     );
   }
   if (keys.has('hold')) {
@@ -146,7 +147,7 @@ Return ONLY a JSON object, no prose and no code fences, with ALL of these fields
 
 Return null for any field you cannot confirm; null keeps the existing value. Only return pr_url when you are confident the PR is the developer's PR for this issue.
 
-payment_date: once the PR is merged and a comment says it was deployed to production, set it to that deploy comment's date plus 7 days (Expensify pays 7 days after the production deploy). If a comment states an actual payment date, that wins. Otherwise null.
+payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.
 
 ## Confidence
 
@@ -178,6 +179,7 @@ export function buildAnalysisPrompt(data: {
   discoveredAssignedDate?: string | null;
   wasManuallyEdited?: boolean;
   assignedToOther?: boolean;
+  facts?: TaskFacts;
 }): string {
   let prompt = '';
 
@@ -215,6 +217,15 @@ export function buildAnalysisPrompt(data: {
   }
 
   prompt += '\n';
+
+  if (data.facts) {
+    const known = Object.entries(data.facts).filter(([, v]) => v !== null);
+    if (known.length) {
+      prompt += `## Computed Facts\nThese are computed from the data below, not guesses. Trust them over your own reading of dates.\n${JSON.stringify(
+        Object.fromEntries(known)
+      )}\n\n`;
+    }
+  }
 
   if (data.issueData) {
     prompt += `## Issue Data\n${data.issueData}\n\n`;

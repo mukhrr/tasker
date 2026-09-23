@@ -2,6 +2,7 @@ import { StateGraph, Annotation, END } from '@langchain/langgraph';
 import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
 import type { Analyzer } from './llm';
 import { userSetStatus } from './manual';
+import { computeTaskFacts, DEPLOY_COMMENT_RE } from './facts';
 import {
   fetchIssue,
   fetchPR,
@@ -55,7 +56,6 @@ export const COMMENT_WINDOW = 8;
 // Checks that fail until a reviewer acts (Expensify's checklist and
 // independent-approval gates) are not the developer's to fix.
 const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
-const DEPLOY_COMMENT_RE = /deployed to (production|staging)|🚀.*deploy/i;
 const HELP_WANTED_RE = /help\s*-?\s*wanted/i;
 
 function isBot(user: { login: string; type?: string }): boolean {
@@ -194,6 +194,17 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       ) &&
       !prData;
 
+    const facts = computeTaskFacts(
+      {
+        comments,
+        pr: prData,
+        humanReviews,
+        assignedDate,
+        issueUpdatedAt: issue.updated_at,
+      },
+      new Date()
+    );
+
     // Build analysis prompt with all context. Compact JSON: the model reads it
     // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
@@ -201,6 +212,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       isFirstSync,
       wasManuallyEdited,
       assignedToOther,
+      facts,
       githubUsername: username,
       issueTitle: issue.title,
       issueData: JSON.stringify({
