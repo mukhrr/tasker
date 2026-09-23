@@ -1,6 +1,13 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
 import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
 import type { Analyzer } from './llm';
+import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
+import { hasChangedSince } from './gate';
+import {
+  materialChangeQuestion,
+  statusChoiceQuestion,
+  statusesMissingDescriptions,
+} from './questions';
 import { userSetStatus } from './manual';
 import { computeTaskFacts, DEPLOY_COMMENT_RE } from './facts';
 import {
@@ -15,6 +22,7 @@ import {
   fetchFailingChecks,
 } from '@/lib/github';
 import type { Task, TaskStatus, UserStatus } from '@/types/database';
+import type { GitHubIssue, GitHubPullRequest } from '@/types/github';
 
 export interface TaskUpdate {
   taskId: string;
@@ -30,6 +38,20 @@ export interface TaskUpdate {
   amount?: number | null;
 }
 
+export interface JevObservation {
+  taskId: string;
+  deterministicChanged: boolean;
+  noul: number | null;
+  choice: string | null;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+  llmStatus: string | null;
+  llmConfidence: number | null;
+  agree: boolean | null;
+  latencyMs: number | null;
+  error: string | null;
+}
+
 const GraphState = Annotation.Root({
   tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
@@ -38,6 +60,11 @@ const GraphState = Annotation.Root({
   // an abort (usage limit, timeout) instead of being lost with the run.
   onUpdate: Annotation<(update: TaskUpdate) => Promise<void>>,
   onProgress: Annotation<(done: number, total: number) => Promise<void>>,
+  decide: Annotation<Decider | null>,
+  jevMode: Annotation<JevMode>,
+  gateThreshold: Annotation<number>,
+  onJev: Annotation<(observation: JevObservation) => void>,
+  skipped: Annotation<string[]>,
   githubUsername: Annotation<string>,
   userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
@@ -76,6 +103,22 @@ const SIGNAL_EVENTS = new Set([
   'merged',
 ]);
 
+// Jev degrades on large states full of irrelevant detail, so it sees a
+// digest rather than the full prompt the LLM gets.
+function analysisSummary(
+  issue: GitHubIssue,
+  prData: GitHubPullRequest | null
+): Record<string, unknown> {
+  return {
+    issue_state: issue.state,
+    labels: issue.labels.map((l) => l.name),
+    assignees: issue.assignees.map((a) => a.login),
+    pr_state: prData ? prData.state : null,
+    pr_merged: prData ? prData.merged : null,
+    pr_draft: prData ? prData.draft : null,
+  };
+}
+
 async function fetchGithubData(state: State): Promise<Partial<State>> {
   const task = state.tasks[state.currentIndex];
   if (!task) return state;
@@ -86,6 +129,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       errors: [...state.errors, `Could not parse issue URL: ${task.issue_url}`],
     };
   }
+
+  let observation: JevObservation | null = null;
 
   try {
     const { owner, repo, number } = parsed;
@@ -205,6 +250,66 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       new Date()
     );
 
+    const deterministicChanged = hasChangedSince({
+      lastSyncedAt: task.last_synced_at,
+      userEdited: wasManuallyEdited,
+      issueUpdatedAt: issue.updated_at,
+      prUpdatedAt: prData?.updated_at ?? null,
+      commentDates: comments.map((c) => c.created_at),
+      eventDates: signalEvents.map((e) => e.created_at),
+    });
+
+    observation = {
+      taskId: task.id,
+      deterministicChanged,
+      noul: null,
+      choice: null,
+      probabilities: null,
+      confidence: null,
+      llmStatus: null,
+      llmConfidence: null,
+      agree: null,
+      latencyMs: null,
+      error: null,
+    };
+
+    let jevChoice: JevChoiceAnswer | null = null;
+
+    if (state.jevMode !== 'off' && state.decide) {
+      const missing = statusesMissingDescriptions(state.userStatuses);
+      if (missing.length) {
+        console.warn(
+          `[jev] statuses without descriptions will be guessed: ${missing.join(', ')}`
+        );
+      }
+      const startedAt = Date.now();
+      const answers = await state.decide(
+        {
+          currentStatus: task.status,
+          facts,
+          issue: analysisSummary(issue, prData),
+        },
+        {
+          material: materialChangeQuestion(),
+          status: statusChoiceQuestion(state.userStatuses),
+        }
+      );
+      observation.latencyMs = Date.now() - startedAt;
+      if (!answers) {
+        observation.error = 'jev unavailable';
+      } else {
+        const material = answers.material as JevNoulAnswer | undefined;
+        const status = answers.status as JevChoiceAnswer | undefined;
+        observation.noul = material?.noul ?? null;
+        if (status?.type === 'choice') {
+          jevChoice = status;
+          observation.choice = status.choice;
+          observation.probabilities = status.probabilities ?? null;
+          observation.confidence = status.confidence ?? null;
+        }
+      }
+    }
+
     // Build analysis prompt with all context. Compact JSON: the model reads it
     // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
@@ -303,6 +408,16 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
       };
+      if (state.jevMode !== 'off' && observation) {
+        observation.llmStatus = update.suggestedStatus;
+        observation.llmConfidence = update.confidence;
+        observation.agree =
+          observation.choice === null
+            ? null
+            : observation.choice === update.suggestedStatus;
+        state.onJev(observation);
+      }
+
       await state.onUpdate(update);
       return { updates: [...state.updates, update] };
     }
@@ -315,6 +430,11 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    if (state.jevMode !== 'off' && observation) {
+      observation.error = observation.error ?? message;
+      state.onJev(observation);
+    }
 
     // Detect fatal config errors — no point processing more tasks
     if (FATAL_ERROR_RE.test(message)) {
