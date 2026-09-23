@@ -161,6 +161,32 @@ Your confidence controls what is applied:
 If the context says the user changed the status by hand since the last sync, still report the status the evidence supports with honest confidence; the app decides whether to apply it.`;
 }
 
+// Used when Jev owns the status: the model only writes the summary and
+// pulls out fields, so the taxonomy and confidence guidance are dead weight.
+export function buildGenerationPrompt(statuses: UserStatus[]): string {
+  const statusKeys = statuses.map((s) => `"${s.key}"`).join(', ');
+  return `You analyze GitHub activity for an open-source bounty developer's task tracker.
+
+The task's status has already been decided; you do not choose it. Write the summary and pull out the fields.
+
+Return ONLY a JSON object, no prose and no code fences:
+{
+  "suggestedStatus": "<echo the status given in the context, one of: ${statusKeys}>",
+  "confidence": 1,
+  "summary": "<2-3 sentence summary of current state>",
+  "flags": ["<concerns or notable items>"],
+  "issue_title": "<the GitHub issue title, exactly>",
+  "pr_url": "<the developer's PR URL for this issue, or null>",
+  "assigned_date": "<ISO date the developer was assigned, or null>",
+  "payment_date": "<ISO date, see below, or null>",
+  "amount": <bounty amount in USD, or null>
+}
+
+Return null for any field you cannot confirm; null keeps the existing value.
+
+payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.`;
+}
+
 export function buildAnalysisPrompt(data: {
   currentStatus: string;
   isFirstSync: boolean;

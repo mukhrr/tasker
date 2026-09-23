@@ -1,5 +1,9 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
-import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
+import {
+  buildSystemPrompt,
+  buildAnalysisPrompt,
+  buildGenerationPrompt,
+} from './prompts';
 import type { Analyzer } from './llm';
 import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
 import { hasChangedSince } from './gate';
@@ -310,6 +314,17 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       }
     }
 
+    if (state.jevMode === 'on' && observation) {
+      const material = observation.noul;
+      const unchanged =
+        !deterministicChanged ||
+        (material !== null && material < state.gateThreshold);
+      if (unchanged) {
+        state.onJev(observation);
+        return { skipped: [...state.skipped, task.id] };
+      }
+    }
+
     // Build analysis prompt with all context. Compact JSON: the model reads it
     // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
@@ -386,9 +401,25 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     const prompt = buildAnalysisPrompt(analysisData);
 
+    // paid and wasted drop a task out of every future sync, so a wrong one
+    // is invisible afterwards: the LLM confirms those.
+    const terminal = new Set(
+      state.userStatuses
+        .filter((s) => s.group_name === 'complete')
+        .map((s) => s.key)
+    );
+    const useJevStatus =
+      state.jevMode === 'on' &&
+      jevChoice !== null &&
+      !terminal.has(jevChoice.choice);
+
     const content = await state.analyze(
-      buildSystemPrompt(state.userStatuses),
-      prompt
+      useJevStatus
+        ? buildGenerationPrompt(state.userStatuses)
+        : buildSystemPrompt(state.userStatuses),
+      useJevStatus && jevChoice
+        ? `${prompt}\n\n## Decided Status\nThe status is **${jevChoice.choice}**. Echo it as suggestedStatus.`
+        : prompt
     );
 
     // Parse JSON from response
@@ -408,14 +439,26 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
       };
+      // Record what the LLM said before Jev overwrites it, and only when
+      // the LLM actually chose: under useJevStatus it was handed the answer,
+      // so there is no independent opinion to agree or disagree with.
       if (state.jevMode !== 'off' && observation) {
-        observation.llmStatus = update.suggestedStatus;
-        observation.llmConfidence = update.confidence;
+        observation.llmStatus = useJevStatus ? null : update.suggestedStatus;
+        observation.llmConfidence = useJevStatus ? null : update.confidence;
         observation.agree =
-          observation.choice === null
+          useJevStatus || observation.choice === null
             ? null
             : observation.choice === update.suggestedStatus;
         state.onJev(observation);
+      }
+
+      if (useJevStatus && jevChoice) {
+        update.suggestedStatus = jevChoice.choice;
+        // The probability of the chosen option is the direct analogue of
+        // "how sure are you this is the status"; shadow data decides whether
+        // to switch to the model's own confidence field.
+        update.confidence =
+          jevChoice.probabilities?.[jevChoice.choice] ?? jevChoice.confidence;
       }
 
       await state.onUpdate(update);
