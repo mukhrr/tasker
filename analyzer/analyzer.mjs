@@ -79,6 +79,11 @@ const REVIEW_MAX_AGE_MS = int('REVIEW_MAX_AGE_MS', 24 * 60 * 60_000);
 const REVIEW_PROMPT_FILE = path.join(HERE, 'prompts', 'review.md');
 let reviewDisabled = false; // set if the reviewed_at column is missing (pre-migration)
 
+// A deep analysis is written against MelvinBot's proposal, so a queued request
+// waits for Melvin to post, up to this long. 0 disables the wait.
+const ANALYZE_MELVIN_WAIT_MS = int('ANALYZE_MELVIN_WAIT_MS', 30 * 60_000);
+const MELVIN_CHECK_INTERVAL_MS = 2 * 60_000;
+
 let busy = false;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -1368,6 +1373,51 @@ async function processReview(proposal) {
 }
 
 // ── main loop ────────────────────────────────────────────────────────────────
+// Keyed by request id rather than read from created_at: a re-run upserts the
+// same row, which keeps its original created_at.
+const melvinWaits = new Map();
+
+async function readyForAnalysis(req) {
+  if (ANALYZE_MELVIN_WAIT_MS <= 0) return true;
+  // An orphan from a restart already started once; don't make it wait again.
+  if (/^Recovered after an analyzer restart/.test(req.last_error || '')) return true;
+  const now = Date.now();
+  let wait = melvinWaits.get(req.id);
+  if (!wait) {
+    wait = { since: now, checkedAt: 0 };
+    melvinWaits.set(req.id, wait);
+  }
+  const left = wait.since + ANALYZE_MELVIN_WAIT_MS - now;
+  if (left <= 0) {
+    log(`⏱️  #${req.issue_number} no MelvinBot proposal after ${Math.round(ANALYZE_MELVIN_WAIT_MS / 60_000)}m — analyzing anyway`);
+    return true;
+  }
+  if (now - wait.checkedAt < MELVIN_CHECK_INTERVAL_MS) return false;
+  wait.checkedAt = now;
+  const res = await gh(`/repos/${REPO}/issues/${req.issue_number}/comments?per_page=100`);
+  if (Array.isArray(res.data) && findMelvinProposal(res.data)) return true;
+  const minutes = Math.ceil(left / 60_000);
+  log(`⏳ #${req.issue_number} waiting for MelvinBot's proposal (${minutes}m left)`);
+  void updateRequest(
+    req.id,
+    { progress: `Waiting for MelvinBot's proposal (${minutes} min left)` },
+    { requireState: 'queued' },
+  ).catch(() => {});
+  return false;
+}
+
+async function nextReadyRequest(rows) {
+  const queued = new Set(rows.map((r) => r.id));
+  for (const id of melvinWaits.keys()) if (!queued.has(id)) melvinWaits.delete(id);
+  for (const req of rows) {
+    if (await readyForAnalysis(req)) {
+      melvinWaits.delete(req.id);
+      return req;
+    }
+  }
+  return null;
+}
+
 async function tick() {
   if (busy) return;
   const q = new URLSearchParams({
@@ -1377,13 +1427,14 @@ async function tick() {
     repo_name: `ilike.${REPO_NAME}`,
     state: 'eq.queued',
     order: 'created_at.asc',
-    limit: '1',
+    limit: '20',
   });
   const rows = await supabaseRequest(`analysis_requests?${q}`);
-  if (Array.isArray(rows) && rows.length > 0) {
+  const next = Array.isArray(rows) ? await nextReadyRequest(rows) : null;
+  if (next) {
     busy = true;
     try {
-      await processRequest(rows[0]);
+      await processRequest(next);
     } finally {
       busy = false;
     }

@@ -6,7 +6,8 @@ stash` you pop when you win the assignment.
 
 Pipeline per request (queued by the extension's 🧠 button on an issue):
 
-1. claim the request (`analysis_requests` in Supabase)
+1. claim the request (`analysis_requests` in Supabase), once MelvinBot has
+   posted a proposal or `ANALYZE_MELVIN_WAIT_MS` (default 30 min) has passed
 2. preflight — refuses to run if the checkout has uncommitted changes
 3. `claude -p` headless (`--dangerously-skip-permissions`) in the checkout:
    reproduce via Playwright when feasible, verify the root cause, implement the
