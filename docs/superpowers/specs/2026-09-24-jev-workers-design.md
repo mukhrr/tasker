@@ -41,8 +41,9 @@ Runs after a row is ready (External seen or `DRAFT_DELAY_MS` passed), before
 `codex exec`.
 
 State sent to Jev: title, labels, minutes since External, whether HW is present,
-whether Melvin posted, Melvin's proposal text, whether an open PR is linked, and
-the authors plus a short excerpt of the last few comments. Time math is computed
+whether Melvin posted, Melvin's proposal text, and the authors plus a short
+excerpt of the last few comments. A linked PR is not included, because it needs
+a timeline call; comments usually mention it anyway. Time math is computed
 in JS, as in `facts.ts`.
 
 Two Nouls in one call, because a C+ endorsing Melvin is not the end of it. The
@@ -59,8 +60,9 @@ A row is skipped only when both are below threshold.
 - A skipped row stays `queued` with `jev_skipped_at` set. It is scored again
   hourly, and drafted immediately if Help Wanted appears. Missing a race costs
   more than a wasted draft, so `JEV_DRAFT_THRESHOLD` defaults low (0.3).
-- D2 costs nothing extra: when ready rows outnumber free slots, sort by the
-  higher of D1's two Nouls.
+- D2 is deferred. D1 runs after a row is claimed, so ordering by it would mean
+  scoring every candidate before selection (two GitHub calls each). It is only
+  worth doing if D1's shadow data shows the scores separate well.
 
 Ground truth comes for free:
 - An auto proposal that reached `posted` got HW, and one still `armed` after

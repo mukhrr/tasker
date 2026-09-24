@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node drafter.mjs",
     "dry": "DRY_RUN=true node drafter.mjs",
-    "test": "node stress-test.mjs"
+    "test": "node stress-test.mjs",
+    "test:jev": "node --test jev.test.mjs"
   },
   "engines": {
     "node": "22.x"
