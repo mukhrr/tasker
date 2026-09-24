@@ -144,7 +144,18 @@ you learned.
         `repro record issue-<<<ISSUE_NUMBER>>> --url <dev server URL>
         --drive .repros/drive/issue-<<<ISSUE_NUMBER>>>.mjs --profile
         ~/.tasker/pw-profile` (headless by default; close any browser on
-        that profile first — one Chrome per profile dir). After implementing
+        that profile first — one Chrome per profile dir). If porting the
+        script would be slow (many steps, fiddly selectors), record from a
+        goal instead and let Jev pick each action (~0.3 s a step; a
+        TypeSafe key is already configured): `repro record
+        issue-<<<ISSUE_NUMBER>>> --url <dev server URL> --profile
+        ~/.tasker/pw-profile --goal "<what the user does, in the bug's
+        words>" --until '<the bug's locator, text=<visible text> or
+        url=<path part>>' [--input "<Field label>=<value>"]`. `--until` must
+        be the BUG's signal, not just "the page loaded", because nothing is
+        saved unless it holds, so the saved recording asserts the bug the
+        same way `observe` does. Say in the summary which way you recorded.
+        If a goal run fails, fall back to the drive file. After implementing
         the fix, `repro run issue-<<<ISSUE_NUMBER>>> --expect-fixed` is the
         GREEN verdict. Quote both verdict lines in the summary, e.g.
         "repro record: bug asserted and captured; repro run --expect-fixed:
