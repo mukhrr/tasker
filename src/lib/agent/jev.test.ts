@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { cloudflareJevDecider, jevModeFromEnv, deciderFromEnv } from './jev';
+import {
+  cloudflareJevDecider,
+  typesafeJevDecider,
+  jevModeFromEnv,
+  deciderFromEnv,
+} from './jev';
 
 const QUESTIONS = {
   status: {
@@ -33,13 +38,98 @@ describe('deciderFromEnv', () => {
     expect(deciderFromEnv({ JEV_MODE: 'on' })).toBeNull();
   });
 
-  it('builds a decider when both credentials exist', () => {
+  it('builds a decider when both Cloudflare credentials exist', () => {
     const d = deciderFromEnv({
       JEV_MODE: 'on',
       CLOUDFLARE_ACCOUNT_ID: 'acc',
       CLOUDFLARE_AI_TOKEN: 'tok',
     });
     expect(typeof d).toBe('function');
+  });
+
+  it('is null with only half of the Cloudflare pair', () => {
+    expect(deciderFromEnv({ CLOUDFLARE_ACCOUNT_ID: 'acc' })).toBeNull();
+  });
+
+  it('prefers the TypeSafe key when both providers are configured', async () => {
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((url: string) => {
+      calls.push(url);
+      return okResponse({ answers: {} });
+    }) as unknown as typeof fetch;
+    try {
+      const d = deciderFromEnv({
+        TYPESAFE_API_KEY: 'ts',
+        CLOUDFLARE_ACCOUNT_ID: 'acc',
+        CLOUDFLARE_AI_TOKEN: 'tok',
+      });
+      await d!({}, QUESTIONS);
+      expect(calls).toEqual(['https://api.typesafe.ai/v1/systemone']);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe('typesafeJevDecider', () => {
+  it('posts to the TypeSafe endpoint with the model and a bearer key', async () => {
+    const fetchImpl = vi.fn(() => okResponse({ answers: {} }));
+    const decide = typesafeJevDecider('apikey_x', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await decide({ hello: 'world' }, QUESTIONS);
+
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      'Bearer apikey_x'
+    );
+    expect(JSON.parse(init.body as string)).toEqual({
+      model: 'jev-latest',
+      state: { hello: 'world' },
+      questions: QUESTIONS,
+    });
+  });
+
+  it('parses the response the live API actually returned', async () => {
+    // Captured from api.typesafe.ai on 2026-09-24.
+    const fetchImpl = vi.fn(() =>
+      okResponse({
+        model: 'jev-1.13.0',
+        answers: { urgent: { type: 'noul', noul: 0.97 } },
+        usage: { input_tokens: 287, output_tokens: 20 },
+      })
+    );
+    const decide = typesafeJevDecider('k', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const answers = await decide({}, QUESTIONS);
+    expect(answers).toEqual({ urgent: { type: 'noul', noul: 0.97 } });
+  });
+
+  it('returns null on a non-200', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response('forbidden', { status: 403 }))
+    );
+    const decide = typesafeJevDecider('bad', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await decide({}, QUESTIONS)).toBeNull();
+  });
+
+  it('returns null instead of throwing on a connect timeout', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.reject(new TypeError('fetch failed'))
+    );
+    const decide = typesafeJevDecider('k', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await decide({}, QUESTIONS)).toBeNull();
   });
 });
 

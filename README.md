@@ -73,8 +73,9 @@ Open [http://localhost:3000](http://localhost:3000).
 | `ENCRYPTION_KEY`                | Yes      | 32-byte hex string for AES-256-GCM encryption |
 | `CRON_SECRET`                   | Yes      | Bearer token for cron endpoint auth           |
 | `JEV_MODE`                      | No       | `off` (default), `shadow` or `on` — Jev tier  |
-| `CLOUDFLARE_ACCOUNT_ID`         | No       | Workers AI account for the Jev tier           |
-| `CLOUDFLARE_AI_TOKEN`           | No       | Workers AI token for the Jev tier             |
+| `TYPESAFE_API_KEY`              | No       | Jev tier via TypeSafe; takes precedence       |
+| `CLOUDFLARE_ACCOUNT_ID`         | No       | Jev via Workers AI, if no TypeSafe key        |
+| `CLOUDFLARE_AI_TOKEN`           | No       | Jev via Workers AI, if no TypeSafe key        |
 
 Generate an encryption key:
 

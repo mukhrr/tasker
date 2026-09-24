@@ -34,6 +34,12 @@ user has chosen, and `ai_backend`, the settings UI, the credentials and the DB s
 
 ### Access and cost
 
+> **Update 2026-09-24:** TypeSafe direct access was granted. `TYPESAFE_API_KEY` is now the
+> primary route (`POST https://api.typesafe.ai/v1/systemone`, `model: "jev-latest"`) and
+> Cloudflare below is the fallback. The direct response is a bare `{ model, answers, usage }`,
+> confirmed live. A read-only probe of 10 real tasks agreed with the current status on 8; both
+> disagreements were `wasted` picks below 0.75, stopped by the threshold and the terminal guard.
+
 Available through **Cloudflare Workers AI** as model id `typesafe/jev`, generally available,
 needs only a Cloudflare account — TypeSafe's own early access is still waitlisted, so this is
 the route we use.
