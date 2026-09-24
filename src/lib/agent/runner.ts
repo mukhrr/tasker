@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
+import { deciderFromEnv, jevModeFromEnv } from './jev';
+import type { JevObservation } from './graph';
 import { userSetStatus } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import type { Task, UserStatus } from '@/types/database';
@@ -110,7 +112,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         })
         .eq('id', syncLogId);
     }
-    return { tasks_updated: 0, errors: [] };
+    return { tasks_updated: 0, errors: [], skipped: 0 };
   }
 
   // Fetch user's custom statuses for the AI prompt
@@ -153,6 +155,9 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
   let tasksUpdated = 0;
   // from → to per applied status change; the dashboard's Last Sync card
   // shows these, and the model output alone does not carry the old status.
+  const jevObservations: JevObservation[] = [];
+  // deciderFromEnv builds a closure; call it once.
+  const decide = deciderFromEnv();
   const statusChanges: {
     taskId: string;
     from: string;
@@ -239,6 +244,12 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         githubToken,
         analyze,
         onUpdate: applyUpdate,
+        decide,
+        jevMode: decide ? jevModeFromEnv() : 'off',
+        gateThreshold: Number(process.env.JEV_GATE_THRESHOLD ?? 0.3),
+        onJev: (observation: JevObservation) =>
+          jevObservations.push(observation),
+        skipped: [],
         onProgress: async (done, total) => {
           if (!syncLog) return;
           // Live counters for the dashboard card; the final update below
@@ -277,6 +288,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             errors: result.errors,
             statusChanges,
             progress: { done: tasks.length, total: tasks.length },
+            jev: jevObservations,
+            skipped: result.skipped.length,
           },
         })
         .eq('id', syncLog.id)
@@ -285,7 +298,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         .eq('status', 'running');
     }
 
-    return { tasks_updated: tasksUpdated, errors: result.errors };
+    return {
+      tasks_updated: tasksUpdated,
+      errors: result.errors,
+      skipped: result.skipped.length,
+    };
   } catch (err) {
     if (syncLog) {
       await supabase
@@ -296,7 +313,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           error_message: err instanceof Error ? err.message : String(err),
           // Tasks already applied before the abort stay applied; record them.
           bounties_updated: tasksUpdated,
-          details: { statusChanges },
+          details: { statusChanges, jev: jevObservations },
         })
         .eq('id', syncLog.id)
         .eq('status', 'running');

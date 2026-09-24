@@ -248,7 +248,8 @@ export function LastSyncCard({ userId }: { userId: string }) {
   const progress = log.details?.progress as
     | { done: number; total: number }
     | undefined;
-  const skipped = updates.filter((u) => u.confidence < 0.6).length;
+  const skippedLowConfidence = updates.filter((u) => u.confidence < 0.6).length;
+  const skippedUnchanged = (log.details?.skipped as number | undefined) ?? 0;
   const actions = updates.filter(
     (u) => u.confidence >= 0.6 && ACTION_STATUSES.has(u.suggestedStatus)
   );
@@ -389,7 +390,14 @@ export function LastSyncCard({ userId }: { userId: string }) {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Counter label="Status changes" value={changes.length} />
           <Counter label="Fields updated" value={log.bounties_updated ?? 0} />
-          <Counter label="Skipped, low confidence" value={skipped} />
+          <Counter
+            label={
+              skippedUnchanged
+                ? 'Unchanged, skipped'
+                : 'Skipped, low confidence'
+            }
+            value={skippedUnchanged || skippedLowConfidence}
+          />
           <Counter
             label="Errors"
             value={errors.length + (log.status === 'failed' ? 1 : 0)}

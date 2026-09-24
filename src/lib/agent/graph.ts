@@ -1,7 +1,19 @@
 import { StateGraph, Annotation, END } from '@langchain/langgraph';
-import { buildSystemPrompt, buildAnalysisPrompt } from './prompts';
+import {
+  buildSystemPrompt,
+  buildAnalysisPrompt,
+  buildGenerationPrompt,
+} from './prompts';
 import type { Analyzer } from './llm';
+import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
+import { hasChangedSince } from './gate';
+import {
+  materialChangeQuestion,
+  statusChoiceQuestion,
+  statusesMissingDescriptions,
+} from './questions';
 import { userSetStatus } from './manual';
+import { computeTaskFacts, DEPLOY_COMMENT_RE } from './facts';
 import {
   fetchIssue,
   fetchPR,
@@ -14,6 +26,7 @@ import {
   fetchFailingChecks,
 } from '@/lib/github';
 import type { Task, TaskStatus, UserStatus } from '@/types/database';
+import type { GitHubIssue, GitHubPullRequest } from '@/types/github';
 
 export interface TaskUpdate {
   taskId: string;
@@ -29,6 +42,20 @@ export interface TaskUpdate {
   amount?: number | null;
 }
 
+export interface JevObservation {
+  taskId: string;
+  deterministicChanged: boolean;
+  noul: number | null;
+  choice: string | null;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+  llmStatus: string | null;
+  llmConfidence: number | null;
+  agree: boolean | null;
+  latencyMs: number | null;
+  error: string | null;
+}
+
 const GraphState = Annotation.Root({
   tasks: Annotation<Task[]>,
   githubToken: Annotation<string>,
@@ -37,6 +64,11 @@ const GraphState = Annotation.Root({
   // an abort (usage limit, timeout) instead of being lost with the run.
   onUpdate: Annotation<(update: TaskUpdate) => Promise<void>>,
   onProgress: Annotation<(done: number, total: number) => Promise<void>>,
+  decide: Annotation<Decider | null>,
+  jevMode: Annotation<JevMode>,
+  gateThreshold: Annotation<number>,
+  onJev: Annotation<(observation: JevObservation) => void>,
+  skipped: Annotation<string[]>,
   githubUsername: Annotation<string>,
   userStatuses: Annotation<UserStatus[]>,
   currentIndex: Annotation<number>,
@@ -55,7 +87,6 @@ export const COMMENT_WINDOW = 8;
 // Checks that fail until a reviewer acts (Expensify's checklist and
 // independent-approval gates) are not the developer's to fix.
 const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
-const DEPLOY_COMMENT_RE = /deployed to (production|staging)|🚀.*deploy/i;
 const HELP_WANTED_RE = /help\s*-?\s*wanted/i;
 
 function isBot(user: { login: string; type?: string }): boolean {
@@ -76,6 +107,22 @@ const SIGNAL_EVENTS = new Set([
   'merged',
 ]);
 
+// Jev degrades on large states full of irrelevant detail, so it sees a
+// digest rather than the full prompt the LLM gets.
+function analysisSummary(
+  issue: GitHubIssue,
+  prData: GitHubPullRequest | null
+): Record<string, unknown> {
+  return {
+    issue_state: issue.state,
+    labels: issue.labels.map((l) => l.name),
+    assignees: issue.assignees.map((a) => a.login),
+    pr_state: prData ? prData.state : null,
+    pr_merged: prData ? prData.merged : null,
+    pr_draft: prData ? prData.draft : null,
+  };
+}
+
 async function fetchGithubData(state: State): Promise<Partial<State>> {
   const task = state.tasks[state.currentIndex];
   if (!task) return state;
@@ -86,6 +133,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       errors: [...state.errors, `Could not parse issue URL: ${task.issue_url}`],
     };
   }
+
+  let observation: JevObservation | null = null;
 
   try {
     const { owner, repo, number } = parsed;
@@ -194,6 +243,88 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       ) &&
       !prData;
 
+    const facts = computeTaskFacts(
+      {
+        comments,
+        pr: prData,
+        humanReviews,
+        assignedDate,
+        issueUpdatedAt: issue.updated_at,
+      },
+      new Date()
+    );
+
+    const deterministicChanged = hasChangedSince({
+      lastSyncedAt: task.last_synced_at,
+      userEdited: wasManuallyEdited,
+      issueUpdatedAt: issue.updated_at,
+      prUpdatedAt: prData?.updated_at ?? null,
+      commentDates: comments.map((c) => c.created_at),
+      eventDates: signalEvents.map((e) => e.created_at),
+    });
+
+    observation = {
+      taskId: task.id,
+      deterministicChanged,
+      noul: null,
+      choice: null,
+      probabilities: null,
+      confidence: null,
+      llmStatus: null,
+      llmConfidence: null,
+      agree: null,
+      latencyMs: null,
+      error: null,
+    };
+
+    let jevChoice: JevChoiceAnswer | null = null;
+
+    if (state.jevMode !== 'off' && state.decide) {
+      const missing = statusesMissingDescriptions(state.userStatuses);
+      if (missing.length) {
+        console.warn(
+          `[jev] statuses without descriptions will be guessed: ${missing.join(', ')}`
+        );
+      }
+      const startedAt = Date.now();
+      const answers = await state.decide(
+        {
+          currentStatus: task.status,
+          facts,
+          issue: analysisSummary(issue, prData),
+        },
+        {
+          material: materialChangeQuestion(),
+          status: statusChoiceQuestion(state.userStatuses),
+        }
+      );
+      observation.latencyMs = Date.now() - startedAt;
+      if (!answers) {
+        observation.error = 'jev unavailable';
+      } else {
+        const material = answers.material as JevNoulAnswer | undefined;
+        const status = answers.status as JevChoiceAnswer | undefined;
+        observation.noul = material?.noul ?? null;
+        if (status?.type === 'choice') {
+          jevChoice = status;
+          observation.choice = status.choice;
+          observation.probabilities = status.probabilities ?? null;
+          observation.confidence = status.confidence ?? null;
+        }
+      }
+    }
+
+    if (state.jevMode === 'on' && observation) {
+      const material = observation.noul;
+      const unchanged =
+        !deterministicChanged ||
+        (material !== null && material < state.gateThreshold);
+      if (unchanged) {
+        state.onJev(observation);
+        return { skipped: [...state.skipped, task.id] };
+      }
+    }
+
     // Build analysis prompt with all context. Compact JSON: the model reads it
     // fine and it is roughly a third fewer tokens than pretty-printed.
     const analysisData = {
@@ -201,6 +332,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       isFirstSync,
       wasManuallyEdited,
       assignedToOther,
+      facts,
       githubUsername: username,
       issueTitle: issue.title,
       issueData: JSON.stringify({
@@ -269,9 +401,25 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     const prompt = buildAnalysisPrompt(analysisData);
 
+    // paid and wasted drop a task out of every future sync, so a wrong one
+    // is invisible afterwards: the LLM confirms those.
+    const terminal = new Set(
+      state.userStatuses
+        .filter((s) => s.group_name === 'complete')
+        .map((s) => s.key)
+    );
+    const useJevStatus =
+      state.jevMode === 'on' &&
+      jevChoice !== null &&
+      !terminal.has(jevChoice.choice);
+
     const content = await state.analyze(
-      buildSystemPrompt(state.userStatuses),
-      prompt
+      useJevStatus
+        ? buildGenerationPrompt(state.userStatuses)
+        : buildSystemPrompt(state.userStatuses),
+      useJevStatus && jevChoice
+        ? `${prompt}\n\n## Decided Status\nThe status is **${jevChoice.choice}**. Echo it as suggestedStatus.`
+        : prompt
     );
 
     // Parse JSON from response
@@ -291,6 +439,28 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
       };
+      // Record what the LLM said before Jev overwrites it, and only when
+      // the LLM actually chose: under useJevStatus it was handed the answer,
+      // so there is no independent opinion to agree or disagree with.
+      if (state.jevMode !== 'off' && observation) {
+        observation.llmStatus = useJevStatus ? null : update.suggestedStatus;
+        observation.llmConfidence = useJevStatus ? null : update.confidence;
+        observation.agree =
+          useJevStatus || observation.choice === null
+            ? null
+            : observation.choice === update.suggestedStatus;
+        state.onJev(observation);
+      }
+
+      if (useJevStatus && jevChoice) {
+        update.suggestedStatus = jevChoice.choice;
+        // The probability of the chosen option is the direct analogue of
+        // "how sure are you this is the status"; shadow data decides whether
+        // to switch to the model's own confidence field.
+        update.confidence =
+          jevChoice.probabilities?.[jevChoice.choice] ?? jevChoice.confidence;
+      }
+
       await state.onUpdate(update);
       return { updates: [...state.updates, update] };
     }
@@ -303,6 +473,11 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    if (state.jevMode !== 'off' && observation) {
+      observation.error = observation.error ?? message;
+      state.onJev(observation);
+    }
 
     // Detect fatal config errors — no point processing more tasks
     if (FATAL_ERROR_RE.test(message)) {
