@@ -24,6 +24,18 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { deciderFromEnv, jevModeFromEnv, noulOf } from './jev.mjs';
+import {
+  issueState,
+  draftGateQuestions,
+  draftGateScores,
+  shouldSkipDraft,
+  findMelvinProposal,
+  MELVIN_VERDICT_QUESTION,
+  verdictState,
+  verdictFrom,
+  ANALYZE_QUESTION,
+} from './decisions.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -150,6 +162,17 @@ const SUBSCRIBE_ON_ARM = bool('SUBSCRIBE_ON_ARM', true);
 const UNSUB_MELVIN_DUPES = bool('UNSUB_MELVIN_DUPES', true);
 
 // ── state ───────────────────────────────────────────────────────────────────
+// Jev decisions (docs/superpowers/specs/2026-09-24-jev-workers-design.md).
+// shadow records Jev's answer beside what the drafter did; on lets it act.
+const jevDecide = deciderFromEnv();
+const JEV_MODE = jevDecide ? jevModeFromEnv() : 'off';
+const JEV_DRAFT_THRESHOLD = Number(process.env.JEV_DRAFT_THRESHOLD || 0.3);
+const JEV_ANALYZE_THRESHOLD = Number(process.env.JEV_ANALYZE_THRESHOLD || 0.3);
+const JEV_RECHECK_MS = 60 * 60_000;
+const JEV_HW_CHECK_MS = int('JEV_HW_CHECK_MS', 2 * 60_000);
+const jevSkipped = new Map(); // proposal id -> { at, labelsCheckedAt } from the draft gate
+let jevTableMissing = false;
+
 let backoffUntil = 0; // Codex usage-limit backoff
 let lastStaleSweepAt = 0;
 let lastWasteReportAt = 0;
@@ -814,6 +837,16 @@ async function draftOne(row, settings = { autoPost: true }) {
   const { data: comments } = await gh(`/repos/${REPO}/issues/${n}/comments?per_page=30`);
   const commentList = Array.isArray(comments) ? comments : [];
 
+  const jevState = issueState({
+    issue,
+    comments: commentList,
+    labels: labelNames(issue.labels),
+    trigger: TRIGGER,
+    lock: LOCK,
+    queuedAt: row.created_at,
+  });
+  if (await draftGateSkips(claimed, n, jevState)) return;
+
   // Fast interim arm: get a concise, valid proposal armed in ~1 min so the
   // sniper always has ammunition, then let the full deep draft replace it.
   let interimArmed = false;
@@ -828,7 +861,13 @@ async function draftOne(row, settings = { autoPost: true }) {
     return; // failure paths handled inside (or interim left armed)
   }
 
-  const { body, sessionId, verdict } = result;
+  const { body, sessionId } = result;
+  let verdict = result.verdict;
+  const melvin = findMelvinProposal(commentList);
+  if (melvin) verdict = await jevVerdict(claimed, n, issue, melvin, body, verdict);
+  if (verdict?.kind === 'BEATS' && settings.autoAnalyze && !(await analyzeGatePasses(claimed, n, jevState, verdict))) {
+    settings = { ...settings, autoAnalyze: false };
+  }
 
   if (DRY_RUN) {
     log(
@@ -848,6 +887,90 @@ async function draftOne(row, settings = { autoPost: true }) {
   if (ENRICH) {
     await enrichOne(armed.id, n, body);
   }
+}
+
+// ── Jev decisions ─────────────────────────────────────────────────────────────
+async function recordJev(decision, row, n, answer, baseline, acted) {
+  if (JEV_MODE === 'off' || DRY_RUN || jevTableMissing) return;
+  try {
+    await supabaseRequest('jev_decisions', {
+      method: 'POST',
+      body: {
+        user_id: SUPABASE_USER_ID,
+        worker: 'drafter',
+        decision,
+        issue_number: n,
+        proposal_id: row.id,
+        answer,
+        baseline,
+        acted,
+      },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/jev_decisions/.test(msg) && /(does not exist|42P01|PGRST)/i.test(msg)) {
+      jevTableMissing = true;
+      log('⚠️ Jev records disabled: jev_decisions table missing (apply the migration, then restart)');
+    } else {
+      log(`#${n} jev record failed: ${msg}`);
+    }
+  }
+}
+
+// D1. Returns true when the row was handed back to the queue instead of drafted.
+// An explicit click and a live Help Wanted always draft.
+async function draftGateSkips(claimed, n, state) {
+  if (JEV_MODE === 'off') return false;
+  const answers = await jevDecide(state, draftGateQuestions(state));
+  if (!answers) return false;
+  const scores = draftGateScores(state, answers);
+  const skip =
+    JEV_MODE === 'on' &&
+    !claimed.force_draft &&
+    !state.help_wanted &&
+    shouldSkipDraft(scores, JEV_DRAFT_THRESHOLD);
+  await recordJev('d1', claimed, n, { ...scores, raw: answers }, null, skip);
+  log(`🧮 #${n} draft gate opens=${scores.opens?.toFixed(2)} melvin_gap=${scores.melvin_gap?.toFixed(2)}${skip ? ' → skipped' : ''}`);
+  if (!skip) {
+    jevSkipped.delete(claimed.id);
+    return false;
+  }
+  jevSkipped.set(claimed.id, { at: Date.now(), labelsCheckedAt: Date.now() });
+  await updateProposal(
+    claimed.id,
+    {
+      state: 'queued',
+      last_error: `Jev: unlikely to open (${scores.opens.toFixed(2)}) and Melvin has no clear gap (${scores.melvin_gap.toFixed(2)}). Rechecked hourly, drafted at once on Help Wanted.`,
+    },
+    { requireState: 'drafting' },
+  );
+  return true;
+}
+
+// D3. Codex has read the code and Jev has not, so Jev only fills a missing marker.
+async function jevVerdict(claimed, n, issue, melvin, ours, codexVerdict) {
+  if (JEV_MODE === 'off') return codexVerdict;
+  const answers = await jevDecide(verdictState({ issue, melvin, ours }), MELVIN_VERDICT_QUESTION);
+  const jev = verdictFrom(answers);
+  if (!jev) return codexVerdict;
+  const acted = JEV_MODE === 'on' && !codexVerdict;
+  await recordJev('d3', claimed, n, jev, codexVerdict ? { kind: codexVerdict.kind } : null, acted);
+  return acted ? { kind: jev.choice, reason: `Jev (${(jev.confidence ?? 0).toFixed(2)})` } : codexVerdict;
+}
+
+// A1. Only gates the automatic queue; the Telegram button still works.
+async function analyzeGatePasses(claimed, n, state, verdict) {
+  if (JEV_MODE === 'off') return true;
+  const answers = await jevDecide({ ...state, verdict: verdict.kind, verdict_reason: verdict.reason || null }, ANALYZE_QUESTION);
+  const worth = noulOf(answers, 'worth');
+  if (worth === null) return true;
+  const skip = JEV_MODE === 'on' && worth < JEV_ANALYZE_THRESHOLD;
+  await recordJev('a1', claimed, n, { worth }, null, skip);
+  if (skip) {
+    log(`🧮 #${n} deep analysis not auto-queued (worth=${worth.toFixed(2)})`);
+    await notify(`🧮 Not auto-analyzing ${REPO}#${n}: Jev scored it ${worth.toFixed(2)}. Use the Run deep analysis button if you disagree.`);
+  }
+  return !skip;
 }
 
 // Build the concise first-pass prompt (no permalinks / investigation) from the
@@ -1364,6 +1487,16 @@ async function selectReady(candidates, slots) {
       ready.push(row); // explicit click — never waits
       continue;
     }
+    const skipped = jevSkipped.get(row.id);
+    if (skipped && Date.now() - skipped.at < JEV_RECHECK_MS) {
+      // Skipped by the draft gate: only Help Wanted brings it back early.
+      if (checks >= MAX_LABEL_CHECKS_PER_TICK || Date.now() - skipped.labelsCheckedAt < JEV_HW_CHECK_MS) continue;
+      checks++;
+      skipped.labelsCheckedAt = Date.now();
+      const { status, data } = await gh(`/repos/${REPO}/issues/${row.issue_number}`);
+      if (status === 200 && data && labelNames(data.labels).includes(TRIGGER)) ready.push(row);
+      continue;
+    }
     const waitedMs = Date.now() - Date.parse(row.created_at);
     if (!Number.isFinite(waitedMs) || waitedMs >= DRAFT_DELAY_MS) {
       if (DRAFT_DELAY_MS > 0) log(`⏱️  #${row.issue_number} gave up waiting for "${LOCK}" — drafting anyway`);
@@ -1516,7 +1649,7 @@ async function main() {
       `directPost=${DIRECT_POST ? 'on' : 'off'} poll=${POLL_INTERVAL_MS}ms ` +
       `concurrency=${MAX_CONCURRENT_DRAFTS} ` +
       `wait=${DRAFT_DELAY_MS ? `${Math.round(DRAFT_DELAY_MS / 60_000)}m for "${LOCK}"` : 'off'} ` +
-      `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'}`,
+      `model=${CODEX_MODEL || 'account-default'} telegram=${TG_TOKEN && TG_CHAT ? 'on' : 'off'} jev=${JEV_MODE}`,
   );
   void wasteReport(true).catch(() => {}); // one report at boot; then hourly from the loop
   void loop();

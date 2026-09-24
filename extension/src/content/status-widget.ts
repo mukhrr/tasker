@@ -1323,7 +1323,9 @@ export class StatusWidget {
         this.analysis?.progress ??
         'Claude is reproducing and fixing locally — result lands here and on Telegram.';
     } else if (st === 'queued') {
-      line.textContent = 'Waiting for the analyzer daemon on your Mac to pick this up.';
+      line.textContent =
+        this.analysis?.progress ??
+        'Waiting for the analyzer daemon on your Mac to pick this up.';
     } else {
       line.textContent = 'Reproduce → fix locally → update proposal → stash. Needs the local analyzer running.';
     }

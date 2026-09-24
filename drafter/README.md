@@ -128,6 +128,14 @@ Go-live order:
   after a fetch once more than 50 packs exist. Codex rollout files (what
   `codex exec resume` replays) are pruned daily after `SESSION_KEEP_DAYS` (60).
   Both were needed after the volume hit 5 GB on 2026-09-16 (68k packs).
+- **Jev** (`jev.mjs`, `decisions.mjs`): with `TYPESAFE_API_KEY` and `JEV_MODE=shadow`
+  the drafter asks Jev whether an issue will open or Melvin has a gap (D1), how our
+  proposal compares to Melvin's (D3), and whether a deep analysis is worth it (A1),
+  and records each answer in `jev_decisions` without acting on it. `JEV_MODE=on`
+  lets D1 skip drafts (below `JEV_DRAFT_THRESHOLD`, default 0.3; skipped rows are
+  rescored hourly and drafted at once on Help Wanted) and A1 skip the auto-queue
+  (`JEV_ANALYZE_THRESHOLD`). Any Jev failure drafts as usual. Tests: `npm run test:jev`.
+  Design: `docs/superpowers/specs/2026-09-24-jev-workers-design.md`.
 - `CODEX_UNSAFE_SANDBOX=true` bypasses the Codex sandbox — only if Landlock/seccomp
   fails in Railway's kernel (the process is already isolated in its own container).
 - Edit `prompts/draft.md` and `prompts/enrich.md` to tune voice and depth; they encode

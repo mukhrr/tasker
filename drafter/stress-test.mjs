@@ -128,6 +128,9 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
     commentPosts: [],
     commentPatches: [],
     telegram: [], // sendMessage bodies, so message shape is asserted not eyeballed
+    comments: [],
+    jevAnswers: {},
+    jevRecords: [],
   };
 
   const server = createServer(async (req, res) => {
@@ -173,6 +176,18 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       return json(res, 200, updated);
     }
 
+    // ── Jev ──
+    if (url.pathname === '/v1/systemone' && req.method === 'POST') {
+      const { questions } = await readBody(req);
+      const answers = {};
+      for (const key of Object.keys(questions || {})) if (state.jevAnswers[key]) answers[key] = state.jevAnswers[key];
+      return json(res, 200, { model: 'jev-test', answers });
+    }
+    if (url.pathname === '/rest/v1/jev_decisions' && req.method === 'POST') {
+      state.jevRecords.push(await readBody(req));
+      return json(res, 201, {});
+    }
+
     // ── Telegram ──
     if (url.pathname.endsWith('/sendMessage') && req.method === 'POST') {
       state.telegram.push(await readBody(req));
@@ -184,7 +199,7 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       return json(res, 200, state.issue);
     }
     if (url.pathname.endsWith(`/issues/${state.issue.number}/comments`) && req.method === 'GET') {
-      return json(res, 200, []);
+      return json(res, 200, state.comments);
     }
     if (url.pathname.endsWith(`/issues/${state.issue.number}/comments`) && req.method === 'POST') {
       const body = await readBody(req);
@@ -234,6 +249,7 @@ async function runScenario({ name, env, seedRows, issue, cannedProposals, run, c
       // 0 disables the wait-for-External gate, so scenarios about the draft
       // itself don't have to carry the label. The gate has its own scenarios.
       DRAFT_DELAY_MS: '0',
+      TYPESAFE_API_URL: `http://127.0.0.1:${port}/v1/systemone`,
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -558,6 +574,67 @@ await runScenario({
     assert.ok(kb, 'no inline keyboard on the armed ping');
     assert.equal(kb[0].callback_data, 'run:90012', 'deep-analysis callback_data is not run:<issue>');
     assert.match(kb[1].url, /issues\/90012$/, 'View issue button does not link to the issue');
+  },
+});
+
+// ── Jev draft gate (D1) ──────────────────────────────────────────────────────
+const MELVIN_COMMENT = { user: { login: 'MelvinBot' }, body: '## Proposal\n### What is the root cause of that problem?\nThe blur handler.' };
+const LOW_ODDS = { opens: { type: 'noul', noul: 0.1 }, melvin_gap: { type: 'noul', noul: 0.1 } };
+
+await runScenario({
+  name: 'jev-shadow-drafts-anyway',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, TYPESAFE_API_KEY: 'k', JEV_MODE: 'shadow' },
+  issue: baseIssue({ number: 90020 }),
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    { id: 'r20', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90020, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline }) => {
+    state.comments = [MELVIN_COMMENT];
+    state.jevAnswers = LOW_ODDS;
+    await deadline(() => state.rows.get('r20')?.state === 'armed', 8000, 'shadow mode stopped the draft');
+    const d1 = state.jevRecords.find((r) => r.decision === 'd1');
+    assert.ok(d1, 'no d1 record');
+    assert.equal(d1.acted, false);
+    assert.equal(d1.answer.opens, 0.1);
+    assert.equal(d1.proposal_id, 'r20');
+  },
+});
+
+await runScenario({
+  name: 'jev-on-skips-then-drafts-on-help-wanted',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, TYPESAFE_API_KEY: 'k', JEV_MODE: 'on', JEV_HW_CHECK_MS: '50' },
+  issue: baseIssue({ number: 90021 }),
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    { id: 'r21', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90021, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline, wait }) => {
+    state.comments = [MELVIN_COMMENT];
+    state.jevAnswers = LOW_ODDS;
+    await deadline(() => /^Jev:/.test(state.rows.get('r21')?.last_error || ''), 8000, 'never skipped');
+    await wait(400);
+    assert.equal(state.rows.get('r21').state, 'queued', 'drafted despite the skip');
+    assert.equal(state.jevRecords.filter((r) => r.decision === 'd1').length, 1, 'rescored before the hour');
+
+    state.issue.labels = [...state.issue.labels, { name: 'Help Wanted' }];
+    // Help Wanted is live, so the arm is followed at once by a direct post.
+    await deadline(() => ['armed', 'posted'].includes(state.rows.get('r21')?.state), 8000, 'Help Wanted did not bring it back');
+  },
+});
+
+await runScenario({
+  name: 'jev-on-keeps-a-melvin-gap',
+  env: { CODEX_BIN: SHIM, CODEX_SCRIPT: SCRIPT, TYPESAFE_API_KEY: 'k', JEV_MODE: 'on' },
+  issue: baseIssue({ number: 90022 }),
+  cannedProposals: [GOOD_PROPOSAL],
+  seedRows: [
+    { id: 'r22', user_id: 'user-1', repo_owner: 'Expensify', repo_name: 'App', issue_number: 90022, body: '', state: 'queued', origin: 'auto', draft_attempts: 0, created_at: iso(-1000), updated_at: iso(-1000) },
+  ],
+  run: async (state, { deadline }) => {
+    state.comments = [MELVIN_COMMENT];
+    state.jevAnswers = { ...LOW_ODDS, melvin_gap: { type: 'noul', noul: 0.7 } };
+    await deadline(() => state.rows.get('r22')?.state === 'armed', 8000, 'skipped despite a Melvin gap');
   },
 });
 

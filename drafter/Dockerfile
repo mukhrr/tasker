@@ -12,7 +12,7 @@ RUN npm install -g @openai/codex
 
 WORKDIR /app
 COPY package.json ./
-COPY drafter.mjs ./
+COPY drafter.mjs jev.mjs decisions.mjs ./
 COPY prompts ./prompts
 COPY skills ./skills
 

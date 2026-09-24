@@ -99,6 +99,9 @@ function classify(kind: string, res: RunResult): string | null {
     return `${kind} usage limit reached`;
   }
   if (/not logged in|unauthorized|invalid.*token|401/i.test(res.stderr)) {
+    // The label alone can't tell an expired refresh token from a revoked one.
+    // Railway logs only; the user-facing message stays the plain label.
+    console.error(`${kind} auth failure, stderr tail:\n${res.stderr.slice(-800)}`);
     return `${kind} not logged in`;
   }
   return `${kind} exited ${res.code}: ${res.stderr.slice(0, 300)}`;
