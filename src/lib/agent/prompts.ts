@@ -142,10 +142,13 @@ Return ONLY a JSON object, no prose and no code fences, with ALL of these fields
   "pr_url": "<the developer's PR URL for this issue, or null>",
   "assigned_date": "<ISO date the developer was assigned, or null>",
   "payment_date": "<ISO date payment is due or was made, or null>",
-  "amount": <bounty amount in USD from the title, labels, body or comments, or null>
+  "amount": <bounty amount in USD from the title, labels, body or comments, or null>,
+  "payment_moved_to": "<full URL of the other issue, or null>"
 }
 
 Return null for any field you cannot confirm; null keeps the existing value. Only return pr_url when you are confident the PR is the developer's PR for this issue.
+
+payment_moved_to: only when a comment explicitly says payment for this issue will be handled in another issue (e.g. "payment and checklist will be handled in #84139"). Return that issue's full URL. Otherwise null.
 
 payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.
 
@@ -179,12 +182,15 @@ Return ONLY a JSON object, no prose and no code fences:
   "pr_url": "<the developer's PR URL for this issue, or null>",
   "assigned_date": "<ISO date the developer was assigned, or null>",
   "payment_date": "<ISO date, see below, or null>",
-  "amount": <bounty amount in USD, or null>
+  "amount": <bounty amount in USD, or null>,
+  "payment_moved_to": "<full URL of the other issue, or null>"
 }
 
 Return null for any field you cannot confirm; null keeps the existing value.
 
-payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.`;
+payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.
+
+payment_moved_to: only when a comment explicitly says payment for this issue will be handled in another issue (e.g. "payment and checklist will be handled in #84139"). Return that issue's full URL. Otherwise null.`;
 }
 
 export function buildAnalysisPrompt(data: {

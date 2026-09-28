@@ -247,6 +247,49 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         }
       }
 
+      if (update.payment_moved_to && update.confidence >= 0.75) {
+        const target = parseIssueUrl(update.payment_moved_to);
+        if (target) {
+          const { data: existing } = await supabase
+            .from('tasks')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('repo_owner', target.owner)
+            .ilike('repo_name', target.repo)
+            .eq('issue_number', target.number)
+            .limit(1);
+          if (!existing?.length) {
+            const status =
+              (updateData.status as string | undefined) ?? currentTask.status;
+            const group =
+              (finalStatuses as UserStatus[])?.find((s) => s.key === status)
+                ?.group_name ?? currentTask.status_group;
+            const { error: insertError } = await supabase.from('tasks').insert({
+              user_id: userId,
+              issue_url: update.payment_moved_to,
+              repo_owner: target.owner,
+              repo_name: target.repo,
+              issue_number: target.number,
+              status,
+              status_group: group,
+              pr_url: currentTask.pr_url,
+              assigned_date: currentTask.assigned_date,
+              note: `Payment moved from ${currentTask.issue_url}`,
+            });
+            if (insertError) {
+              throw new Error(
+                `Task write failed for ${update.payment_moved_to}: ${insertError.message}`
+              );
+            }
+          }
+          updateData.archived = true;
+          const moved = `Payment moved to ${update.payment_moved_to}`;
+          updateData.note = currentTask.note
+            ? `${currentTask.note}\n${moved}`
+            : moved;
+        }
+      }
+
       const { error } = await supabase
         .from('tasks')
         .update(updateData)

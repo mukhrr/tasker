@@ -94,3 +94,18 @@ export function computeTaskFacts(input: TaskFactsInput, now: Date): TaskFacts {
     days_since_last_activity: daysSince(input.issueUpdatedAt, now),
   };
 }
+
+// Expensify pays 7 days after the production deploy, so awaiting_payment
+// before then would ask the developer to chase money that is not due yet.
+export function holdUntilPaymentDue(
+  status: string,
+  facts: TaskFacts,
+  statusKeys: Set<string>,
+  currentStatus: string
+): string {
+  if (status !== 'awaiting_payment') return status;
+  if (facts.payment_overdue_days !== null && facts.payment_overdue_days >= 0) {
+    return status;
+  }
+  return statusKeys.has('merged') ? 'merged' : currentStatus;
+}

@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeTaskFacts,
+  holdUntilPaymentDue,
   PRODUCTION_DEPLOY_RE,
   DEPLOY_COMMENT_RE,
+  type TaskFacts,
 } from './facts';
 import type {
   GitHubComment,
@@ -172,5 +174,46 @@ describe('computeTaskFacts', () => {
   it('ignores unparsable dates instead of returning NaN', () => {
     const f = computeTaskFacts({ ...empty, assignedDate: 'not-a-date' }, NOW);
     expect(f.days_since_assigned).toBeNull();
+  });
+});
+
+describe('holdUntilPaymentDue', () => {
+  const keys = new Set(['merged', 'awaiting_payment']);
+  const facts = (payment_overdue_days: number | null) =>
+    ({ payment_overdue_days }) as TaskFacts;
+
+  it('allows awaiting_payment once the 7 days have passed', () => {
+    expect(
+      holdUntilPaymentDue('awaiting_payment', facts(0), keys, 'merged')
+    ).toBe('awaiting_payment');
+    expect(
+      holdUntilPaymentDue('awaiting_payment', facts(12), keys, 'merged')
+    ).toBe('awaiting_payment');
+  });
+
+  it('holds it at merged before the deploy is 7 days old, or with no deploy', () => {
+    expect(
+      holdUntilPaymentDue('awaiting_payment', facts(-3), keys, 'reviewing')
+    ).toBe('merged');
+    expect(
+      holdUntilPaymentDue('awaiting_payment', facts(null), keys, 'reviewing')
+    ).toBe('merged');
+  });
+
+  it('keeps the current status when the user has no merged status', () => {
+    expect(
+      holdUntilPaymentDue(
+        'awaiting_payment',
+        facts(null),
+        new Set(['awaiting_payment']),
+        'reviewing'
+      )
+    ).toBe('reviewing');
+  });
+
+  it('leaves other statuses alone', () => {
+    expect(holdUntilPaymentDue('reviewing', facts(null), keys, 'merged')).toBe(
+      'reviewing'
+    );
   });
 });

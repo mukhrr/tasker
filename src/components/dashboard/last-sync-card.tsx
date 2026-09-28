@@ -62,6 +62,35 @@ function shortRef(issueUrl: string): string {
   return m ? `${m[1]}#${m[2]}` : issueUrl;
 }
 
+function repoBase(issueUrl: string): string | null {
+  const m = issueUrl.match(/https:\/\/github\.com\/[^/]+\/[^/)\]]+/);
+  return m ? m[0] : null;
+}
+
+function issueNumber(issueUrl: string): string | null {
+  return issueUrl.match(/\/issues\/(\d+)/)?.[1] ?? null;
+}
+
+// Summaries name related issues as "#84139"; make those clickable.
+function linkIssueRefs(text: string, base: string | null): React.ReactNode {
+  if (!base) return text;
+  return text.split(/(#\d{3,})/).map((part, i) =>
+    /^#\d{3,}$/.test(part) ? (
+      <a
+        key={i}
+        href={`${base}/issues/${part.slice(1)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-chart-1 hover:underline"
+      >
+        {part}
+      </a>
+    ) : (
+      part
+    )
+  );
+}
+
 function StatusPill({ status }: { status: UserStatus | undefined }) {
   const color = getStatusColor(status?.color ?? 'gray');
   return (
@@ -495,7 +524,10 @@ export function LastSyncCard({ userId }: { userId: string }) {
                       />
                       <div className="grid min-w-0 gap-0.5">
                         <p className="text-sm">
-                          {u.summary}
+                          {linkIssueRefs(
+                            u.summary,
+                            t ? repoBase(t.issue_url) : null
+                          )}
                           {t?.pr_url && (
                             <>
                               {' '}
@@ -511,6 +543,19 @@ export function LastSyncCard({ userId }: { userId: string }) {
                           )}
                         </p>
                         <p className="truncate text-xs text-muted-foreground">
+                          {t && issueNumber(t.issue_url) && (
+                            <>
+                              <a
+                                href={`${repoBase(t.issue_url)}/issues/${issueNumber(t.issue_url)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-chart-1 hover:underline"
+                              >
+                                #{issueNumber(t.issue_url)}
+                              </a>
+                              {' · '}
+                            </>
+                          )}
                           {payment && t?.amount
                             ? `$${t.amount.toLocaleString()} · `
                             : ''}

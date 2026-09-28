@@ -16,13 +16,18 @@ import {
 import type { Analyzer } from './llm';
 import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
 import { hasChangedSince } from './gate';
+import { paymentMoveTarget } from './payment-move';
 import {
   materialChangeQuestion,
   statusChoiceQuestion,
   statusesMissingDescriptions,
 } from './questions';
 import { userSetStatus } from './manual';
-import { computeTaskFacts, DEPLOY_COMMENT_RE } from './facts';
+import {
+  computeTaskFacts,
+  holdUntilPaymentDue,
+  DEPLOY_COMMENT_RE,
+} from './facts';
 import {
   fetchIssue,
   fetchPR,
@@ -56,6 +61,8 @@ export interface TaskUpdate {
   amount?: number | null;
   // Set only when a PR-comment lead became a new issue: the task moves to it.
   issue_url?: string;
+  // The issue payment was moved to: the task is archived and that one tracked.
+  payment_moved_to?: string;
 }
 
 export interface JevObservation {
@@ -459,6 +466,14 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         assigned_date: result.assigned_date ?? assignedDate,
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
+        payment_moved_to:
+          paymentMoveTarget(
+            result.payment_moved_to,
+            comments,
+            owner,
+            repo,
+            number
+          ) ?? undefined,
       };
       // Record what the LLM said before Jev overwrites it, and only when
       // the LLM actually chose: under useJevStatus it was handed the answer,
@@ -481,6 +496,13 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         update.confidence =
           jevChoice.probabilities?.[jevChoice.choice] ?? jevChoice.confidence;
       }
+
+      update.suggestedStatus = holdUntilPaymentDue(
+        update.suggestedStatus,
+        facts,
+        new Set(state.userStatuses.map((s) => s.key)),
+        task.status
+      );
 
       await state.onUpdate(update);
       return { updates: [...state.updates, update] };
