@@ -40,7 +40,19 @@ interface TaskRef {
   issue_url: string;
   pr_url: string | null;
   amount: number | null;
+  status: string;
 }
+
+// sync_logs.details.jev, written while JEV_MODE is shadow.
+interface JevSuggestion {
+  taskId: string;
+  choice: string | null;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+}
+
+// Jev only suggests until JEV_MODE=on; below this it is closer to a guess.
+const JEV_SUGGEST_MIN = 0.5;
 
 interface SyncSettings {
   ai_backend: AiBackend;
@@ -177,12 +189,15 @@ export function LastSyncCard({ userId }: { userId: string }) {
       (nextLog?.details?.updates as SyncUpdate[] | undefined) ?? [];
     const changes =
       (nextLog?.details?.statusChanges as StatusChange[] | undefined) ?? [];
-    const ids = [...new Set([...updates, ...changes].map((u) => u.taskId))];
+    const jev = (nextLog?.details?.jev as JevSuggestion[] | undefined) ?? [];
+    const ids = [
+      ...new Set([...updates, ...changes, ...jev].map((u) => u.taskId)),
+    ];
     if (ids.length) {
       const supabase = createClient();
       const { data } = await supabase
         .from('tasks')
-        .select('id, issue_title, issue_url, pr_url, amount')
+        .select('id, issue_title, issue_url, pr_url, amount, status')
         .in('id', ids);
       setTasks(
         Object.fromEntries(((data as TaskRef[]) ?? []).map((t) => [t.id, t]))
@@ -282,6 +297,40 @@ export function LastSyncCard({ userId }: { userId: string }) {
   const actions = updates.filter(
     (u) => u.confidence >= 0.6 && ACTION_STATUSES.has(u.suggestedStatus)
   );
+  const suggestions = ((log.details?.jev as JevSuggestion[] | undefined) ?? [])
+    .map((j) => ({
+      ...j,
+      p: j.choice ? (j.probabilities?.[j.choice] ?? j.confidence ?? 0) : 0,
+    }))
+    .filter(
+      (j) =>
+        j.choice &&
+        j.p >= JEV_SUGGEST_MIN &&
+        tasks[j.taskId] &&
+        tasks[j.taskId].status !== j.choice &&
+        statusByKey.has(j.choice)
+    );
+
+  const applySuggestion = async (taskId: string, status: string) => {
+    const group = statusByKey.get(status)?.group_name;
+    const { error } = await createClient()
+      .from('tasks')
+      .update({
+        status,
+        ...(group ? { status_group: group } : {}),
+        status_changed_at: new Date().toISOString(),
+      })
+      .eq('id', taskId);
+    if (error) {
+      toast.error(`Could not update the status: ${error.message}`);
+      return;
+    }
+    setTasks((prev) => ({
+      ...prev,
+      [taskId]: { ...prev[taskId], status },
+    }));
+    toast.success(`Status set to ${statusByKey.get(status)?.label ?? status}`);
+  };
 
   const endedAt = log.completed_at ?? log.started_at;
   const durationMs = log.completed_at
@@ -452,7 +501,9 @@ export function LastSyncCard({ userId }: { userId: string }) {
           </div>
         )}
 
-        {(changes.length > 0 || actions.length > 0) && (
+        {(changes.length > 0 ||
+          actions.length > 0 ||
+          suggestions.length > 0) && (
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="flex flex-col gap-2">
               <p className="text-xs font-medium tracking-wide text-muted-foreground">
@@ -462,6 +513,45 @@ export function LastSyncCard({ userId }: { userId: string }) {
                 <p className="text-sm text-muted-foreground">
                   No status changed in this run.
                 </p>
+              )}
+              {suggestions.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  <p className="text-[11px] text-muted-foreground">
+                    Suggested by Jev, not applied
+                  </p>
+                  {suggestions.map((j) => {
+                    const t = tasks[j.taskId];
+                    return (
+                      <div
+                        key={`jev-${j.taskId}`}
+                        className="flex h-11 items-center justify-between gap-3 border-b border-dashed border-border last:border-b-0"
+                      >
+                        <Link
+                          href={`/tasks/${j.taskId}`}
+                          className="min-w-0 truncate text-sm hover:underline"
+                        >
+                          {t.issue_title ?? shortRef(t.issue_url)}
+                        </Link>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <StatusPill status={statusByKey.get(t.status)} />
+                          <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                          <StatusPill status={statusByKey.get(j.choice!)} />
+                          <span className="w-8 text-right font-mono text-[11px] text-muted-foreground">
+                            {j.p.toFixed(2)}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => applySuggestion(j.taskId, j.choice!)}
+                          >
+                            Apply
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
               {visibleChanges.map((c) => {
                 const t = tasks[c.taskId];
