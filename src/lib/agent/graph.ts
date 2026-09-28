@@ -26,7 +26,9 @@ import { userSetStatus } from './manual';
 import {
   computeTaskFacts,
   holdUntilPaymentDue,
+  unansweredReviewerFeedback,
   DEPLOY_COMMENT_RE,
+  type ReviewerNote,
 } from './facts';
 import {
   fetchIssue,
@@ -42,6 +44,7 @@ import {
   fetchComment,
   fetchPRCommentsSince,
   fetchIssueTimeline,
+  fetchCommitDate,
   type PrCommentRef,
 } from '@/lib/github';
 import type { Task, TaskStatus, UserStatus } from '@/types/database';
@@ -113,12 +116,17 @@ const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
 const HELP_WANTED_RE = /help\s*-?\s*wanted/i;
 
 function isBot(user: { login: string; type?: string }): boolean {
-  return user.type === 'Bot' || /\[bot\]$|-bot$|^claude$/i.test(user.login);
+  return (
+    user.type === 'Bot' || /\[bot\]$|-bot$|^claude$|^melvin/i.test(user.login)
+  );
 }
 const EVENT_WINDOW = 30;
 const LEAD_REPLY_WINDOW = 20;
 const LEAD_CANDIDATE_CAP = 5;
 const TIMELINE_PAGE_CAP = 5;
+const FEEDBACK_WINDOW = 8;
+// GitHub computes mergeability lazily and answers null until it has.
+const MERGEABLE_RETRY_MS = 2000;
 // Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
 const SIGNAL_EVENTS = new Set([
   'assigned',
@@ -206,8 +214,46 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     // null = GitHub did not answer (403/404/5xx); the prompt must not read
     // that as "checks pass".
     let failingChecks: string[] | null = [];
+    let reviewerFeedback: ReviewerNote[] | null = null;
     if (prData && prData.state === 'open' && !prData.merged) {
       const prParsed = parsePrUrl(prData.html_url);
+      if (prParsed && prData.mergeable === null) {
+        await new Promise((r) => setTimeout(r, MERGEABLE_RETRY_MS));
+        prData = await fetchPR(
+          prParsed.owner,
+          prParsed.repo,
+          prParsed.number,
+          token
+        );
+      }
+      if (
+        prParsed &&
+        username &&
+        prData.user.login.toLowerCase() === username.toLowerCase()
+      ) {
+        const lastPushAt = await fetchCommitDate(
+          prParsed.owner,
+          prParsed.repo,
+          prData.head.sha,
+          token
+        ).catch(() => null);
+        if (lastPushAt) {
+          const since = await fetchPRCommentsSince(
+            prParsed.owner,
+            prParsed.repo,
+            prParsed.number,
+            lastPushAt,
+            token
+          );
+          reviewerFeedback = unansweredReviewerFeedback({
+            comments: since,
+            reviews: reviews ?? [],
+            developer: username,
+            lastPushAt,
+            isBot,
+          });
+        }
+      }
       if (prParsed) {
         failingChecks =
           (
@@ -281,6 +327,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       },
       new Date()
     );
+    facts.unanswered_reviewer_feedback = reviewerFeedback?.length ?? null;
 
     const deterministicChanged = hasChangedSince({
       lastSyncedAt: task.last_synced_at,
@@ -395,6 +442,14 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
               user: c.user.login,
               body: c.body.slice(0, 500),
               created_at: c.created_at,
+            }))
+          )
+        : undefined,
+      reviewerFeedback: reviewerFeedback?.length
+        ? JSON.stringify(
+            reviewerFeedback.slice(-FEEDBACK_WINDOW).map((n) => ({
+              ...n,
+              body: n.body.slice(0, 500),
             }))
           )
         : undefined,

@@ -22,6 +22,7 @@ export interface TaskFacts {
   days_since_merge: number | null;
   days_since_assigned: number | null;
   days_since_last_activity: number | null;
+  unanswered_reviewer_feedback: number | null;
 }
 
 export interface TaskFactsInput {
@@ -92,6 +93,7 @@ export function computeTaskFacts(input: TaskFactsInput, now: Date): TaskFacts {
     days_since_merge: daysSince(input.pr?.merged_at, now),
     days_since_assigned: daysSince(input.assignedDate, now),
     days_since_last_activity: daysSince(input.issueUpdatedAt, now),
+    unanswered_reviewer_feedback: null,
   };
 }
 
@@ -108,4 +110,46 @@ export function holdUntilPaymentDue(
     return status;
   }
   return statusKeys.has('merged') ? 'merged' : currentStatus;
+}
+
+export interface ReviewerNote {
+  user: string;
+  body: string;
+  created_at: string;
+}
+
+// Expensify's C+ reviewers rarely use "Request changes": they leave a
+// COMMENTED review, inline comments or a PR comment. Feedback counts as open
+// until the developer pushes or replies after it.
+export function unansweredReviewerFeedback(input: {
+  comments: GitHubComment[];
+  reviews: GitHubReview[];
+  developer: string;
+  lastPushAt: string;
+  isBot: (user: GitHubComment['user']) => boolean;
+}): ReviewerNote[] {
+  const dev = input.developer.toLowerCase();
+  const notes = [
+    ...input.comments.map((c) => ({
+      user: c.user,
+      body: c.body,
+      at: c.created_at,
+    })),
+    ...input.reviews
+      .filter((r) => r.body?.trim() && r.submitted_at)
+      .map((r) => ({ user: r.user, body: r.body ?? '', at: r.submitted_at })),
+  ];
+  let cutoff = input.lastPushAt;
+  for (const n of notes) {
+    if (n.user.login.toLowerCase() === dev && n.at > cutoff) cutoff = n.at;
+  }
+  return notes
+    .filter(
+      (n) =>
+        n.at > cutoff &&
+        n.user.login.toLowerCase() !== dev &&
+        !input.isBot(n.user)
+    )
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .map((n) => ({ user: n.user.login, body: n.body, created_at: n.at }));
 }

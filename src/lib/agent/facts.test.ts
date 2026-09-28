@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeTaskFacts,
   holdUntilPaymentDue,
+  unansweredReviewerFeedback,
   PRODUCTION_DEPLOY_RE,
   DEPLOY_COMMENT_RE,
   type TaskFacts,
@@ -215,5 +216,84 @@ describe('holdUntilPaymentDue', () => {
     expect(holdUntilPaymentDue('reviewing', facts(null), keys, 'merged')).toBe(
       'reviewing'
     );
+  });
+});
+
+describe('unansweredReviewerFeedback', () => {
+  const user = (login: string, type = 'User') =>
+    ({ login, type }) as GitHubComment['user'];
+  const comment = (login: string, at: string, body = 'x') =>
+    ({ user: user(login), body, created_at: at }) as GitHubComment;
+  const isBot = (u: GitHubComment['user']) => u.type === 'Bot';
+  const base = {
+    reviews: [] as GitHubReview[],
+    developer: 'mukhrr',
+    lastPushAt: '2026-09-22T00:00:00Z',
+    isBot,
+  };
+
+  it('keeps reviewer comments after the last push', () => {
+    const out = unansweredReviewerFeedback({
+      ...base,
+      comments: [
+        comment('brunovjk', '2026-09-25T13:00:00Z', 'race condition?'),
+      ],
+    });
+    expect(out).toEqual([
+      {
+        user: 'brunovjk',
+        body: 'race condition?',
+        created_at: '2026-09-25T13:00:00Z',
+      },
+    ]);
+  });
+
+  it('drops feedback the developer already replied to', () => {
+    const out = unansweredReviewerFeedback({
+      ...base,
+      comments: [
+        comment('brunovjk', '2026-09-25T13:00:00Z'),
+        comment('mukhrr', '2026-09-25T14:00:00Z'),
+      ],
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('ignores bots and anything before the push', () => {
+    const out = unansweredReviewerFeedback({
+      ...base,
+      comments: [
+        {
+          ...comment('codecov', '2026-09-25T13:00:00Z'),
+          user: user('codecov', 'Bot'),
+        },
+        comment('brunovjk', '2026-09-20T13:00:00Z'),
+      ],
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('counts a COMMENTED review with a body, not an empty one', () => {
+    const review = (body: string | null) =>
+      ({
+        user: user('dmkt9'),
+        state: 'COMMENTED',
+        body,
+        submitted_at: '2026-09-28T04:12:00Z',
+      }) as GitHubReview;
+    expect(
+      unansweredReviewerFeedback({
+        ...base,
+        comments: [],
+        reviews: [review('please fix reload')],
+      })
+    ).toHaveLength(1);
+    expect(
+      unansweredReviewerFeedback({
+        ...base,
+        comments: [],
+        reviews: [review('')],
+      })
+    ).toHaveLength(0);
   });
 });

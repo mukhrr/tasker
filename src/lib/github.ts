@@ -119,6 +119,18 @@ export async function fetchPRCommentsSince(
   );
 }
 
+export async function fetchCommitDate(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string
+): Promise<string | null> {
+  const commit = await githubFetch<{
+    commit: { committer: { date: string } | null };
+  }>(`/repos/${owner}/${repo}/commits/${sha}`, token);
+  return commit.commit.committer?.date ?? null;
+}
+
 export function parsePrUrl(url: string): {
   owner: string;
   repo: string;

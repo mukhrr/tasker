@@ -75,6 +75,7 @@ function statusRules(keys: Set<string>): string {
     rules.push(`**changes_required**: the developer's open PR needs their action for any of:
 1. \`failing_checks\` is non-empty (TypeScript, tests, lint, or any CI job) or \`merge_conflicts\` is true
 2. \`latest_human_review_state\` is CHANGES_REQUESTED and \`pushed_after_changes_requested\` is false
+3. \`unanswered_reviewer_feedback\` is above 0 and that Reviewer Feedback asks the developer to change, fix, retest or answer something. Reviewers here usually comment instead of requesting changes, so a question or a reported bug counts. Acknowledgements, "I'll test on Monday" and status notes do not.
 Bot reviews (Claude reviewers, melvin) never count, and a review the developer left on someone else's PR never counts. \`failing_checks\` null means GitHub did not report CI state: do not infer passing, keep the current status unless reviews say otherwise. When you choose this status, the summary MUST list exactly what has to change: the failing check names, "merge conflicts", or the reviewer's requests. If the developer already pushed after the request and checks pass, use **reviewing**.`);
   }
   if (keys.has('approved')) {
@@ -202,6 +203,7 @@ export function buildAnalysisPrompt(data: {
   prData?: string;
   comments?: string;
   reviews?: string;
+  reviewerFeedback?: string;
   events?: string;
   existingPrUrl?: string | null;
   existingAssignedDate?: string | null;
@@ -267,6 +269,9 @@ export function buildAnalysisPrompt(data: {
   }
   if (data.comments) {
     prompt += `## Comments (most recent last)\n${data.comments}\n\n`;
+  }
+  if (data.reviewerFeedback) {
+    prompt += `## Reviewer Feedback Since The Developer's Last Push Or Reply\n${data.reviewerFeedback}\n\n`;
   }
   if (data.reviews) {
     prompt += `## PR Reviews\n${data.reviews}\n\n`;
