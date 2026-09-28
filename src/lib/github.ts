@@ -60,6 +60,65 @@ export function issueKey(t: {
   ).toLowerCase();
 }
 
+export interface PrCommentRef {
+  owner: string;
+  repo: string;
+  number: number;
+  commentId: number;
+  kind: 'issue' | 'review';
+}
+
+// A comment on a pull request, kept as a lead for a possible new issue.
+export function parsePrCommentUrl(url: string): PrCommentRef | null {
+  const match = url.match(
+    /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)[^#]*#(issuecomment-|discussion_r)(\d+)/
+  );
+  if (!match) return null;
+  return {
+    owner: match[1],
+    repo: match[2],
+    number: parseInt(match[3], 10),
+    commentId: parseInt(match[5], 10),
+    kind: match[4] === 'discussion_r' ? 'review' : 'issue',
+  };
+}
+
+export async function fetchComment(
+  ref: PrCommentRef,
+  token: string
+): Promise<GitHubComment> {
+  const kind = ref.kind === 'review' ? 'pulls' : 'issues';
+  return githubFetch<GitHubComment>(
+    `/repos/${ref.owner}/${ref.repo}/${kind}/comments/${ref.commentId}`,
+    token
+  );
+}
+
+// Conversation and review-thread comments on a PR from `since` on. A long PR
+// has more than a page of comments, and only the ones after the lead matter.
+export async function fetchPRCommentsSince(
+  owner: string,
+  repo: string,
+  number: number,
+  since: string,
+  token: string
+): Promise<GitHubComment[]> {
+  const q = `since=${encodeURIComponent(since)}&per_page=100`;
+  const [issue, review] = await Promise.all([
+    githubFetch<GitHubComment[]>(
+      `/repos/${owner}/${repo}/issues/${number}/comments?${q}`,
+      token
+    ),
+    githubFetch<GitHubComment[]>(
+      `/repos/${owner}/${repo}/pulls/${number}/comments?${q}`,
+      token
+    ),
+  ]);
+  return [...issue, ...review].sort((a, b) =>
+    a.created_at.localeCompare(b.created_at)
+  );
+}
+
 export function parsePrUrl(url: string): {
   owner: string;
   repo: string;
@@ -174,10 +233,11 @@ export async function fetchIssueTimeline(
   owner: string,
   repo: string,
   number: number,
-  token: string
+  token: string,
+  page = 1
 ): Promise<Record<string, unknown>[]> {
   return githubFetch<Record<string, unknown>[]>(
-    `/repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    `/repos/${owner}/${repo}/issues/${number}/timeline?per_page=100&page=${page}`,
     token
   );
 }

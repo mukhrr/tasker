@@ -3,7 +3,16 @@ import {
   buildSystemPrompt,
   buildAnalysisPrompt,
   buildGenerationPrompt,
+  buildLeadSystemPrompt,
+  buildLeadPrompt,
 } from './prompts';
+import {
+  crossReferencedIssues,
+  mentionedIssueNumbers,
+  leadUpdate,
+  parseLeadResult,
+  type LeadCandidate,
+} from './lead';
 import type { Analyzer } from './llm';
 import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
 import { hasChangedSince } from './gate';
@@ -22,8 +31,13 @@ import {
   fetchIssueEvents,
   parseIssueUrl,
   parsePrUrl,
+  parsePrCommentUrl,
   findLinkedPR,
   fetchFailingChecks,
+  fetchComment,
+  fetchPRCommentsSince,
+  fetchIssueTimeline,
+  type PrCommentRef,
 } from '@/lib/github';
 import type { Task, TaskStatus, UserStatus } from '@/types/database';
 import type { GitHubIssue, GitHubPullRequest } from '@/types/github';
@@ -40,6 +54,8 @@ export interface TaskUpdate {
   assigned_date?: string | null;
   payment_date?: string | null;
   amount?: number | null;
+  // Set only when a PR-comment lead became a new issue: the task moves to it.
+  issue_url?: string;
 }
 
 export interface JevObservation {
@@ -93,6 +109,9 @@ function isBot(user: { login: string; type?: string }): boolean {
   return user.type === 'Bot' || /\[bot\]$|-bot$|^claude$/i.test(user.login);
 }
 const EVENT_WINDOW = 30;
+const LEAD_REPLY_WINDOW = 20;
+const LEAD_CANDIDATE_CAP = 5;
+const TIMELINE_PAGE_CAP = 5;
 // Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
 const SIGNAL_EVENTS = new Set([
   'assigned',
@@ -129,6 +148,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
   const parsed = parseIssueUrl(task.issue_url);
   if (!parsed) {
+    const lead = parsePrCommentUrl(task.issue_url);
+    if (lead) return analyzeLead(state, task, lead);
     return {
       errors: [...state.errors, `Could not parse issue URL: ${task.issue_url}`],
     };
@@ -490,13 +511,143 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
   }
 }
 
+// The newest cross-references are on the last timeline pages, and a busy PR
+// runs past one page.
+async function fetchTimeline(
+  ref: PrCommentRef,
+  token: string
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  for (let page = 1; page <= TIMELINE_PAGE_CAP; page++) {
+    const batch = await fetchIssueTimeline(
+      ref.owner,
+      ref.repo,
+      ref.number,
+      token,
+      page
+    );
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+async function analyzeLead(
+  state: State,
+  task: Task,
+  ref: PrCommentRef
+): Promise<Partial<State>> {
+  try {
+    const token = state.githubToken;
+    const anchor = await fetchComment(ref, token);
+    const [pr, replies, timeline] = await Promise.all([
+      fetchPR(ref.owner, ref.repo, ref.number, token),
+      fetchPRCommentsSince(
+        ref.owner,
+        ref.repo,
+        ref.number,
+        anchor.created_at,
+        token
+      ),
+      fetchTimeline(ref, token),
+    ]);
+    const after = replies.filter(
+      (c) => c.id !== anchor.id && c.created_at >= anchor.created_at
+    );
+
+    const candidates: LeadCandidate[] = crossReferencedIssues(
+      timeline,
+      anchor.created_at
+    );
+    const mentioned = mentionedIssueNumbers(
+      after,
+      ref.owner,
+      ref.repo,
+      candidates.map((c) => c.number)
+    ).slice(0, LEAD_CANDIDATE_CAP);
+    for (const n of mentioned) {
+      const issue = await fetchIssue(ref.owner, ref.repo, n, token).catch(
+        () => null
+      );
+      if (!issue) continue;
+      candidates.push({
+        url: issue.html_url,
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        assignees: issue.assignees.map((a) => a.login),
+        created_at: issue.created_at,
+      });
+    }
+
+    const content = await state.analyze(
+      buildLeadSystemPrompt(),
+      buildLeadPrompt({
+        githubUsername: state.githubUsername,
+        leadUrl: task.issue_url,
+        pr: {
+          title: pr.title,
+          author: pr.user.login,
+          state: pr.state,
+          merged: pr.merged,
+          merged_at: pr.merged_at,
+        },
+        lead: {
+          user: anchor.user.login,
+          body: anchor.body.slice(0, 1500),
+          created_at: anchor.created_at,
+        },
+        replies: after.slice(0, LEAD_REPLY_WINDOW).map((c) => ({
+          user: c.user.login,
+          body: c.body.slice(0, 800),
+          created_at: c.created_at,
+        })),
+        candidates,
+        today: new Date().toISOString().slice(0, 10),
+      })
+    );
+    const result = parseLeadResult(content);
+    if (!result) {
+      return {
+        errors: [
+          ...state.errors,
+          `Could not parse AI response for task ${task.id}`,
+        ],
+      };
+    }
+    const lead = leadUpdate(
+      result,
+      candidates,
+      task.status,
+      state.userStatuses
+    );
+    const update: TaskUpdate = {
+      taskId: task.id,
+      suggestedStatus: lead.suggestedStatus,
+      confidence: lead.confidence,
+      summary: lead.summary,
+      flags: [],
+      issue_url: lead.issue_url,
+    };
+    await state.onUpdate(update);
+    return { updates: [...state.updates, update] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (FATAL_ERROR_RE.test(message)) throw err;
+    return {
+      errors: [...state.errors, `Error processing task ${task.id}: ${message}`],
+    };
+  }
+}
+
 async function advanceOrFinish(state: State): Promise<Partial<State>> {
   await state.onProgress(state.currentIndex + 1, state.tasks.length);
   return { currentIndex: state.currentIndex + 1 };
 }
 
+// Runs after advanceOrFinish, so currentIndex already names the next task.
 function shouldContinue(state: State): string {
-  if (state.currentIndex + 1 < state.tasks.length) {
+  if (state.currentIndex < state.tasks.length) {
     return 'fetchGithubData';
   }
   return END;

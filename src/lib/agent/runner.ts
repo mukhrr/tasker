@@ -5,6 +5,7 @@ import { deciderFromEnv, jevModeFromEnv } from './jev';
 import type { JevObservation } from './graph';
 import { userSetStatus } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
+import { parseIssueUrl } from '@/lib/github';
 import type { Task, UserStatus } from '@/types/database';
 
 interface SyncCredentials {
@@ -217,6 +218,34 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       // Only set amount if not already set by user
       if (update.amount != null && !currentTask.amount)
         updateData.amount = update.amount;
+
+      if (update.issue_url) {
+        const target = parseIssueUrl(update.issue_url);
+        const { data: existing } = target
+          ? await supabase
+              .from('tasks')
+              .select('id')
+              .eq('user_id', userId)
+              .ilike('repo_owner', target.owner)
+              .ilike('repo_name', target.repo)
+              .eq('issue_number', target.number)
+              .neq('id', currentTask.id)
+              .limit(1)
+          : { data: null };
+        if (target && !existing?.length) {
+          updateData.issue_url = update.issue_url;
+          updateData.repo_owner = target.owner;
+          updateData.repo_name = target.repo;
+          updateData.issue_number = target.number;
+          // The next sync rewrites the summary, so the origin lives in the note.
+          const origin = `From PR comment: ${currentTask.issue_url}`;
+          updateData.note = currentTask.note
+            ? `${currentTask.note}\n${origin}`
+            : origin;
+        } else if (target) {
+          updateData.ai_summary = `${update.summary} ${update.issue_url} is already another task.`;
+        }
+      }
 
       const { error } = await supabase
         .from('tasks')

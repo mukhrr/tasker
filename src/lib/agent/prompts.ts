@@ -273,3 +273,45 @@ export function buildAnalysisPrompt(data: {
 
   return prompt;
 }
+
+export function buildLeadSystemPrompt(): string {
+  return `You track a lead for an open-source bounty developer: a bug they reported in a comment on a pull request, kept in case it becomes a new paid GitHub issue for them. Read what happened after that comment and classify the outcome.
+
+- "new_issue": a new issue was opened for this bug, by MelvinBot, the C+ reviewer, an internal engineer or the developer. newIssueUrl must be one of the Candidate Issues, created after the lead.
+- "fixed_in_pr": it was decided to fix the bug in this same PR, or the developer said it is already handled there.
+- "duplicate": it was judged a duplicate of an existing issue, one that predates the lead. Name that issue and who it is assigned to in the summary.
+- "declined": it was judged expected behaviour, not a bug, or not worth fixing.
+- "pending": no decision yet. Say who it is waiting on and since when.
+
+A request to create an issue that was not carried out is not "new_issue". Judge from what the people in the thread decided, not from whether you think the bug is real.
+
+Return ONLY a JSON object, no prose and no code fences:
+{
+  "outcome": "<new_issue | fixed_in_pr | duplicate | declined | pending>",
+  "newIssueUrl": "<a Candidate Issue URL, only for new_issue, else null>",
+  "confidence": <0 to 1>,
+  "summary": "<1-2 sentences of fact: what was decided, by whom, and what it means for the developer>"
+}`;
+}
+
+export function buildLeadPrompt(data: {
+  githubUsername: string;
+  leadUrl: string;
+  pr: Record<string, unknown>;
+  lead: { user: string; body: string; created_at: string };
+  replies: { user: string; body: string; created_at: string }[];
+  candidates: unknown[];
+  today: string;
+}): string {
+  let prompt = `## Context\nDeveloper: **${data.githubUsername}**\nToday: ${data.today}\nLead: ${data.leadUrl}\n\n`;
+  prompt += `## Pull Request\n${JSON.stringify(data.pr)}\n\n`;
+  prompt += `## The Lead Comment\n${JSON.stringify(data.lead)}\n\n`;
+  prompt += data.replies.length
+    ? `## Replies After The Lead (oldest first)\n${JSON.stringify(data.replies)}\n\n`
+    : `## Replies After The Lead\nNone.\n\n`;
+  prompt += data.candidates.length
+    ? `## Candidate Issues\nIssues that link back to this PR or are linked in the replies.\n${JSON.stringify(data.candidates)}\n\n`
+    : `## Candidate Issues\nNone.\n\n`;
+  prompt += `Classify what happened to this lead and return the JSON object.`;
+  return prompt;
+}

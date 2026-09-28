@@ -31,6 +31,8 @@ The model call is an `Analyzer` (`llm.ts`: `(system, user) => Promise<string>`).
 
 A `Decider` (`jev.ts`) optionally runs before the analyzer: a deterministic change gate (`gate.ts`), then Jev (TypeSafe's API when `TYPESAFE_API_KEY` is set, else Cloudflare Workers AI) for a material-change Noul and a status Choice built from the user's taxonomy (`questions.ts`). Date comparisons are precomputed in `facts.ts` because Jev cannot do them. `JEV_MODE` is `off` (default), `shadow` (records both answers in `sync_logs.details.jev`) or `on` (Jev decides and the gate skips). Any Jev failure falls back to the LLM path. Design: `docs/superpowers/specs/2026-09-22-jev-decision-tier-design.md`.
 
+A task whose link is a comment on a PR is a *lead* (`lead.ts`): a bug the developer reported on someone's PR. The sync reads the replies after it and any issue linking back, then relinks the task to a new issue, marks it `wasted` (fixed in that PR, duplicate, declined), or leaves it as is while nobody has decided.
+
 Auto-sync: `user_settings.auto_sync_enabled` + `sync_interval_hours`; a user is due when the latest `sync_logs.started_at` is older than the interval (`schedule.ts` `isSyncDue`). CLI users are scheduled by the syncer worker every tick; API-key users by `GET /api/cron/sync`, whose GitHub Actions schedule is paused (`.github/workflows/sync-cron.yml`). One sync per user in flight; the toolbar polls `sync_logs` for queued runs (`lib/sync-poll.ts`). Full write-up: README "How sync works".
 
 ### Task Table (`components/task-table/`)
