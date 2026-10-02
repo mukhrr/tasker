@@ -1,0 +1,365 @@
+'use client';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { issueKey, parseIssueUrl } from '@/lib/github';
+import { waitForQueuedSync } from '@/lib/sync-poll';
+import { friendlySyncError } from '@/lib/sync-errors';
+import type { Task, TaskStatus } from '@/types/database';
+
+const supabase = createClient();
+
+// Minimal row shape the hook needs: realtime merge (id) + repo/issue dedup keys.
+type TaskListItem = Pick<
+  Task,
+  | 'id'
+  | 'issue_url'
+  | 'repo_owner'
+  | 'repo_name'
+  | 'issue_number'
+  | 'created_at'
+>;
+
+// Deduplicate by issue identity (keep the first — most recent by created_at)
+export function dedupeTasks<T extends TaskListItem>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((t) => {
+    const key = issueKey(t);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function useTasks<T extends TaskListItem = Task>(
+  userId: string,
+  options?: { initialTasks?: T[]; columns?: string }
+) {
+  const [tasks, setTasks] = useState<T[]>(() =>
+    options?.initialTasks ? dedupeTasks(options.initialTasks) : []
+  );
+  const [loading, setLoading] = useState(!options?.initialTasks);
+  const [syncingTaskIds, setSyncingTaskIds] = useState<Set<string>>(new Set());
+  const channelId = useRef(`tasks-realtime-${crypto.randomUUID()}`);
+  const seeded = useRef(!!options?.initialTasks);
+  const columns = options?.columns ?? '*';
+
+  const fetchTasks = useCallback(async () => {
+    const { data } = await supabase
+      .from('tasks')
+      .select(columns)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    // Rows match T because `columns` covers it (or is '*'); the client is untyped
+    setTasks(dedupeTasks((data as unknown as T[]) ?? []));
+    setLoading(false);
+  }, [userId, columns]);
+
+  useEffect(() => {
+    // Server-seeded data is fresh (RSC payload refetches per navigation);
+    // skip the duplicate mount fetch but refetch if userId ever changes.
+    if (seeded.current) {
+      seeded.current = false;
+    } else {
+      fetchTasks();
+    }
+
+    const channel = supabase
+      .channel(channelId.current)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const { eventType } = payload;
+          // Realtime payloads always carry the full row — a superset of T
+          if (eventType === 'INSERT') {
+            const newTask = payload.new as unknown as T;
+            setTasks((prev) => {
+              // Skip if already present (e.g. from optimistic add)
+              if (prev.some((t) => t.id === newTask.id)) return prev;
+              return [newTask, ...prev];
+            });
+          } else if (eventType === 'UPDATE') {
+            const updated = payload.new as unknown as T;
+            setTasks((prev) =>
+              prev.map((t) => (t.id === updated.id ? updated : t))
+            );
+          } else if (eventType === 'DELETE') {
+            const deleted = payload.old as { id: string };
+            setTasks((prev) => prev.filter((t) => t.id !== deleted.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const syncTask = async (taskId: string, opts?: { silent?: boolean }) => {
+    setSyncingTaskIds((prev) => new Set(prev).add(taskId));
+    try {
+      const res = await fetch('/api/sync/task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Sync failed');
+      }
+      if (res.status === 202) {
+        const { syncLogId } = await res.json();
+        const result = await waitForQueuedSync(syncLogId);
+        if (result.tasks_updated === 0 && result.errors.length) {
+          throw new Error(friendlySyncError(result.errors[0]));
+        }
+      }
+      await fetchTasks();
+    } catch (err) {
+      if (!opts?.silent) throw err;
+    } finally {
+      setSyncingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const addTask = async (issueUrl: string) => {
+    const parsed = parseIssueUrl(issueUrl);
+    const key = issueKey({ issue_url: issueUrl });
+    const duplicate = tasks.find((t) => issueKey(t) === key);
+    if (duplicate) {
+      throw new Error('This issue is already in your task list.');
+    }
+
+    const newTask = {
+      user_id: userId,
+      issue_url: issueUrl,
+      status: 'in_proposal' as TaskStatus,
+      status_group: 'todo',
+      repo_owner: parsed?.owner ?? null,
+      repo_name: parsed?.repo ?? null,
+      issue_number: parsed?.number ?? null,
+    };
+
+    // Optimistic: add a temp task
+    const tempId = crypto.randomUUID();
+    const optimistic: Task = {
+      ...newTask,
+      id: tempId,
+      issue_title: null,
+      additional_bugs_fixed: 0,
+      pr_url: null,
+      status_group: 'todo',
+      amount: null,
+      payment_date: null,
+      assigned_date: null,
+      note: null,
+      ai_summary: null,
+      archived: false,
+      last_synced_at: null,
+      status_changed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // CRUD paths only run from the task table, where T = Task
+    setTasks((prev) => [optimistic as unknown as T, ...prev]);
+    setSyncingTaskIds((prev) => new Set(prev).add(tempId));
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert(newTask)
+      .select()
+      .single();
+
+    if (error) {
+      setTasks((prev) => prev.filter((t) => t.id !== tempId));
+      setSyncingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(tempId);
+        return next;
+      });
+      throw error;
+    }
+
+    // Replace optimistic with real task
+    const realTask = data as unknown as T & { id: string };
+    setTasks((prev) => prev.map((t) => (t.id === tempId ? realTask : t)));
+
+    // Transfer syncing state from temp to real ID
+    setSyncingTaskIds((prev) => {
+      const next = new Set(prev);
+      next.delete(tempId);
+      next.add(realTask.id);
+      return next;
+    });
+
+    // Auto-sync the newly added task in the background
+    syncTask(realTask.id, { silent: true });
+  };
+
+  const updateTask = async (id: string, updates: Partial<Task>) => {
+    // Track status change timestamp
+    if ('status' in updates) {
+      updates.status_changed_at = new Date().toISOString();
+    }
+
+    // Optimistic update
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? ({ ...t, ...updates } as T) : t))
+    );
+
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  // Bulk counterpart of updateTask: one PATCH filtered by `in`, not N round
+  // trips, so a 50-row status change is a single request and a single realtime
+  // burst. Same status_changed_at bookkeeping as the single-row path.
+  const updateTasks = async (ids: string[], updates: Partial<Task>) => {
+    if (ids.length === 0) return;
+    const patch: Partial<Task> = { ...updates };
+    if ('status' in patch) {
+      patch.status_changed_at = new Date().toISOString();
+    }
+
+    const targeted = new Set(ids);
+    setTasks((prev) =>
+      prev.map((t) => (targeted.has(t.id) ? ({ ...t, ...patch } as T) : t))
+    );
+
+    const { error } = await supabase.from('tasks').update(patch).in('id', ids);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  // Undo for a bulk edit. Each row gets its own prior values back, so this
+  // can't go through updateTasks (one value for everyone). Rows that shared
+  // the same prior values are restored together, so undoing a 50-row change
+  // is typically one or two PATCHes rather than 50.
+  const restoreTasks = async (
+    snapshots: { id: string; values: Partial<Task> }[]
+  ) => {
+    if (snapshots.length === 0) return;
+
+    const byId = new Map(snapshots.map((s) => [s.id, s.values]));
+    setTasks((prev) =>
+      prev.map((t) => (byId.has(t.id) ? ({ ...t, ...byId.get(t.id) } as T) : t))
+    );
+
+    const groups = new Map<string, { values: Partial<Task>; ids: string[] }>();
+    for (const snapshot of snapshots) {
+      const key = JSON.stringify(snapshot.values);
+      const existing = groups.get(key);
+      if (existing) existing.ids.push(snapshot.id);
+      else groups.set(key, { values: snapshot.values, ids: [snapshot.id] });
+    }
+
+    for (const { values, ids } of groups.values()) {
+      const { error } = await supabase
+        .from('tasks')
+        .update(values)
+        .in('id', ids);
+      if (error) {
+        await fetchTasks();
+        throw error;
+      }
+    }
+  };
+
+  const deleteTasks = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const targeted = new Set(ids);
+    setTasks((prev) => prev.filter((t) => !targeted.has(t.id)));
+
+    const { error } = await supabase.from('tasks').delete().in('id', ids);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  // Clears the stale-row highlight by restarting the timer that drives it
+  // (getStaleRowBg colors a row once status_changed_at is older than that
+  // status's window — 3 days by default, 7 for awaiting_payment). Writing "now"
+  // is the same thing a real status change writes, so the row un-highlights
+  // immediately and highlights again a window later if the status still hasn't
+  // moved — this acknowledges the nag, it doesn't disable it.
+  const resetStaleTimer = async (id: string) => {
+    const status_changed_at = new Date().toISOString();
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? ({ ...t, status_changed_at } as T) : t))
+    );
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ status_changed_at })
+      .eq('id', id);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  const archiveTask = async (id: string, archived: boolean) => {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? ({ ...t, archived } as T) : t))
+    );
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ archived })
+      .eq('id', id);
+
+    if (error) {
+      await fetchTasks();
+      throw error;
+    }
+  };
+
+  return {
+    tasks,
+    loading,
+    syncingTaskIds,
+    addTask,
+    updateTask,
+    updateTasks,
+    restoreTasks,
+    deleteTask,
+    deleteTasks,
+    syncTask,
+    archiveTask,
+    resetStaleTimer,
+    refetch: fetchTasks,
+  };
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "plugins": []
+  },
+  "include": ["syncer/**/*.ts", "src/lib/**/*.ts", "src/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}

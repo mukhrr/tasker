@@ -1,0 +1,844 @@
+import { StateGraph, Annotation, END } from '@langchain/langgraph';
+import {
+  buildSystemPrompt,
+  buildAnalysisPrompt,
+  buildGenerationPrompt,
+  buildLeadSystemPrompt,
+  buildLeadPrompt,
+  LEAD_SCHEMA,
+  TASK_UPDATE_SCHEMA,
+} from './prompts';
+import {
+  crossReferencedIssues,
+  mentionedIssueNumbers,
+  leadUpdate,
+  parseLeadResult,
+  linkedBugsAfterMerge,
+  blamesPr,
+  type LeadCandidate,
+} from './lead';
+import type { Analyzer } from './llm';
+import type { Decider, JevChoiceAnswer, JevMode, JevNoulAnswer } from './jev';
+import { hasChangedSince } from './gate';
+import { paymentMoveTarget } from './payment-move';
+import {
+  materialChangeQuestion,
+  statusChoiceQuestion,
+  statusesMissingDescriptions,
+} from './questions';
+import { userSetStatus } from './manual';
+import {
+  computeTaskFacts,
+  paymentStatus,
+  holdLifted,
+  approvedByReviewer,
+  regressionFromLinkedBugs,
+  keepPending,
+  unansweredReviewerFeedback,
+  DEPLOY_COMMENT_RE,
+  type ReviewerNote,
+} from './facts';
+import {
+  fetchIssue,
+  fetchPR,
+  fetchIssueComments,
+  fetchPRReviews,
+  fetchIssueEvents,
+  parseIssueUrl,
+  parsePrUrl,
+  parsePrCommentUrl,
+  findLinkedPR,
+  fetchFailingChecks,
+  fetchComment,
+  fetchPRCommentsSince,
+  fetchIssueTimeline,
+  fetchCommitDate,
+  type PrCommentRef,
+} from '@/lib/github';
+import type { Task, TaskStatus, UserStatus } from '@/types/database';
+import type { GitHubIssue, GitHubPullRequest } from '@/types/github';
+
+export interface TaskUpdate {
+  taskId: string;
+  suggestedStatus: TaskStatus;
+  confidence: number;
+  summary: string;
+  flags: string[];
+  // Rich fields the AI can populate
+  issue_title?: string | null;
+  pr_url?: string | null;
+  assigned_date?: string | null;
+  payment_date?: string | null;
+  amount?: number | null;
+  // Set only when a PR-comment lead became a new issue: the task moves to it.
+  issue_url?: string;
+  // The issue payment was moved to: the task is archived and that one tracked.
+  payment_moved_to?: string;
+  // Issues opened after the PR merged that link it (QA bugs, regressions).
+  linked_bugs?: { number: number; title: string; url: string; state: string }[];
+}
+
+export interface JevObservation {
+  taskId: string;
+  deterministicChanged: boolean;
+  noul: number | null;
+  choice: string | null;
+  probabilities: Record<string, number> | null;
+  confidence: number | null;
+  llmStatus: string | null;
+  llmConfidence: number | null;
+  agree: boolean | null;
+  latencyMs: number | null;
+  error: string | null;
+}
+
+const GraphState = Annotation.Root({
+  tasks: Annotation<Task[]>,
+  githubToken: Annotation<string>,
+  analyze: Annotation<Analyzer>,
+  // Called as soon as a task's result is in, so partial progress survives
+  // an abort (usage limit, timeout) instead of being lost with the run.
+  onUpdate: Annotation<(update: TaskUpdate) => Promise<void>>,
+  onProgress: Annotation<(done: number, total: number) => Promise<void>>,
+  decide: Annotation<Decider | null>,
+  jevMode: Annotation<JevMode>,
+  gateThreshold: Annotation<number>,
+  onJev: Annotation<(observation: JevObservation) => void>,
+  skipped: Annotation<string[]>,
+  githubUsername: Annotation<string>,
+  userStatuses: Annotation<UserStatus[]>,
+  currentIndex: Annotation<number>,
+  updates: Annotation<TaskUpdate[]>,
+  errors: Annotation<string[]>,
+});
+
+type State = typeof GraphState.State;
+
+// Anthropic API auth/quota failures plus the CLI backends' equivalents
+// (see syncer/analyzers.ts): all mean every remaining task would fail too.
+const FATAL_ERROR_RE =
+  /\b401\b|authentication|invalid x-api-key|invalid_api_key|rate limit|^(claude|codex) (usage limit|not logged in)|Task write failed/i;
+
+export const COMMENT_WINDOW = 8;
+// Checks that fail until a reviewer acts (Expensify's checklist and
+// independent-approval gates) are not the developer's to fix.
+const REVIEWER_GATE_CHECK_RE = /independent approval|checklist|reviewer/i;
+const HELP_WANTED_RE = /help\s*-?\s*wanted/i;
+
+function isBot(user: { login: string; type?: string }): boolean {
+  return (
+    user.type === 'Bot' || /\[bot\]$|-bot$|^claude$|^melvin/i.test(user.login)
+  );
+}
+const EVENT_WINDOW = 30;
+const LEAD_REPLY_WINDOW = 20;
+const LEAD_CANDIDATE_CAP = 5;
+const TIMELINE_PAGE_CAP = 5;
+const FEEDBACK_WINDOW = 8;
+// GitHub computes mergeability lazily and answers null until it has.
+const MERGEABLE_RETRY_MS = 2000;
+// Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
+const SIGNAL_EVENTS = new Set([
+  'assigned',
+  'unassigned',
+  'labeled',
+  'unlabeled',
+  'closed',
+  'reopened',
+  'referenced',
+  'cross-referenced',
+  'connected',
+  'merged',
+]);
+
+// Jev degrades on large states full of irrelevant detail, so it sees a
+// digest rather than the full prompt the LLM gets.
+function analysisSummary(
+  issue: GitHubIssue,
+  prData: GitHubPullRequest | null
+): Record<string, unknown> {
+  return {
+    issue_state: issue.state,
+    labels: issue.labels.map((l) => l.name),
+    assignees: issue.assignees.map((a) => a.login),
+    pr_state: prData ? prData.state : null,
+    pr_merged: prData ? prData.merged : null,
+    pr_draft: prData ? prData.draft : null,
+  };
+}
+
+async function fetchGithubData(state: State): Promise<Partial<State>> {
+  const task = state.tasks[state.currentIndex];
+  if (!task) return state;
+
+  const parsed = parseIssueUrl(task.issue_url);
+  if (!parsed) {
+    const lead = parsePrCommentUrl(task.issue_url);
+    if (lead) return analyzeLead(state, task, lead);
+    return {
+      errors: [...state.errors, `Could not parse issue URL: ${task.issue_url}`],
+    };
+  }
+
+  let observation: JevObservation | null = null;
+
+  try {
+    const { owner, repo, number } = parsed;
+    const token = state.githubToken;
+    const username = state.githubUsername;
+    const isFirstSync = !task.last_synced_at;
+
+    // Fetch issue data, comments, and events in parallel
+    const [issue, comments, events] = await Promise.all([
+      fetchIssue(owner, repo, number, token),
+      fetchIssueComments(owner, repo, number, token),
+      fetchIssueEvents(owner, repo, number, token),
+    ]);
+
+    // Find or fetch linked PR
+    let prData = null;
+    let reviews = null;
+    let discoveredPrUrl: string | null = null;
+
+    if (task.pr_url) {
+      // PR already known
+      const prParsed = parsePrUrl(task.pr_url);
+      if (prParsed) {
+        [prData, reviews] = await Promise.all([
+          fetchPR(prParsed.owner, prParsed.repo, prParsed.number, token),
+          fetchPRReviews(prParsed.owner, prParsed.repo, prParsed.number, token),
+        ]);
+      }
+    } else if (username) {
+      // Try to discover linked PR by user
+      const linkedPR = await findLinkedPR(owner, repo, number, username, token);
+      if (linkedPR) {
+        prData = linkedPR;
+        discoveredPrUrl = linkedPR.html_url;
+        reviews = await fetchPRReviews(owner, repo, linkedPR.number, token);
+      }
+    }
+
+    // CI and merge state are what changes_required keys on; only an open,
+    // unmerged PR needs them.
+    // null = GitHub did not answer (403/404/5xx); the prompt must not read
+    // that as "checks pass".
+    let failingChecks: string[] | null = [];
+    let reviewerFeedback: ReviewerNote[] | null = null;
+    if (prData && prData.state === 'open' && !prData.merged) {
+      const prParsed = parsePrUrl(prData.html_url);
+      if (prParsed && prData.mergeable === null) {
+        await new Promise((r) => setTimeout(r, MERGEABLE_RETRY_MS));
+        prData = await fetchPR(
+          prParsed.owner,
+          prParsed.repo,
+          prParsed.number,
+          token
+        );
+      }
+      if (
+        prParsed &&
+        username &&
+        prData.user.login.toLowerCase() === username.toLowerCase()
+      ) {
+        const lastPushAt = await fetchCommitDate(
+          prParsed.owner,
+          prParsed.repo,
+          prData.head.sha,
+          token
+        ).catch(() => null);
+        if (lastPushAt) {
+          const since = await fetchPRCommentsSince(
+            prParsed.owner,
+            prParsed.repo,
+            prParsed.number,
+            lastPushAt,
+            token
+          );
+          reviewerFeedback = unansweredReviewerFeedback({
+            comments: since,
+            reviews: reviews ?? [],
+            developer: username,
+            lastPushAt,
+            isBot,
+          });
+        }
+      }
+      if (prParsed) {
+        failingChecks =
+          (
+            await fetchFailingChecks(
+              prParsed.owner,
+              prParsed.repo,
+              prData.head.sha,
+              token
+            )
+          )?.filter((name) => !REVIEWER_GATE_CHECK_RE.test(name)) ?? null;
+      }
+    }
+
+    let linkedBugs: LeadCandidate[] | null = null;
+    if (
+      prData?.merged &&
+      prData.merged_at &&
+      username &&
+      prData.user.login.toLowerCase() === username.toLowerCase()
+    ) {
+      const prParsed = parsePrUrl(prData.html_url);
+      if (prParsed) {
+        const timeline = await fetchTimeline(
+          prParsed.owner,
+          prParsed.repo,
+          prParsed.number,
+          token
+        ).catch(() => null);
+        if (timeline) {
+          const candidates = linkedBugsAfterMerge(
+            timeline,
+            prData.merged_at,
+            number
+          ).slice(0, LEAD_CANDIDATE_CAP);
+          const blamed = await Promise.all(
+            candidates.map(async (c) => {
+              const [bug, bugComments] = await Promise.all([
+                fetchIssue(prParsed.owner, prParsed.repo, c.number, token),
+                fetchIssueComments(
+                  prParsed.owner,
+                  prParsed.repo,
+                  c.number,
+                  token
+                ),
+              ]).catch(() => [null, []] as const);
+              const texts = [
+                bug?.body ?? '',
+                ...bugComments.map((x) => x.body),
+              ];
+              return blamesPr(texts, prParsed.number) ? c : null;
+            })
+          );
+          linkedBugs = blamed.filter((c): c is LeadCandidate => c !== null);
+        }
+      }
+    }
+
+    // Find assignment date from events
+    let assignedDate: string | null = null;
+    if (username) {
+      const assignEvent = events.find(
+        (e) =>
+          e.event === 'assigned' &&
+          e.assignee?.login?.toLowerCase() === username.toLowerCase()
+      );
+      if (assignEvent) {
+        assignedDate = assignEvent.created_at;
+      }
+    }
+
+    // Detect if user manually edited the task since last sync
+    const wasManuallyEdited = userSetStatus(task);
+
+    const signalEvents = events.filter((e) => SIGNAL_EVENTS.has(e.event));
+
+    // Bot reviews (Claude reviewers, melvin) never decide approved or
+    // changes_required; only a human C+ does.
+    const humanReviews = (reviews ?? []).filter((r) => !isBot(r.user));
+
+    // The production-deploy comment starts the 7-day payment clock and is
+    // often older than the last few comments, so keep it whatever its age.
+    const recent = comments.slice(-COMMENT_WINDOW);
+    const deployComments = comments.filter(
+      (c) => !recent.includes(c) && DEPLOY_COMMENT_RE.test(c.body)
+    );
+    const promptComments = [...deployComments, ...recent];
+
+    // Open issue handed to someone else: the bounty is lost even though
+    // nothing closed. Computed here so the model does not have to infer it.
+    // Expensify issues carry the BZ member and an internal engineer as
+    // assignees from day one, so "assignees without me" alone means nothing.
+    // The lost-bounty signal is Help Wanted having been removed again.
+    const helpWantedRemoved =
+      events.some(
+        (e) =>
+          e.event === 'unlabeled' && HELP_WANTED_RE.test(e.label?.name ?? '')
+      ) && !issue.labels.some((l) => HELP_WANTED_RE.test(l.name));
+    const assignedToOther =
+      issue.state === 'open' &&
+      !!username &&
+      helpWantedRemoved &&
+      issue.assignees.length > 0 &&
+      !issue.assignees.some(
+        (a) => a.login.toLowerCase() === username.toLowerCase()
+      ) &&
+      !prData;
+
+    const facts = computeTaskFacts(
+      {
+        comments,
+        pr: prData,
+        humanReviews,
+        assignedDate,
+        issueUpdatedAt: issue.updated_at,
+      },
+      new Date()
+    );
+    facts.unanswered_reviewer_feedback = reviewerFeedback?.length ?? null;
+    facts.approved_by_reviewer =
+      prData && username ? approvedByReviewer(humanReviews, username) : null;
+    facts.open_linked_bugs = linkedBugs
+      ? linkedBugs.filter((b) => b.state === 'open').length
+      : null;
+
+    const deterministicChanged = hasChangedSince({
+      lastSyncedAt: task.last_synced_at,
+      userEdited: wasManuallyEdited,
+      issueUpdatedAt: issue.updated_at,
+      prUpdatedAt: prData?.updated_at ?? null,
+      commentDates: comments.map((c) => c.created_at),
+      eventDates: signalEvents.map((e) => e.created_at),
+    });
+
+    observation = {
+      taskId: task.id,
+      deterministicChanged,
+      noul: null,
+      choice: null,
+      probabilities: null,
+      confidence: null,
+      llmStatus: null,
+      llmConfidence: null,
+      agree: null,
+      latencyMs: null,
+      error: null,
+    };
+
+    let jevChoice: JevChoiceAnswer | null = null;
+
+    if (state.jevMode !== 'off' && state.decide) {
+      const missing = statusesMissingDescriptions(state.userStatuses);
+      if (missing.length) {
+        console.warn(
+          `[jev] statuses without descriptions will be guessed: ${missing.join(', ')}`
+        );
+      }
+      const startedAt = Date.now();
+      const answers = await state.decide(
+        {
+          currentStatus: task.status,
+          facts,
+          issue: analysisSummary(issue, prData),
+        },
+        {
+          material: materialChangeQuestion(),
+          status: statusChoiceQuestion(state.userStatuses),
+        }
+      );
+      observation.latencyMs = Date.now() - startedAt;
+      if (!answers) {
+        observation.error = 'jev unavailable';
+      } else {
+        const material = answers.material as JevNoulAnswer | undefined;
+        const status = answers.status as JevChoiceAnswer | undefined;
+        observation.noul = material?.noul ?? null;
+        if (status?.type === 'choice') {
+          jevChoice = status;
+          observation.choice = status.choice;
+          observation.probabilities = status.probabilities ?? null;
+          observation.confidence = status.confidence ?? null;
+        }
+      }
+    }
+
+    if (state.jevMode === 'on' && observation) {
+      const material = observation.noul;
+      const unchanged =
+        !deterministicChanged ||
+        (material !== null && material < state.gateThreshold);
+      if (unchanged) {
+        state.onJev(observation);
+        return { skipped: [...state.skipped, task.id] };
+      }
+    }
+
+    // Build analysis prompt with all context. Compact JSON: the model reads it
+    // fine and it is roughly a third fewer tokens than pretty-printed.
+    const analysisData = {
+      currentStatus: task.status,
+      isFirstSync,
+      wasManuallyEdited,
+      assignedToOther,
+      developerNote: task.note?.trim() || undefined,
+      facts,
+      githubUsername: username,
+      issueTitle: issue.title,
+      issueData: JSON.stringify({
+        title: issue.title,
+        state: issue.state,
+        body: issue.body?.slice(0, 600) ?? null,
+        assignees: issue.assignees.map((a) => a.login),
+        labels: issue.labels.map((l) => l.name),
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+        closed_at: issue.closed_at,
+      }),
+      prData: prData
+        ? JSON.stringify({
+            title: prData.title,
+            state: prData.state,
+            merged: prData.merged,
+            merged_at: prData.merged_at,
+            draft: prData.draft,
+            review_comments: prData.review_comments,
+            html_url: prData.html_url,
+            user: prData.user.login,
+            created_at: prData.created_at,
+            updated_at: prData.updated_at,
+            merge_conflicts: prData.mergeable_state === 'dirty',
+            failing_checks: failingChecks,
+          })
+        : undefined,
+      comments: promptComments.length
+        ? JSON.stringify(
+            promptComments.map((c) => ({
+              user: c.user.login,
+              body: c.body.slice(0, 500),
+              created_at: c.created_at,
+            }))
+          )
+        : undefined,
+      linkedBugs: linkedBugs?.length
+        ? JSON.stringify(
+            linkedBugs.map((b) => ({
+              number: b.number,
+              title: b.title,
+              state: b.state,
+              created_at: b.created_at,
+            }))
+          )
+        : undefined,
+      reviewerFeedback: reviewerFeedback?.length
+        ? JSON.stringify(
+            reviewerFeedback.slice(-FEEDBACK_WINDOW).map((n) => ({
+              ...n,
+              body: n.body.slice(0, 500),
+            }))
+          )
+        : undefined,
+      reviews: humanReviews.length
+        ? JSON.stringify(
+            humanReviews.slice(-3).map((r) => ({
+              user: r.user.login,
+              state: r.state,
+              body: r.body?.slice(0, 300),
+              submitted_at: r.submitted_at,
+            }))
+          )
+        : undefined,
+      events: signalEvents.length
+        ? JSON.stringify(
+            signalEvents.slice(-EVENT_WINDOW).map((e) => ({
+              event: e.event,
+              actor: e.actor.login,
+              created_at: e.created_at,
+              assignee: e.assignee?.login,
+            }))
+          )
+        : undefined,
+      // Pre-extracted data for the AI to confirm or override
+      existingPrUrl: task.pr_url,
+      existingAssignedDate: task.assigned_date,
+      existingAmount: task.amount,
+      existingPaymentDate: task.payment_date,
+      discoveredPrUrl,
+      discoveredAssignedDate: assignedDate,
+    };
+
+    const prompt = buildAnalysisPrompt(analysisData);
+
+    // paid and wasted drop a task out of every future sync, so a wrong one
+    // is invisible afterwards: the LLM confirms those.
+    const terminal = new Set(
+      state.userStatuses
+        .filter((s) => s.group_name === 'complete')
+        .map((s) => s.key)
+    );
+    const useJevStatus =
+      state.jevMode === 'on' &&
+      jevChoice !== null &&
+      !terminal.has(jevChoice.choice);
+
+    const content = await state.analyze(
+      useJevStatus
+        ? buildGenerationPrompt(state.userStatuses)
+        : buildSystemPrompt(state.userStatuses),
+      useJevStatus && jevChoice
+        ? `${prompt}\n\n## Decided Status\nThe status is **${jevChoice.choice}**. Echo it as suggestedStatus.`
+        : prompt,
+      TASK_UPDATE_SCHEMA
+    );
+
+    // Parse JSON from response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const result = JSON.parse(jsonMatch[0]);
+      const update: TaskUpdate = {
+        taskId: task.id,
+        suggestedStatus: result.suggestedStatus,
+        confidence: result.confidence,
+        summary: result.summary,
+        flags: result.flags || [],
+        // Rich fields — AI decides what to populate
+        issue_title: result.issue_title ?? undefined,
+        pr_url: result.pr_url ?? discoveredPrUrl,
+        assigned_date: result.assigned_date ?? assignedDate,
+        payment_date: result.payment_date ?? undefined,
+        amount: result.amount ?? undefined,
+        payment_moved_to:
+          paymentMoveTarget(
+            result.payment_moved_to,
+            comments,
+            owner,
+            repo,
+            number
+          ) ?? undefined,
+      };
+      // Record what the LLM said before Jev overwrites it, and only when
+      // the LLM actually chose: under useJevStatus it was handed the answer,
+      // so there is no independent opinion to agree or disagree with.
+      if (state.jevMode !== 'off' && observation) {
+        observation.llmStatus = useJevStatus ? null : update.suggestedStatus;
+        observation.llmConfidence = useJevStatus ? null : update.confidence;
+        observation.agree =
+          useJevStatus || observation.choice === null
+            ? null
+            : observation.choice === update.suggestedStatus;
+        state.onJev(observation);
+      }
+
+      if (useJevStatus && jevChoice) {
+        update.suggestedStatus = jevChoice.choice;
+        // The probability of the chosen option is the direct analogue of
+        // "how sure are you this is the status"; shadow data decides whether
+        // to switch to the model's own confidence field.
+        update.confidence =
+          jevChoice.probabilities?.[jevChoice.choice] ?? jevChoice.confidence;
+      }
+
+      update.suggestedStatus = paymentStatus(
+        update.suggestedStatus,
+        facts,
+        new Set(state.userStatuses.map((s) => s.key)),
+        task.status
+      );
+      if (
+        task.status === 'hold' &&
+        update.suggestedStatus !== 'hold' &&
+        !terminal.has(update.suggestedStatus) &&
+        !holdLifted({ since: task.status_changed_at, comments, events })
+      ) {
+        update.suggestedStatus = 'hold';
+      }
+      if (
+        update.suggestedStatus === 'approved' &&
+        !facts.approved_by_reviewer
+      ) {
+        update.suggestedStatus = task.status;
+      }
+      update.suggestedStatus = regressionFromLinkedBugs(
+        update.suggestedStatus,
+        facts,
+        new Set(state.userStatuses.map((s) => s.key)),
+        (key) => terminal.has(key)
+      );
+      if (linkedBugs?.length) {
+        update.linked_bugs = linkedBugs.map((b) => ({
+          number: b.number,
+          title: b.title,
+          url: b.url,
+          state: b.state,
+        }));
+      }
+      update.suggestedStatus = keepPending(
+        task.status,
+        update.suggestedStatus,
+        (key) => state.userStatuses.find((s) => s.key === key)?.group_name
+      );
+
+      await state.onUpdate(update);
+      return { updates: [...state.updates, update] };
+    }
+
+    return {
+      errors: [
+        ...state.errors,
+        `Could not parse AI response for task ${task.id}`,
+      ],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    if (state.jevMode !== 'off' && observation) {
+      observation.error = observation.error ?? message;
+      state.onJev(observation);
+    }
+
+    // Detect fatal config errors — no point processing more tasks
+    if (FATAL_ERROR_RE.test(message)) {
+      throw err;
+    }
+
+    return {
+      errors: [...state.errors, `Error processing task ${task.id}: ${message}`],
+    };
+  }
+}
+
+// The newest cross-references are on the last timeline pages, and a busy PR
+// runs past one page.
+async function fetchTimeline(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  for (let page = 1; page <= TIMELINE_PAGE_CAP; page++) {
+    const batch = await fetchIssueTimeline(owner, repo, number, token, page);
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+async function analyzeLead(
+  state: State,
+  task: Task,
+  ref: PrCommentRef
+): Promise<Partial<State>> {
+  try {
+    const token = state.githubToken;
+    const anchor = await fetchComment(ref, token);
+    const [pr, replies, timeline] = await Promise.all([
+      fetchPR(ref.owner, ref.repo, ref.number, token),
+      fetchPRCommentsSince(
+        ref.owner,
+        ref.repo,
+        ref.number,
+        anchor.created_at,
+        token
+      ),
+      fetchTimeline(ref.owner, ref.repo, ref.number, token),
+    ]);
+    const after = replies.filter(
+      (c) => c.id !== anchor.id && c.created_at >= anchor.created_at
+    );
+
+    const candidates: LeadCandidate[] = crossReferencedIssues(
+      timeline,
+      anchor.created_at
+    );
+    const mentioned = mentionedIssueNumbers(
+      after,
+      ref.owner,
+      ref.repo,
+      candidates.map((c) => c.number)
+    ).slice(0, LEAD_CANDIDATE_CAP);
+    for (const n of mentioned) {
+      const issue = await fetchIssue(ref.owner, ref.repo, n, token).catch(
+        () => null
+      );
+      if (!issue) continue;
+      candidates.push({
+        url: issue.html_url,
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        assignees: issue.assignees.map((a) => a.login),
+        created_at: issue.created_at,
+      });
+    }
+
+    const content = await state.analyze(
+      buildLeadSystemPrompt(),
+      buildLeadPrompt({
+        githubUsername: state.githubUsername,
+        leadUrl: task.issue_url,
+        pr: {
+          title: pr.title,
+          author: pr.user.login,
+          state: pr.state,
+          merged: pr.merged,
+          merged_at: pr.merged_at,
+        },
+        lead: {
+          user: anchor.user.login,
+          body: anchor.body.slice(0, 1500),
+          created_at: anchor.created_at,
+        },
+        replies: after.slice(0, LEAD_REPLY_WINDOW).map((c) => ({
+          user: c.user.login,
+          body: c.body.slice(0, 800),
+          created_at: c.created_at,
+        })),
+        candidates,
+        today: new Date().toISOString().slice(0, 10),
+        developerNote: task.note?.trim() || undefined,
+      }),
+      LEAD_SCHEMA
+    );
+    const result = parseLeadResult(content);
+    if (!result) {
+      return {
+        errors: [
+          ...state.errors,
+          `Could not parse AI response for task ${task.id}`,
+        ],
+      };
+    }
+    const lead = leadUpdate(
+      result,
+      candidates,
+      task.status,
+      state.userStatuses
+    );
+    const update: TaskUpdate = {
+      taskId: task.id,
+      suggestedStatus: lead.suggestedStatus,
+      confidence: lead.confidence,
+      summary: lead.summary,
+      flags: [],
+      issue_url: lead.issue_url,
+    };
+    await state.onUpdate(update);
+    return { updates: [...state.updates, update] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (FATAL_ERROR_RE.test(message)) throw err;
+    return {
+      errors: [...state.errors, `Error processing task ${task.id}: ${message}`],
+    };
+  }
+}
+
+async function advanceOrFinish(state: State): Promise<Partial<State>> {
+  await state.onProgress(state.currentIndex + 1, state.tasks.length);
+  return { currentIndex: state.currentIndex + 1 };
+}
+
+// Runs after advanceOrFinish, so currentIndex already names the next task.
+function shouldContinue(state: State): string {
+  if (state.currentIndex < state.tasks.length) {
+    return 'fetchGithubData';
+  }
+  return END;
+}
+
+export function createSyncGraph() {
+  const graph = new StateGraph(GraphState)
+    .addNode('fetchGithubData', fetchGithubData)
+    .addNode('advanceOrFinish', advanceOrFinish)
+    .addEdge('__start__', 'fetchGithubData')
+    .addEdge('fetchGithubData', 'advanceOrFinish')
+    .addConditionalEdges('advanceOrFinish', shouldContinue);
+
+  return graph.compile();
+}

@@ -1,0 +1,335 @@
+import type {
+  GitHubIssue,
+  GitHubPullRequest,
+  GitHubComment,
+  GitHubReview,
+  GitHubEvent,
+  GitHubCheckRun,
+} from '@/types/github';
+
+const GITHUB_API = 'https://api.github.com';
+
+async function githubFetch<T>(path: string, token: string): Promise<T> {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+    },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `GitHub API error: ${res.status} ${res.statusText} for ${path}`
+    );
+  }
+  return res.json() as Promise<T>;
+}
+
+export function parseIssueUrl(url: string): {
+  owner: string;
+  repo: string;
+  number: number;
+  commentId: number | null;
+} | null {
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+  if (!match) return null;
+  const comment = url.match(/#issuecomment-(\d+)/);
+  return {
+    owner: match[1],
+    repo: match[2],
+    number: parseInt(match[3], 10),
+    commentId: comment ? parseInt(comment[1], 10) : null,
+  };
+}
+
+// A comment link is tracked separately from its issue, so the comment id is part
+// of the identity: two rows for one issue only collide when both point at the same thing.
+export function issueKey(t: {
+  issue_url: string;
+  repo_owner?: string | null;
+  repo_name?: string | null;
+  issue_number?: number | null;
+}): string {
+  const parsed = parseIssueUrl(t.issue_url);
+  const owner = t.repo_owner ?? parsed?.owner;
+  const repo = t.repo_name ?? parsed?.repo;
+  const number = t.issue_number ?? parsed?.number;
+  if (!owner || !repo || !number) return t.issue_url.toLowerCase();
+  const base = `${owner}/${repo}#${number}`;
+  return (
+    parsed?.commentId ? `${base}#comment-${parsed.commentId}` : base
+  ).toLowerCase();
+}
+
+export interface PrCommentRef {
+  owner: string;
+  repo: string;
+  number: number;
+  commentId: number;
+  kind: 'issue' | 'review';
+}
+
+// A comment on a pull request, kept as a lead for a possible new issue.
+export function parsePrCommentUrl(url: string): PrCommentRef | null {
+  const match = url.match(
+    /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)[^#]*#(issuecomment-|discussion_r)(\d+)/
+  );
+  if (!match) return null;
+  return {
+    owner: match[1],
+    repo: match[2],
+    number: parseInt(match[3], 10),
+    commentId: parseInt(match[5], 10),
+    kind: match[4] === 'discussion_r' ? 'review' : 'issue',
+  };
+}
+
+export async function fetchComment(
+  ref: PrCommentRef,
+  token: string
+): Promise<GitHubComment> {
+  const kind = ref.kind === 'review' ? 'pulls' : 'issues';
+  return githubFetch<GitHubComment>(
+    `/repos/${ref.owner}/${ref.repo}/${kind}/comments/${ref.commentId}`,
+    token
+  );
+}
+
+// Conversation and review-thread comments on a PR from `since` on. A long PR
+// has more than a page of comments, and only the ones after the lead matter.
+export async function fetchPRCommentsSince(
+  owner: string,
+  repo: string,
+  number: number,
+  since: string,
+  token: string
+): Promise<GitHubComment[]> {
+  const q = `since=${encodeURIComponent(since)}&per_page=100`;
+  const [issue, review] = await Promise.all([
+    githubFetch<GitHubComment[]>(
+      `/repos/${owner}/${repo}/issues/${number}/comments?${q}`,
+      token
+    ),
+    githubFetch<GitHubComment[]>(
+      `/repos/${owner}/${repo}/pulls/${number}/comments?${q}`,
+      token
+    ),
+  ]);
+  return [...issue, ...review].sort((a, b) =>
+    a.created_at.localeCompare(b.created_at)
+  );
+}
+
+export async function fetchCommitDate(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string
+): Promise<string | null> {
+  const commit = await githubFetch<{
+    commit: { committer: { date: string } | null };
+  }>(`/repos/${owner}/${repo}/commits/${sha}`, token);
+  return commit.commit.committer?.date ?? null;
+}
+
+export function parsePrUrl(url: string): {
+  owner: string;
+  repo: string;
+  number: number;
+} | null {
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
+}
+
+export async function fetchIssue(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubIssue> {
+  return githubFetch<GitHubIssue>(
+    `/repos/${owner}/${repo}/issues/${number}`,
+    token
+  );
+}
+
+export async function fetchPR(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubPullRequest> {
+  return githubFetch<GitHubPullRequest>(
+    `/repos/${owner}/${repo}/pulls/${number}`,
+    token
+  );
+}
+
+export async function fetchIssueComments(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubComment[]> {
+  return githubFetch<GitHubComment[]>(
+    `/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
+    token
+  );
+}
+
+export async function fetchPRReviews(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubReview[]> {
+  return githubFetch<GitHubReview[]>(
+    `/repos/${owner}/${repo}/pulls/${number}/reviews`,
+    token
+  );
+}
+
+// Empty while checks are still running; null when GitHub refused or failed
+// the request, which callers must not treat as passing.
+export async function fetchFailingChecks(
+  owner: string,
+  repo: string,
+  sha: string,
+  token: string
+): Promise<string[] | null> {
+  let checks: { check_runs: GitHubCheckRun[] };
+  let status: { statuses: { context: string; state: string }[] };
+  try {
+    [checks, status] = await Promise.all([
+      githubFetch<{ check_runs: GitHubCheckRun[] }>(
+        `/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
+        token
+      ),
+      githubFetch<{ statuses: { context: string; state: string }[] }>(
+        `/repos/${owner}/${repo}/commits/${sha}/status`,
+        token
+      ),
+    ]);
+  } catch {
+    return null;
+  }
+  const failed = new Set<string>();
+  for (const c of checks.check_runs) {
+    if (
+      c.conclusion === 'failure' ||
+      c.conclusion === 'timed_out' ||
+      c.conclusion === 'action_required'
+    ) {
+      failed.add(c.name);
+    }
+  }
+  for (const s of status.statuses) {
+    if (s.state === 'failure' || s.state === 'error') failed.add(s.context);
+  }
+  return [...failed];
+}
+
+export async function fetchIssueEvents(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubEvent[]> {
+  return githubFetch<GitHubEvent[]>(
+    `/repos/${owner}/${repo}/issues/${number}/events?per_page=100`,
+    token
+  );
+}
+
+export async function fetchIssueTimeline(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string,
+  page = 1
+): Promise<Record<string, unknown>[]> {
+  return githubFetch<Record<string, unknown>[]>(
+    `/repos/${owner}/${repo}/issues/${number}/timeline?per_page=100&page=${page}`,
+    token
+  );
+}
+
+export async function findLinkedPR(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  githubUsername: string,
+  token: string
+): Promise<GitHubPullRequest | null> {
+  // Collect all PR numbers by this developer linked to the issue
+  const candidatePrNumbers: number[] = [];
+
+  try {
+    // Use timeline API to find cross-referenced PRs
+    const timeline = await fetchIssueTimeline(owner, repo, issueNumber, token);
+    for (const event of timeline) {
+      if (
+        event.event === 'cross-referenced' &&
+        event.source &&
+        typeof event.source === 'object'
+      ) {
+        const source = event.source as Record<string, unknown>;
+        const issue = source.issue as Record<string, unknown> | undefined;
+        if (
+          issue?.pull_request &&
+          (issue.user as Record<string, unknown>)?.login === githubUsername
+        ) {
+          candidatePrNumbers.push(issue.number as number);
+        }
+      }
+    }
+  } catch {
+    // Timeline API may not be available; fall back to search
+  }
+
+  // Fallback: search for PRs by user mentioning the issue
+  if (candidatePrNumbers.length === 0) {
+    try {
+      const searchResult = await githubFetch<{ items: GitHubPullRequest[] }>(
+        `/search/issues?q=repo:${owner}/${repo}+is:pr+author:${githubUsername}+${issueNumber}&per_page=5&sort=created&order=desc`,
+        token
+      );
+      if (searchResult.items?.length) {
+        // Fetch full PR data for the latest match (sorted desc by created)
+        return fetchPR(owner, repo, searchResult.items[0].number, token);
+      }
+    } catch {
+      // Search may fail; that's okay
+    }
+
+    return null;
+  }
+
+  // Return the latest PR (highest number = most recently created)
+  const latestPrNumber = Math.max(...candidatePrNumbers);
+  return fetchPR(owner, repo, latestPrNumber, token);
+}
+
+export function normalizeUrl(url: string): string {
+  // Strip markdown link format: [text](url) → url
+  const mdMatch = url.match(/\[.*?\]\((.*?)\)/);
+  const raw = mdMatch ? mdMatch[1] : url;
+  try {
+    return new URL(raw).href;
+  } catch {
+    return `https://${raw}`;
+  }
+}
+
+export function shortenGitHubUrl(url: string): string {
+  const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+  if (issueMatch) {
+    const short = `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;
+    return /#issuecomment-\d+/.test(url) ? `${short} (comment)` : short;
+  }
+
+  const prMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (prMatch) return `${prMatch[1]}/${prMatch[2]}#${prMatch[3]}`;
+
+  return url;
+}
