@@ -658,7 +658,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
                     return (
                       <div
                         key={`suggest-${s.taskId}`}
-                        className="group flex h-11 items-center justify-between gap-3 border-b border-dashed border-border last:border-b-0"
+                        className="group flex flex-col gap-1.5 border-b border-dashed border-border py-2 last:border-b-0 sm:h-11 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:py-0"
                       >
                         <div className="flex min-w-0 items-center gap-1.5">
                           <Link
@@ -670,7 +670,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
                           <GitHubLink url={t.issue_url} />
                           {t.pr_url && <GitHubLink url={t.pr_url} pr />}
                         </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
                           <StatusPill status={statusByKey.get(t.status)} />
                           <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
                           <StatusPill status={statusByKey.get(s.to)} />
@@ -688,7 +688,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-xs"
+                            className="ml-auto h-7 px-2 text-xs sm:ml-0"
                             onClick={() => applySuggestion(s.taskId, s.to)}
                           >
                             Apply
@@ -704,7 +704,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
                 return (
                   <div
                     key={c.taskId}
-                    className="group flex h-11 items-center justify-between gap-3 border-b border-border last:border-b-0"
+                    className="group flex flex-col gap-1.5 border-b border-border py-2 last:border-b-0 sm:h-11 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:py-0"
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-1.5">
@@ -724,7 +724,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
                         </p>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
                       <StatusPill status={statusByKey.get(c.from)} />
                       <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
                       <StatusPill status={statusByKey.get(c.to)} />
@@ -858,7 +858,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-4 border-t border-border pt-3 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
           <span>
             {settings?.auto_sync_enabled
               ? `Auto-sync every ${settings.sync_interval_hours} hours${
