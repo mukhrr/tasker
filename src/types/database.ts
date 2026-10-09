@@ -54,11 +54,12 @@ export type DashboardTask = Pick<
   | 'status_group'
   | 'amount'
   | 'payment_date'
+  | 'status_changed_at'
   | 'created_at'
 >;
 
 export const DASHBOARD_TASK_COLUMNS =
-  'id, issue_url, repo_owner, repo_name, issue_number, status_group, amount, payment_date, created_at';
+  'id, issue_url, repo_owner, repo_name, issue_number, status_group, amount, payment_date, status_changed_at, created_at';
 
 export interface CustomColumn {
   id: string;

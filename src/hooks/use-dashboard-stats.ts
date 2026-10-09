@@ -18,10 +18,31 @@ export interface DashboardStats {
   monthlyActivity: { month: string; created: number; completed: number }[];
 }
 
+type StatsTask = Pick<
+  Task,
+  | 'status_group'
+  | 'amount'
+  | 'payment_date'
+  | 'status_changed_at'
+  | 'created_at'
+>;
+
+// payment_date can be a due date the sync predicted, so a task paid early is
+// dated by when it moved to complete, and one marked complete late by
+// payment_date.
+export function paidMonth(
+  t: Pick<Task, 'payment_date' | 'status_changed_at'>
+): string {
+  const completedOn = format(parseISO(t.status_changed_at), 'yyyy-MM-dd');
+  const paidOn =
+    t.payment_date && t.payment_date.slice(0, 10) < completedOn
+      ? t.payment_date.slice(0, 10)
+      : completedOn;
+  return paidOn.slice(0, 7);
+}
+
 // Accepts any row shape carrying the stats fields (full Task or DashboardTask)
-export function useDashboardStats(
-  tasks: Pick<Task, 'status_group' | 'amount' | 'payment_date' | 'created_at'>[]
-): DashboardStats {
+export function useDashboardStats(tasks: StatsTask[]): DashboardStats {
   return useMemo(() => {
     const completeTasks = tasks.filter((t) => t.status_group === 'complete');
     const inProgressTasks = tasks.filter(
@@ -52,12 +73,9 @@ export function useDashboardStats(
     for (const key of monthKeys) earningsMap.set(key, 0);
 
     for (const t of completeTasks) {
-      const dateStr = t.payment_date ?? t.created_at;
-      if (dateStr) {
-        const key = format(parseISO(dateStr), 'yyyy-MM');
-        if (earningsMap.has(key)) {
-          earningsMap.set(key, earningsMap.get(key)! + (t.amount ?? 0));
-        }
+      const key = paidMonth(t);
+      if (earningsMap.has(key)) {
+        earningsMap.set(key, earningsMap.get(key)! + (t.amount ?? 0));
       }
     }
 
@@ -73,12 +91,9 @@ export function useDashboardStats(
     const lastMonthEarned = earningsMap.get(lastMonthKey) ?? 0;
     const lastMonthDelta =
       lastMonthEarned - (earningsMap.get(prevMonthKey) ?? 0);
-    const lastMonthCompletedCount = completeTasks.filter((t) => {
-      const dateStr = t.payment_date ?? t.created_at;
-      return dateStr
-        ? format(parseISO(dateStr), 'yyyy-MM') === lastMonthKey
-        : false;
-    }).length;
+    const lastMonthCompletedCount = completeTasks.filter(
+      (t) => paidMonth(t) === lastMonthKey
+    ).length;
 
     // Tasks by status group
     const groupLabels: Record<TaskStatusGroup, string> = {
@@ -124,8 +139,7 @@ export function useDashboardStats(
       }
 
       if (t.status_group === 'complete') {
-        const compDate = t.payment_date ?? t.created_at;
-        const compKey = format(parseISO(compDate), 'yyyy-MM');
+        const compKey = paidMonth(t);
         if (completedMap.has(compKey)) {
           completedMap.set(compKey, completedMap.get(compKey)! + 1);
         }
