@@ -64,6 +64,7 @@ interface TaskRef {
   status: string;
   archived: boolean;
   payment_date: string | null;
+  status_changed_at: string;
 }
 
 // sync_logs.details.jev, written while JEV_MODE is shadow.
@@ -246,7 +247,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
       const { data } = await supabase
         .from('tasks')
         .select(
-          'id, issue_title, issue_url, pr_url, amount, status, archived, payment_date'
+          'id, issue_title, issue_url, pr_url, amount, status, archived, payment_date, status_changed_at'
         )
         .in('id', ids);
       setTasks(
@@ -381,6 +382,11 @@ export function LastSyncCard({ userId }: { userId: string }) {
       .filter((t) => isActive(t) && issueKeyOf(t) === key)
       .map((t) => t.id);
   };
+  // A status the user set after the run (Apply or Done) overrides its
+  // suggestion, even when Done kept the status it already had.
+  const syncedAt = new Date(log.completed_at ?? log.started_at).getTime();
+  const userDecided = (t: TaskRef) =>
+    new Date(t.status_changed_at).getTime() > syncedAt;
   const seenSuggested = new Set<string>();
   const suggestions = (
     (log.details?.statusSuggestions as StatusChange[] | undefined) ?? []
@@ -388,6 +394,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
     .filter(
       (s) =>
         isActive(tasks[s.taskId]) &&
+        !userDecided(tasks[s.taskId]) &&
         tasks[s.taskId].status !== s.to &&
         statusByKey.has(s.to)
     )
@@ -460,7 +467,10 @@ export function LastSyncCard({ userId }: { userId: string }) {
     }
     setTasks((prev) => {
       const next = { ...prev };
-      for (const id of ids) next[id] = { ...next[id], status };
+      const at = new Date().toISOString();
+      for (const id of ids) {
+        next[id] = { ...next[id], status, status_changed_at: at };
+      }
       return next;
     });
     toast.success(`Status set to ${statusByKey.get(status)?.label ?? status}`);
