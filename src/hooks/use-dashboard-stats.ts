@@ -27,18 +27,18 @@ type StatsTask = Pick<
   | 'created_at'
 >;
 
-// payment_date can be a due date the sync predicted, so a task paid early is
-// dated by when it moved to complete, and one marked complete late by
-// payment_date.
+// A task counts as earned when it was moved to complete. A row created already
+// complete (an import) has no such move, so its payment_date is used instead.
 export function paidMonth(
-  t: Pick<Task, 'payment_date' | 'status_changed_at'>
+  t: Pick<Task, 'payment_date' | 'status_changed_at' | 'created_at'>
 ): string {
-  const completedOn = format(parseISO(t.status_changed_at), 'yyyy-MM-dd');
-  const paidOn =
-    t.payment_date && t.payment_date.slice(0, 10) < completedOn
-      ? t.payment_date.slice(0, 10)
-      : completedOn;
-  return paidOn.slice(0, 7);
+  const changed = parseISO(t.status_changed_at);
+  const created = parseISO(t.created_at);
+  const createdComplete = changed.getTime() - created.getTime() < 60_000;
+  if (createdComplete) {
+    return t.payment_date?.slice(0, 7) ?? format(created, 'yyyy-MM');
+  }
+  return format(changed, 'yyyy-MM');
 }
 
 // Accepts any row shape carrying the stats fields (full Task or DashboardTask)
