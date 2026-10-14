@@ -176,6 +176,8 @@ async function processQueue() {
       log(`✗ ${label}: ${message}`);
     } finally {
       currentJobId = null;
+      // A sync leaves the heap ~300 MB above idle and Railway bills held RAM.
+      globalThis.gc?.();
     }
   }
 }
