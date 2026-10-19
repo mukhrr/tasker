@@ -14,7 +14,13 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 15_000);
 // A run heartbeats after every task (details.progress.at); one Codex call
 // caps at CLI_TIMEOUT_MS, so silence this long means the container is gone.
 const STALE_RUNNING_MS = 10 * 60 * 1000;
+// GC after a job does not hand the ~300 MB back to the OS, so exit once idle and
+// let Railway restart at the boot baseline. Needs restart policy ALWAYS: under
+// ON_FAILURE a clean exit leaves the service down. 0 disables.
+const IDLE_RESTART_MS = Number(process.env.IDLE_RESTART_MS || 0);
 let currentJobId: string | null = null;
+let jobsSinceBoot = 0;
+let lastJobEndedAt = 0;
 
 if (!SUPABASE_URL || !SERVICE_ROLE || !process.env.ENCRYPTION_KEY) {
   console.error(
@@ -176,8 +182,8 @@ async function processQueue() {
       log(`✗ ${label}: ${message}`);
     } finally {
       currentJobId = null;
-      // A sync leaves the heap ~300 MB above idle and Railway bills held RAM.
-      globalThis.gc?.();
+      jobsSinceBoot++;
+      lastJobEndedAt = Date.now();
     }
   }
 }
@@ -268,6 +274,14 @@ async function main() {
   );
   for (;;) {
     await tick();
+    if (
+      IDLE_RESTART_MS > 0 &&
+      jobsSinceBoot > 0 &&
+      Date.now() - lastJobEndedAt >= IDLE_RESTART_MS
+    ) {
+      log(`idle after ${jobsSinceBoot} job(s), exiting to release memory`);
+      process.exit(0);
+    }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
 }
