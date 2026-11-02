@@ -113,6 +113,23 @@ export function getStaleRowBg(
   return getStatusColor(status.color).rowBg;
 }
 
+/** True when an unpaid task's payment date (a local YYYY-MM-DD) is before today. */
+export function isPaymentOverdue(
+  paymentDate: string | null | undefined,
+  statusGroup: TaskStatusGroup,
+  now: Date = new Date()
+): boolean {
+  if (!paymentDate || statusGroup === 'complete') return false;
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+  return paymentDate.slice(0, 10) < today;
+}
+
+export const PAYMENT_OVERDUE_ROW_BG = 'bg-red-500/10 dark:bg-red-500/15';
+
 export function getStatusByKey(
   statuses: UserStatus[],
   key: string

@@ -1,7 +1,13 @@
 'use client';
 
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
-import { getStatusByKey, getStatusColor, getStaleRowBg } from '@/lib/status';
+import {
+  getStatusByKey,
+  getStatusColor,
+  getStaleRowBg,
+  isPaymentOverdue,
+  PAYMENT_OVERDUE_ROW_BG,
+} from '@/lib/status';
 import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
 import { IssueCell } from './cells/issue-cell';
@@ -59,11 +65,16 @@ export function TaskRow({
     task.status_changed_at
   );
 
+  const rowBg =
+    !task.archived && isPaymentOverdue(task.payment_date, task.status_group)
+      ? PAYMENT_OVERDUE_ROW_BG
+      : staleRowBg;
+
   const selected = ctx.isSelected(task.id);
 
   return (
     <tr
-      className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''} ${staleRowBg} ${task.archived ? 'opacity-50' : ''}`}
+      className={`group/row border-b last:border-b-0 hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''} ${rowBg} ${task.archived ? 'opacity-50' : ''}`}
     >
       <td className="w-10 px-3 py-2 sm:px-4">
         <Checkbox
