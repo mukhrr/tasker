@@ -9,6 +9,8 @@ import { ColumnHeader } from './column-header';
 import { TaskRow } from './task-row';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskTable } from './use-task-table';
+import { getStatusColor, getStatusTotals } from '@/lib/status';
+import { cn } from '@/lib/utils';
 import type { ColumnKey } from './column-config';
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
@@ -43,6 +45,7 @@ export function TaskTable({ userId }: { userId: string }) {
     (sum, task) => sum + (task.amount ?? 0),
     0
   );
+  const statusTotals = getStatusTotals(ctx.filteredTasks, ctx.statuses);
 
   return (
     <div className="space-y-4">
@@ -157,16 +160,32 @@ export function TaskTable({ userId }: { userId: string }) {
       </div>
 
       {ctx.tasks.length > 0 && (
-        <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-sm text-muted-foreground">
           <p>
             {ctx.filteredTasks.length} of {ctx.tasks.length} tasks
           </p>
-          <p className="shrink-0 tabular-nums">
-            Total amount{' '}
-            <span className="font-medium text-foreground">
-              {currencyFormatter.format(totalAmount)}
+          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 tabular-nums">
+            {statusTotals.map((total) => (
+              <span key={total.key} className="flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    'size-2 rounded-full',
+                    getStatusColor(total.color).dot
+                  )}
+                />
+                {total.label}{' '}
+                <span className="font-medium text-foreground">
+                  {currencyFormatter.format(total.amount)}
+                </span>
+              </span>
+            ))}
+            <span className="shrink-0">
+              Total{' '}
+              <span className="font-medium text-foreground">
+                {currencyFormatter.format(totalAmount)}
+              </span>
             </span>
-          </p>
+          </div>
         </div>
       )}
     </div>

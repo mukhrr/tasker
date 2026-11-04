@@ -145,6 +145,45 @@ export function getStatusGroup(
   return status?.group_name ?? 'todo';
 }
 
+export interface StatusTotal {
+  key: string;
+  label: string;
+  color: string;
+  amount: number;
+}
+
+/**
+ * Amount per status, in taxonomy order, skipping statuses that sum to zero.
+ * A key missing from the taxonomy is kept last so the parts still add up to
+ * the overall total.
+ */
+export function getStatusTotals(
+  tasks: { status: string; amount: number | null }[],
+  statuses: UserStatus[]
+): StatusTotal[] {
+  const amounts = new Map<string, number>();
+  for (const task of tasks) {
+    amounts.set(
+      task.status,
+      (amounts.get(task.status) ?? 0) + (task.amount ?? 0)
+    );
+  }
+  const byGroup = getStatusesByGroup(statuses);
+  const ordered = STATUS_GROUP_ORDER.flatMap((group) => byGroup[group]);
+  const known = new Set(ordered.map((s) => s.key));
+  const totals: StatusTotal[] = ordered.map((s) => ({
+    key: s.key,
+    label: s.label,
+    color: s.color,
+    amount: amounts.get(s.key) ?? 0,
+  }));
+  for (const [key, amount] of amounts) {
+    if (!known.has(key))
+      totals.push({ key, label: key, color: 'gray', amount });
+  }
+  return totals.filter((t) => t.amount !== 0);
+}
+
 export function getStatusesByGroup(
   statuses: UserStatus[]
 ): Record<TaskStatusGroup, UserStatus[]> {
