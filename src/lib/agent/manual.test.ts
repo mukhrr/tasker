@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { userSetStatus } from './manual';
+import { paymentDateToWrite, userSetStatus } from './manual';
 import type { Task } from '@/types/database';
 
 const task = (over: Partial<Task>) =>
@@ -57,5 +57,23 @@ describe('userSetStatus', () => {
     expect(
       userSetStatus(task({ status_changed_at: '2026-09-02T00:00:00Z' }))
     ).toBe(true);
+  });
+});
+
+describe('paymentDateToWrite', () => {
+  it('keeps a date already on the task', () => {
+    expect(
+      paymentDateToWrite({ payment_date: '2026-11-20' }, '2026-05-15')
+    ).toBeNull();
+  });
+
+  it('fills an empty date', () => {
+    expect(paymentDateToWrite({ payment_date: null }, '2026-05-15')).toBe(
+      '2026-05-15'
+    );
+  });
+
+  it('writes nothing without a suggestion', () => {
+    expect(paymentDateToWrite({ payment_date: null }, undefined)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
 import { deciderFromEnv, jevModeFromEnv } from './jev';
 import type { JevObservation } from './graph';
-import { userSetStatus } from './manual';
+import { paymentDateToWrite, userSetStatus } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import { parseIssueUrl } from '@/lib/github';
 import type { Task, UserStatus } from '@/types/database';
@@ -227,8 +227,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       if (update.pr_url != null) updateData.pr_url = update.pr_url;
       if (update.assigned_date != null)
         updateData.assigned_date = update.assigned_date;
-      if (update.payment_date != null)
-        updateData.payment_date = update.payment_date;
+      const paymentDate = paymentDateToWrite(currentTask, update.payment_date);
+      if (paymentDate) updateData.payment_date = paymentDate;
       // Only set amount if not already set by user
       if (update.amount != null && !currentTask.amount)
         updateData.amount = update.amount;

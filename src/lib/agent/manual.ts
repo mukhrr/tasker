@@ -13,3 +13,12 @@ export function userSetStatus(task: Task): boolean {
     new Date(task.created_at).getTime() + 60_000
   );
 }
+
+// The sync only fills an empty date. payment_due_at is recomputed from the
+// deploy comment on every run, so writing it back would undo a date the user moved.
+export function paymentDateToWrite(
+  task: Pick<Task, 'payment_date'>,
+  suggested: string | null | undefined
+): string | null {
+  return task.payment_date ? null : (suggested ?? null);
+}
