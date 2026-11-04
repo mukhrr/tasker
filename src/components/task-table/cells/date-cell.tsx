@@ -6,18 +6,16 @@ import { DatePicker } from '@/components/ui/date-picker';
 export function DateCell({
   value,
   onChange,
-  mode = 'future',
+  allowFuture = false,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
-  /** "past" disables future dates (for payment), "future" disables past dates */
-  mode?: 'past' | 'future';
+  allowFuture?: boolean;
 }) {
   const dateValue = value ? new Date(value + 'T00:00:00') : null;
 
   const today = startOfDay(new Date());
-  const disableDate =
-    mode === 'past' ? (d: Date) => d < today : (d: Date) => d > today;
+  const disableDate = allowFuture ? undefined : (d: Date) => d > today;
 
   return (
     <DatePicker

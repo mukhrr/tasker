@@ -116,7 +116,6 @@ export function BulkActionsBar({
         </PopoverContent>
       </Popover>
 
-      {/* Payment date — matches the payment column's rule (today onward). */}
       <DatePicker
         value={null}
         onChange={(date) =>
@@ -125,7 +124,6 @@ export function BulkActionsBar({
             date ? 'Payment date set' : 'Payment date cleared'
           )
         }
-        disableDate={(d) => d < today}
         placeholder="Payment date"
         className="h-8 text-sm"
       />

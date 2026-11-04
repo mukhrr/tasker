@@ -284,7 +284,7 @@ function CellContent({
           onChange={(payment_date) =>
             ctx.handleUpdateTask(task.id, { payment_date })
           }
-          mode="past"
+          allowFuture
         />
       );
 
