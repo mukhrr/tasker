@@ -109,7 +109,14 @@ export function getStaleRowBg(
   const overdue = getStaleOverdueMs(statusKey, statusChangedAt);
   if (overdue == null || overdue < 0) return '';
   const status = getStatusByKey(statuses, statusKey);
-  if (!status) return '';
+  // Sitting still is normal once pending or done; only a missed payment date
+  // flags pending rows.
+  if (
+    !status ||
+    status.group_name === 'pending' ||
+    status.group_name === 'complete'
+  )
+    return '';
   return getStatusColor(status.color).rowBg;
 }
 
@@ -126,6 +133,33 @@ export function isPaymentOverdue(
     String(now.getDate()).padStart(2, '0'),
   ].join('-');
   return paymentDate.slice(0, 10) < today;
+}
+
+/**
+ * Sort score mirroring the row highlights: positive when highlighted, larger
+ * when more overdue. Done tasks and pending tasks with no date never rank.
+ */
+export function getAttentionScore(
+  task: {
+    status: string;
+    status_changed_at: string | null | undefined;
+    payment_date: string | null | undefined;
+  },
+  statusGroup: TaskStatusGroup,
+  now: Date = new Date()
+): number {
+  if (statusGroup === 'complete') return -Infinity;
+  // A date stays on time through the whole due day, as in isPaymentOverdue.
+  const paymentOverdue = task.payment_date
+    ? now.getTime() -
+      new Date(`${task.payment_date.slice(0, 10)}T00:00:00`).getTime() -
+      DAY_MS
+    : -Infinity;
+  if (statusGroup === 'pending') return paymentOverdue;
+  return Math.max(
+    paymentOverdue,
+    getStaleOverdueMs(task.status, task.status_changed_at) ?? -Infinity
+  );
 }
 
 export const PAYMENT_OVERDUE_ROW_BG = 'bg-red-500/10 dark:bg-red-500/15';

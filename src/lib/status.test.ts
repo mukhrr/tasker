@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { UserStatus } from '@/types/database';
-import { getStatusTotals, isPaymentOverdue } from './status';
+import {
+  getAttentionScore,
+  getStaleRowBg,
+  getStatusTotals,
+  isPaymentOverdue,
+} from './status';
 
 const now = new Date(2026, 10, 2, 15, 0);
 
@@ -75,5 +80,62 @@ describe('getStatusTotals', () => {
     expect(totals).toEqual([
       { key: 'gone', label: 'gone', color: 'gray', amount: 50 },
     ]);
+  });
+});
+
+describe('getStaleRowBg', () => {
+  const statuses = [
+    { key: 'wip', group_name: 'in_progress', color: 'blue' },
+    { key: 'review', group_name: 'pending', color: 'blue' },
+    { key: 'paid', group_name: 'complete', color: 'blue' },
+  ] as UserStatus[];
+  const longAgo = '2020-01-01T00:00:00Z';
+
+  it('highlights a stale in-progress row', () => {
+    expect(getStaleRowBg(statuses, 'wip', longAgo)).not.toBe('');
+  });
+
+  it('never highlights a pending row, however long it sat', () => {
+    expect(getStaleRowBg(statuses, 'review', longAgo)).toBe('');
+  });
+
+  it('never highlights a completed row', () => {
+    expect(getStaleRowBg(statuses, 'paid', longAgo)).toBe('');
+  });
+});
+
+describe('getAttentionScore', () => {
+  const longAgo = '2020-01-01T00:00:00Z';
+  const row = (payment_date: string | null, status_changed_at = longAgo) => ({
+    status: 'x',
+    status_changed_at,
+    payment_date,
+  });
+
+  it('ranks pending by missed payment date, not by time in status', () => {
+    expect(
+      getAttentionScore(row('2026-11-01'), 'pending', now)
+    ).toBeGreaterThan(0);
+    expect(getAttentionScore(row('2026-11-02'), 'pending', now)).toBeLessThan(
+      0
+    );
+    expect(getAttentionScore(row(null), 'pending', now)).toBe(-Infinity);
+  });
+
+  it('ranks other groups by whichever is more overdue', () => {
+    expect(getAttentionScore(row(null), 'todo', now)).toBeGreaterThan(0);
+    expect(
+      getAttentionScore(
+        row('2026-10-01', new Date().toISOString()),
+        'todo',
+        now
+      )
+    ).toBeGreaterThan(0);
+  });
+
+  it('never ranks done tasks', () => {
+    expect(getAttentionScore(row('2026-10-01'), 'complete', now)).toBe(
+      -Infinity
+    );
   });
 });
