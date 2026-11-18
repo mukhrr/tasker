@@ -6,6 +6,7 @@ import type {
   GitHubEvent,
   GitHubCheckRun,
 } from '@/types/github';
+import type { SearchHit } from '@/lib/agent/discover';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -239,6 +240,44 @@ export async function fetchIssueEvents(
     `/repos/${owner}/${repo}/issues/${number}/events?per_page=100`,
     token
   );
+}
+
+const EVENTS_PAGE_SIZE = 100;
+const EVENTS_MAX_PAGES = 10;
+
+// Events come oldest first, so a recent assignment on a long-running issue
+// sits on a later page.
+export async function fetchAllIssueEvents(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string
+): Promise<GitHubEvent[]> {
+  const all: GitHubEvent[] = [];
+  for (let page = 1; page <= EVENTS_MAX_PAGES; page++) {
+    const batch = await githubFetch<GitHubEvent[]>(
+      `/repos/${owner}/${repo}/issues/${number}/events?per_page=${EVENTS_PAGE_SIZE}&page=${page}`,
+      token
+    );
+    all.push(...batch);
+    if (batch.length < EVENTS_PAGE_SIZE) break;
+  }
+  return all;
+}
+
+export async function searchAssignedIssues(
+  username: string,
+  since: string,
+  token: string
+): Promise<SearchHit[]> {
+  const q = encodeURIComponent(
+    `is:issue is:open assignee:${username} updated:>=${since}`
+  );
+  const { items } = await githubFetch<{ items: SearchHit[] }>(
+    `/search/issues?q=${q}&sort=updated&order=desc&per_page=50`,
+    token
+  );
+  return items;
 }
 
 export async function fetchIssueTimeline(

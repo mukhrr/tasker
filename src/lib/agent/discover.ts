@@ -27,7 +27,10 @@ export function searchCutoff(now: Date): string {
   return new Date(now.getTime() - WINDOW_MS).toISOString().slice(0, 10);
 }
 
-export function newHits(hits: SearchHit[], existing: TrackedRow[]): SearchHit[] {
+export function newHits(
+  hits: SearchHit[],
+  existing: TrackedRow[]
+): SearchHit[] {
   const tracked = new Set(existing.map(issueKey));
   return hits.filter(
     (h) => !h.pull_request && !tracked.has(issueKey({ issue_url: h.html_url }))
@@ -44,7 +47,8 @@ export function recentAssignment(
   const login = username.toLowerCase();
   const latest = events
     .filter(
-      (e) => e.event === 'assigned' && e.assignee?.login?.toLowerCase() === login
+      (e) =>
+        e.event === 'assigned' && e.assignee?.login?.toLowerCase() === login
     )
     .map((e) => e.created_at)
     .sort()

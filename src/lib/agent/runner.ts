@@ -1,11 +1,21 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
 import { deciderFromEnv, jevModeFromEnv } from './jev';
 import type { JevObservation } from './graph';
 import { paymentDateToWrite, userSetStatus } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
-import { parseIssueUrl } from '@/lib/github';
+import {
+  fetchAllIssueEvents,
+  parseIssueUrl,
+  searchAssignedIssues,
+} from '@/lib/github';
+import {
+  newHits,
+  recentAssignment,
+  searchCutoff,
+  type DiscoveredTask,
+} from './discover';
 import type { Task, UserStatus } from '@/types/database';
 
 interface SyncCredentials {
@@ -24,6 +34,93 @@ export interface RunSyncOptions {
   // Set when the worker re-queues a run its container was killed during:
   // tasks synced since this time were already done by the first attempt.
   resumeAfter?: string;
+}
+
+const ASSIGNED_STATUS_KEY = 'assigned';
+
+// Never throws: a search rate limit must not cost the user their sync.
+async function discoverAssigned(
+  supabase: SupabaseClient,
+  userId: string,
+  githubToken: string,
+  githubUsername: string,
+  statuses: UserStatus[]
+): Promise<{ discovered: DiscoveredTask[]; errors: string[] }> {
+  const discovered: DiscoveredTask[] = [];
+  const errors: string[] = [];
+  try {
+    const assignedStatus = statuses.find((s) => s.key === ASSIGNED_STATUS_KEY);
+    if (!assignedStatus) {
+      return {
+        discovered,
+        errors: [
+          `New assigned issues were not added: no "${ASSIGNED_STATUS_KEY}" status.`,
+        ],
+      };
+    }
+
+    const now = new Date();
+    const hits = await searchAssignedIssues(
+      githubUsername,
+      searchCutoff(now),
+      githubToken
+    );
+    if (hits.length === 0) return { discovered, errors };
+
+    // Every row, archived and finished ones too, so a closed-out task is
+    // never added again.
+    const { data: existing, error } = await supabase
+      .from('tasks')
+      .select('issue_url, repo_owner, repo_name, issue_number')
+      .eq('user_id', userId);
+    if (error) throw new Error(error.message);
+
+    for (const hit of newHits(hits, existing ?? [])) {
+      const target = parseIssueUrl(hit.html_url);
+      if (!target) continue;
+      const events = await fetchAllIssueEvents(
+        target.owner,
+        target.repo,
+        target.number,
+        githubToken
+      );
+      const assignedAt = recentAssignment(events, githubUsername, now);
+      if (!assignedAt) continue;
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('tasks')
+        .insert({
+          user_id: userId,
+          issue_url: hit.html_url,
+          issue_title: hit.title,
+          repo_owner: target.owner,
+          repo_name: target.repo,
+          issue_number: target.number,
+          status: assignedStatus.key,
+          status_group: assignedStatus.group_name,
+          assigned_date: assignedAt,
+          note: 'Added by sync',
+        })
+        .select('id')
+        .single();
+      if (insertError || !inserted) {
+        errors.push(
+          `Could not add ${hit.html_url}: ${insertError?.message ?? 'no row returned'}`
+        );
+        continue;
+      }
+      discovered.push({
+        taskId: inserted.id,
+        issue_url: hit.html_url,
+        issue_title: hit.title,
+      });
+    }
+  } catch (err) {
+    errors.push(
+      `Looking for newly assigned issues failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  return { discovered, errors };
 }
 
 export async function runSync(userId: string, opts: RunSyncOptions = {}) {
@@ -78,6 +175,42 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
     }
   }
 
+  // Fetch user's custom statuses for the AI prompt
+  const { data: userStatuses } = await supabase
+    .from('user_statuses')
+    .select('*')
+    .eq('user_id', userId)
+    .order('group_name')
+    .order('position');
+
+  // Seed defaults if user has no statuses yet
+  if (!userStatuses || userStatuses.length === 0) {
+    await supabase.rpc('seed_default_statuses', { p_user_id: userId });
+  }
+
+  const { data: finalStatuses } =
+    userStatuses && userStatuses.length > 0
+      ? { data: userStatuses }
+      : await supabase
+          .from('user_statuses')
+          .select('*')
+          .eq('user_id', userId)
+          .order('group_name')
+          .order('position');
+
+  // Before the task query, so rows it adds are synced by this same run.
+  const discovery =
+    taskId || resumeAfter
+      ? { discovered: [], errors: [] }
+      : await discoverAssigned(
+          supabase,
+          userId,
+          githubToken,
+          githubUsername,
+          (finalStatuses as UserStatus[]) ?? []
+        );
+  const { discovered } = discovery;
+
   // Get tasks that need syncing
   let query = supabase.from('tasks').select('*').eq('user_id', userId);
 
@@ -109,35 +242,17 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           status: 'completed',
           completed_at: new Date().toISOString(),
           bounties_updated: 0,
-          details: { updates: [], errors: [], statusChanges: [] },
+          details: {
+            updates: [],
+            errors: discovery.errors,
+            statusChanges: [],
+            discovered,
+          },
         })
         .eq('id', syncLogId);
     }
-    return { tasks_updated: 0, errors: [], skipped: 0 };
+    return { tasks_updated: 0, errors: discovery.errors, skipped: 0 };
   }
-
-  // Fetch user's custom statuses for the AI prompt
-  const { data: userStatuses } = await supabase
-    .from('user_statuses')
-    .select('*')
-    .eq('user_id', userId)
-    .order('group_name')
-    .order('position');
-
-  // Seed defaults if user has no statuses yet
-  if (!userStatuses || userStatuses.length === 0) {
-    await supabase.rpc('seed_default_statuses', { p_user_id: userId });
-  }
-
-  const { data: finalStatuses } =
-    userStatuses && userStatuses.length > 0
-      ? { data: userStatuses }
-      : await supabase
-          .from('user_statuses')
-          .select('*')
-          .eq('user_id', userId)
-          .order('group_name')
-          .order('position');
 
   const syncLog = syncLogId
     ? { id: syncLogId }
@@ -348,6 +463,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
                 progress: { done, total, at: new Date().toISOString() },
                 statusChanges,
                 statusSuggestions,
+                discovered,
               },
             })
             .eq('id', syncLog.id);
@@ -372,9 +488,10 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           bounties_updated: tasksUpdated,
           details: {
             updates: result.updates,
-            errors: result.errors,
+            errors: [...discovery.errors, ...result.errors],
             statusChanges,
             statusSuggestions,
+            discovered,
             progress: { done: tasks.length, total: tasks.length },
             jev: jevObservations,
             skipped: result.skipped.length,
@@ -388,7 +505,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
 
     return {
       tasks_updated: tasksUpdated,
-      errors: result.errors,
+      errors: [...discovery.errors, ...result.errors],
       skipped: result.skipped.length,
     };
   } catch (err) {
@@ -401,7 +518,12 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           error_message: err instanceof Error ? err.message : String(err),
           // Tasks already applied before the abort stay applied; record them.
           bounties_updated: tasksUpdated,
-          details: { statusChanges, statusSuggestions, jev: jevObservations },
+          details: {
+            statusChanges,
+            statusSuggestions,
+            jev: jevObservations,
+            discovered,
+          },
         })
         .eq('id', syncLog.id)
         .eq('status', 'running');

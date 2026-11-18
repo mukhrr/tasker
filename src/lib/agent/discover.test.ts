@@ -53,8 +53,7 @@ describe('newHits', () => {
 
   it('keeps an issue when only a comment on it is tracked', () => {
     const lead = row({
-      issue_url:
-        'https://github.com/Expensify/App/issues/1#issuecomment-555',
+      issue_url: 'https://github.com/Expensify/App/issues/1#issuecomment-555',
     });
     expect(newHits([hit(1)], [lead])).toEqual([hit(1)]);
   });
