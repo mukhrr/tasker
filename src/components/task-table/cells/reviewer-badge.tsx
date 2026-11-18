@@ -3,7 +3,7 @@
 const PILL =
   'mt-0.5 inline-flex h-4 flex-shrink-0 items-center rounded px-1 text-[10px] font-semibold leading-none';
 const ON =
-  'bg-linear-to-b from-amber-300 to-amber-500 text-amber-950 ring-1 ring-amber-200/70 shadow-[0_0_6px] shadow-amber-400/60';
+  'bg-amber-400/15 text-amber-700 ring-1 ring-amber-400/40 dark:text-amber-300';
 
 // Without onChange it is a label: shown only when the task is a review.
 export function ReviewerBadge({
