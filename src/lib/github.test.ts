@@ -37,7 +37,9 @@ describe('fetchAllIssueEvents', () => {
 describe('searchAssignedIssues', () => {
   it('searches open issues assigned to the user since the cutoff', async () => {
     const items = [{ html_url: 'u', title: 't', number: 1 }];
-    const fetchMock = vi.fn((_url: string) => respond({ items }));
+    const fetchMock = vi.fn<(url: string) => ReturnType<typeof respond>>(() =>
+      respond({ items })
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     const hits = await searchAssignedIssues('mukhrr', '2026-11-04', 't');

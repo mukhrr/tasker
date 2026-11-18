@@ -29,6 +29,7 @@ import { getStatusColor } from '@/lib/status';
 import { waitForQueuedSync } from '@/lib/sync-poll';
 import { friendlySyncError } from '@/lib/sync-errors';
 import type { AiBackend, SyncLog, UserStatus } from '@/types/database';
+import type { DiscoveredTask } from '@/lib/agent/discover';
 
 interface LinkedBug {
   number: number;
@@ -361,6 +362,8 @@ export function LastSyncCard({ userId }: { userId: string }) {
   const errors = (log.details?.errors as string[] | undefined) ?? [];
   const changes =
     (log.details?.statusChanges as StatusChange[] | undefined) ?? [];
+  const discovered =
+    (log.details?.discovered as DiscoveredTask[] | undefined) ?? [];
   const progress = log.details?.progress as
     | { done: number; total: number }
     | undefined;
@@ -642,6 +645,28 @@ export function LastSyncCard({ userId }: { userId: string }) {
                 and {errors.length - 5} more
               </p>
             )}
+          </div>
+        )}
+
+        {discovered.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground">
+              New tasks, assigned to you on GitHub
+            </p>
+            {discovered.map((d) => (
+              <div
+                key={d.taskId}
+                className="group flex min-w-0 items-center gap-1.5 border-b border-border py-2 last:border-b-0"
+              >
+                <Link
+                  href={`/tasks/${d.taskId}`}
+                  className="min-w-0 truncate text-sm hover:underline"
+                >
+                  {d.issue_title || shortRef(d.issue_url)}
+                </Link>
+                <GitHubLink url={d.issue_url} />
+              </div>
+            ))}
           </div>
         )}
 
