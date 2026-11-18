@@ -1,6 +1,7 @@
 'use client';
 
 import { AdditionalBugsBadge } from '@/components/additional-bugs-badge';
+import { ReviewerBadge } from '@/components/task-table/cells/reviewer-badge';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -62,6 +63,7 @@ export function TaskDetail({ task }: { task: Task }) {
                     {currentStatus?.label ?? task.status}
                   </span>
                 </AdditionalBugsBadge>
+                <ReviewerBadge isReviewer={task.is_reviewer} />
               </div>
             </div>
             <Button

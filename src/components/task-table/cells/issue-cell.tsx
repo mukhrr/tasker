@@ -5,16 +5,21 @@ import { Input } from '@/components/ui/input';
 import { HighlightText } from '../highlight-text';
 import { shortenGitHubUrl, normalizeUrl } from '@/lib/github';
 import { ExternalLink, Pencil } from 'lucide-react';
+import { ReviewerBadge } from './reviewer-badge';
 
 export function IssueCell({
   issueUrl,
   issueTitle,
+  isReviewer,
   onChange,
+  onReviewerChange,
   highlight,
 }: {
   issueUrl: string;
   issueTitle: string | null;
+  isReviewer: boolean | null;
   onChange: (title: string | null) => void;
+  onReviewerChange: (value: boolean) => void;
   highlight?: string;
 }) {
   const [editing, setEditing] = useState(false);
@@ -72,6 +77,7 @@ export function IssueCell({
         >
           <HighlightText text={displayTitle} query={highlight ?? ''} />
         </span>
+        <ReviewerBadge isReviewer={isReviewer} onChange={onReviewerChange} />
         <a
           href={normalizeUrl(issueUrl)}
           target="_blank"

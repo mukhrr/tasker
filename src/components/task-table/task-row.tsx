@@ -11,6 +11,7 @@ import {
 import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
 import { IssueCell } from './cells/issue-cell';
+import { ReviewerBadge } from './cells/reviewer-badge';
 import { StatusCell } from './cells/status-cell';
 import { DateCell } from './cells/date-cell';
 import { AmountCell } from './cells/amount-cell';
@@ -90,17 +91,20 @@ export function TaskRow({
           <Skeleton className="h-4 w-36" />
         ) : task.archived ? (
           <div>
-            <a
-              href={normalizeUrl(task.issue_url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-medium text-foreground hover:underline"
-            >
-              <HighlightText
-                text={task.issue_title || shortenGitHubUrl(task.issue_url)}
-                query={search}
-              />
-            </a>
+            <div className="flex items-start gap-1">
+              <a
+                href={normalizeUrl(task.issue_url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-foreground hover:underline"
+              >
+                <HighlightText
+                  text={task.issue_title || shortenGitHubUrl(task.issue_url)}
+                  query={search}
+                />
+              </a>
+              <ReviewerBadge isReviewer={task.is_reviewer} />
+            </div>
             {task.issue_title && (
               <div className="line-clamp-1 text-xs text-muted-foreground">
                 <HighlightText
@@ -114,8 +118,12 @@ export function TaskRow({
           <IssueCell
             issueUrl={task.issue_url}
             issueTitle={task.issue_title}
+            isReviewer={task.is_reviewer}
             onChange={(title) =>
               ctx.handleUpdateTask(task.id, { issue_title: title })
+            }
+            onReviewerChange={(value) =>
+              ctx.handleUpdateTask(task.id, { is_reviewer: value })
             }
             highlight={search}
           />
