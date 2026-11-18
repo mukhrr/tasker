@@ -77,7 +77,6 @@ export function IssueCell({
         >
           <HighlightText text={displayTitle} query={highlight ?? ''} />
         </span>
-        <ReviewerBadge isReviewer={isReviewer} onChange={onReviewerChange} />
         <a
           href={normalizeUrl(issueUrl)}
           target="_blank"
@@ -108,14 +107,17 @@ export function IssueCell({
           {titleExpanded ? 'show less' : 'more'}
         </button>
       )}
-      {issueTitle && (
-        <div className="line-clamp-1 text-xs text-muted-foreground">
-          <HighlightText
-            text={shortenGitHubUrl(issueUrl)}
-            query={highlight ?? ''}
-          />
-        </div>
-      )}
+      <div className="mt-0.5 flex min-h-4 items-center gap-1.5 text-xs text-muted-foreground">
+        {issueTitle && (
+          <span className="truncate">
+            <HighlightText
+              text={shortenGitHubUrl(issueUrl)}
+              query={highlight ?? ''}
+            />
+          </span>
+        )}
+        <ReviewerBadge isReviewer={isReviewer} onChange={onReviewerChange} />
+      </div>
     </div>
   );
 }

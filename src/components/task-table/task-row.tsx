@@ -91,28 +91,28 @@ export function TaskRow({
           <Skeleton className="h-4 w-36" />
         ) : task.archived ? (
           <div>
-            <div className="flex items-start gap-1">
-              <a
-                href={normalizeUrl(task.issue_url)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm font-medium text-foreground hover:underline"
-              >
-                <HighlightText
-                  text={task.issue_title || shortenGitHubUrl(task.issue_url)}
-                  query={search}
-                />
-              </a>
+            <a
+              href={normalizeUrl(task.issue_url)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-foreground hover:underline"
+            >
+              <HighlightText
+                text={task.issue_title || shortenGitHubUrl(task.issue_url)}
+                query={search}
+              />
+            </a>
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              {task.issue_title && (
+                <span className="truncate">
+                  <HighlightText
+                    text={shortenGitHubUrl(task.issue_url)}
+                    query={search}
+                  />
+                </span>
+              )}
               <ReviewerBadge isReviewer={task.is_reviewer} />
             </div>
-            {task.issue_title && (
-              <div className="line-clamp-1 text-xs text-muted-foreground">
-                <HighlightText
-                  text={shortenGitHubUrl(task.issue_url)}
-                  query={search}
-                />
-              </div>
-            )}
           </div>
         ) : (
           <IssueCell
