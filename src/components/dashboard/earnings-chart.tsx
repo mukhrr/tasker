@@ -20,15 +20,20 @@ const chartConfig = {
     label: 'Earnings',
     color: 'var(--chart-1)',
   },
+  reviewer: {
+    label: 'of which C+',
+    color: '#f59e0b',
+  },
 } satisfies ChartConfig;
 
 interface EarningsChartProps {
-  data: { month: string; amount: number }[];
+  data: { month: string; amount: number; reviewer: number }[];
 }
 
 export function EarningsChart({ data }: EarningsChartProps) {
   const hasData = data.some((d) => d.amount > 0);
   const total = data.reduce((sum, d) => sum + d.amount, 0);
+  const reviewerTotal = data.reduce((sum, d) => sum + d.reviewer, 0);
 
   return (
     <Card>
@@ -36,7 +41,11 @@ export function EarningsChart({ data }: EarningsChartProps) {
         <CardTitle>Earnings Over Time</CardTitle>
         <CardDescription>
           {hasData
-            ? `$${total.toLocaleString()} in the last 12 months`
+            ? `$${total.toLocaleString()} in the last 12 months${
+                reviewerTotal > 0
+                  ? `, $${reviewerTotal.toLocaleString()} of it as C+`
+                  : ''
+              }`
             : 'No earnings data yet'}
         </CardDescription>
       </CardHeader>
@@ -88,6 +97,22 @@ export function EarningsChart({ data }: EarningsChartProps) {
                     strokeWidth: 2,
                   }}
                 />
+                {reviewerTotal > 0 && (
+                  <Area
+                    type="monotone"
+                    dataKey="reviewer"
+                    stroke="var(--color-reviewer)"
+                    strokeWidth={2}
+                    fill="var(--color-reviewer)"
+                    fillOpacity={0.15}
+                    dot={false}
+                    activeDot={{
+                      r: 4,
+                      stroke: 'var(--card)',
+                      strokeWidth: 2,
+                    }}
+                  />
+                )}
               </AreaChart>
             </ChartContainer>
             <table className="sr-only">
@@ -96,6 +121,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
                 <tr>
                   <th scope="col">Month</th>
                   <th scope="col">Earnings</th>
+                  <th scope="col">Of which C+</th>
                 </tr>
               </thead>
               <tbody>
@@ -103,6 +129,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
                   <tr key={d.month}>
                     <td>{d.month}</td>
                     <td>${d.amount.toLocaleString()}</td>
+                    <td>${d.reviewer.toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>

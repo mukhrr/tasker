@@ -9,7 +9,11 @@ import { ColumnHeader } from './column-header';
 import { TaskRow } from './task-row';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskTable } from './use-task-table';
-import { getStatusColor, getStatusTotals } from '@/lib/status';
+import {
+  getReviewerTotal,
+  getStatusColor,
+  getStatusTotals,
+} from '@/lib/status';
 import { cn } from '@/lib/utils';
 import type { ColumnKey } from './column-config';
 
@@ -46,6 +50,7 @@ export function TaskTable({ userId }: { userId: string }) {
     0
   );
   const statusTotals = getStatusTotals(ctx.filteredTasks, ctx.statuses);
+  const reviewerTotal = getReviewerTotal(ctx.filteredTasks);
 
   return (
     <div className="space-y-4">
@@ -185,6 +190,18 @@ export function TaskTable({ userId }: { userId: string }) {
                 {currencyFormatter.format(totalAmount)}
               </span>
             </span>
+            {reviewerTotal > 0 && (
+              <span
+                className="flex shrink-0 items-center gap-1.5"
+                title="Part of the total that comes from C+ reviews"
+              >
+                <span className="size-2 rounded-full bg-amber-400" />
+                of which C+{' '}
+                <span className="font-medium text-foreground">
+                  {currencyFormatter.format(reviewerTotal)}
+                </span>
+              </span>
+            )}
           </div>
         </div>
       )}

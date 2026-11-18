@@ -74,6 +74,9 @@ export function DashboardView({
         }
       : undefined;
 
+  const share = (amount: number) =>
+    amount > 0 ? `$${amount.toLocaleString()}` : undefined;
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -83,11 +86,13 @@ export function DashboardView({
           description={`${stats.completedCount} completed tasks`}
           delta={earningsDelta}
           trend={stats.totalEarned > 0 ? earningsTrend : undefined}
+          reviewerShare={share(stats.reviewerEarned)}
         />
         <StatCard
           title="Pending"
           value={`$${stats.pendingAmount.toLocaleString()}`}
           description={`${stats.activeCount} active tasks`}
+          reviewerShare={share(stats.reviewerPending)}
         />
         <StatCard title="Active Tasks" value={String(stats.activeCount)} />
         <StatCard
@@ -95,6 +100,7 @@ export function DashboardView({
           value={`$${stats.lastMonthEarned.toLocaleString()}`}
           description={`${lastMonthLabel} · ${stats.lastMonthCompletedCount} completed`}
           delta={lastMonthDelta}
+          reviewerShare={share(stats.lastMonthReviewerEarned)}
         />
       </div>
 

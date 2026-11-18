@@ -8,6 +8,8 @@ interface StatCardProps {
   delta?: { text: string; direction: 'up' | 'down' };
   /** 12-point sparkline; drawn in the de-emphasis gray, current point in accent */
   trend?: number[];
+  /** The part of `value` earned as a C+ reviewer, e.g. "$350" */
+  reviewerShare?: string;
 }
 
 function Sparkline({ points }: { points: number[] }) {
@@ -59,6 +61,7 @@ export function StatCard({
   description,
   delta,
   trend,
+  reviewerShare,
 }: StatCardProps) {
   return (
     <Card>
@@ -83,6 +86,13 @@ export function StatCard({
         )}
         {description && (
           <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+        )}
+        {reviewerShare && (
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="size-2 rounded-full bg-amber-400" />
+            of which C+{' '}
+            <span className="font-medium text-foreground">{reviewerShare}</span>
+          </p>
         )}
       </CardContent>
     </Card>

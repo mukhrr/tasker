@@ -179,6 +179,16 @@ export function getStatusGroup(
   return status?.group_name ?? 'todo';
 }
 
+// The part of a total that came from tasks reviewed as C+.
+export function getReviewerTotal(
+  tasks: { amount: number | null; is_reviewer: boolean | null }[]
+): number {
+  return tasks.reduce(
+    (sum, t) => sum + (t.is_reviewer === true ? (t.amount ?? 0) : 0),
+    0
+  );
+}
+
 export interface StatusTotal {
   key: string;
   label: string;

@@ -5,6 +5,7 @@ import {
   getStaleRowBg,
   getStatusTotals,
   isPaymentOverdue,
+  getReviewerTotal,
 } from './status';
 
 const now = new Date(2026, 10, 2, 15, 0);
@@ -137,5 +138,19 @@ describe('getAttentionScore', () => {
     expect(getAttentionScore(row('2026-10-01'), 'complete', now)).toBe(
       -Infinity
     );
+  });
+});
+
+describe('getReviewerTotal', () => {
+  it('sums only tasks marked as a review', () => {
+    expect(
+      getReviewerTotal([
+        { amount: 175, is_reviewer: true },
+        { amount: 250, is_reviewer: false },
+        { amount: 300, is_reviewer: null },
+        { amount: null, is_reviewer: true },
+        { amount: 125, is_reviewer: true },
+      ])
+    ).toBe(300);
   });
 });
