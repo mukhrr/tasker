@@ -50,6 +50,49 @@ export const STATUS_COLORS: Record<string, StatusColorConfig> = {
       'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
     rowBg: 'bg-orange-500/8 dark:bg-orange-500/10',
   },
+  amber: {
+    dot: 'bg-amber-500',
+    badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+    rowBg: 'bg-amber-500/8 dark:bg-amber-500/10',
+  },
+  lime: {
+    dot: 'bg-lime-500',
+    badge: 'bg-lime-100 text-lime-700 dark:bg-lime-900 dark:text-lime-300',
+    rowBg: 'bg-lime-500/8 dark:bg-lime-500/10',
+  },
+  emerald: {
+    dot: 'bg-emerald-500',
+    badge:
+      'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
+    rowBg: 'bg-emerald-500/8 dark:bg-emerald-500/10',
+  },
+  teal: {
+    dot: 'bg-teal-500',
+    badge: 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',
+    rowBg: 'bg-teal-500/8 dark:bg-teal-500/10',
+  },
+  cyan: {
+    dot: 'bg-cyan-500',
+    badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300',
+    rowBg: 'bg-cyan-500/8 dark:bg-cyan-500/10',
+  },
+  indigo: {
+    dot: 'bg-indigo-500',
+    badge:
+      'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
+    rowBg: 'bg-indigo-500/8 dark:bg-indigo-500/10',
+  },
+  fuchsia: {
+    dot: 'bg-fuchsia-500',
+    badge:
+      'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900 dark:text-fuchsia-300',
+    rowBg: 'bg-fuchsia-500/8 dark:bg-fuchsia-500/10',
+  },
+  rose: {
+    dot: 'bg-rose-500',
+    badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300',
+    rowBg: 'bg-rose-500/8 dark:bg-rose-500/10',
+  },
 };
 
 export const COLOR_NAMES = Object.keys(STATUS_COLORS);

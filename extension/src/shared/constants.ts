@@ -10,6 +10,14 @@ export const COLOR_HEX: Record<string, string> = {
   purple: '#a855f7',
   pink: '#ec4899',
   orange: '#f97316',
+  amber: '#f59e0b',
+  lime: '#84cc16',
+  emerald: '#10b981',
+  teal: '#14b8a6',
+  cyan: '#06b6d4',
+  indigo: '#6366f1',
+  fuchsia: '#d946ef',
+  rose: '#f43f5e',
 };
 
 export const STATUS_GROUP_LABELS: Record<TaskStatusGroup, string> = {

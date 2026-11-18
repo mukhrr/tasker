@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { UserStatus } from '@/types/database';
 import {
+  COLOR_NAMES,
+  STATUS_COLORS,
   getAttentionScore,
   getStaleRowBg,
   getStatusTotals,
@@ -152,5 +154,37 @@ describe('getReviewerTotal', () => {
         { amount: 125, is_reviewer: true },
       ])
     ).toBe(300);
+  });
+});
+
+describe('STATUS_COLORS', () => {
+  it('offers sixteen colours', () => {
+    expect(COLOR_NAMES).toEqual([
+      'gray',
+      'yellow',
+      'green',
+      'red',
+      'blue',
+      'purple',
+      'pink',
+      'orange',
+      'amber',
+      'lime',
+      'emerald',
+      'teal',
+      'cyan',
+      'indigo',
+      'fuchsia',
+      'rose',
+    ]);
+  });
+
+  it('gives every colour a dot, a badge and a row tint of its own hue', () => {
+    for (const name of COLOR_NAMES) {
+      const c = STATUS_COLORS[name];
+      expect(c.dot).toBe(`bg-${name}-500`);
+      expect(c.badge).toContain(`bg-${name}-100`);
+      expect(c.rowBg).toContain(`bg-${name}-500/8`);
+    }
   });
 });
