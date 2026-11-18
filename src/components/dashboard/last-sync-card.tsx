@@ -24,7 +24,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/client';
-import { useStatuses } from '@/hooks/use-statuses';
+import { useDashboardData } from '@/components/dashboard-data-provider';
 import { getStatusColor } from '@/lib/status';
 import { waitForQueuedSync } from '@/lib/sync-poll';
 import { friendlySyncError } from '@/lib/sync-errors';
@@ -186,12 +186,30 @@ function Counter({
   );
 }
 
-export function LastSyncCard({ userId }: { userId: string }) {
-  const { statuses } = useStatuses(userId);
-  const [log, setLog] = useState<SyncLog | null>(null);
-  const [settings, setSettings] = useState<SyncSettings | null>(null);
-  const [tasks, setTasks] = useState<Record<string, TaskRef>>({});
-  const [loaded, setLoaded] = useState(false);
+interface LastSyncSnapshot {
+  log: SyncLog | null;
+  settings: SyncSettings | null;
+  tasks: Record<string, TaskRef>;
+}
+
+export function LastSyncCard() {
+  const {
+    statuses: { statuses },
+    snapshots,
+  } = useDashboardData();
+  // What the card showed last time, so coming back paints at once; the
+  // load below still runs and replaces it.
+  const [seed] = useState(
+    () => snapshots.current.lastSync as LastSyncSnapshot | undefined
+  );
+  const [log, setLog] = useState<SyncLog | null>(seed?.log ?? null);
+  const [settings, setSettings] = useState<SyncSettings | null>(
+    seed?.settings ?? null
+  );
+  const [tasks, setTasks] = useState<Record<string, TaskRef>>(
+    seed?.tasks ?? {}
+  );
+  const [loaded, setLoaded] = useState(!!seed);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -243,6 +261,7 @@ export function LastSyncCard({ userId }: { userId: string }) {
     const ids = [
       ...new Set([...updates, ...changes, ...suggested].map((u) => u.taskId)),
     ];
+    let nextTasks: Record<string, TaskRef> = {};
     if (ids.length) {
       const supabase = createClient();
       const { data } = await supabase
@@ -251,12 +270,18 @@ export function LastSyncCard({ userId }: { userId: string }) {
           'id, issue_title, issue_url, pr_url, amount, status, archived, payment_date, status_changed_at'
         )
         .in('id', ids);
-      setTasks(
-        Object.fromEntries(((data as TaskRef[]) ?? []).map((t) => [t.id, t]))
+      nextTasks = Object.fromEntries(
+        ((data as TaskRef[]) ?? []).map((t) => [t.id, t])
       );
+      setTasks(nextTasks);
     }
+    snapshots.current.lastSync = {
+      log: nextLog,
+      settings: nextSettings,
+      tasks: nextTasks,
+    } satisfies LastSyncSnapshot;
     setLoaded(true);
-  }, []);
+  }, [snapshots]);
 
   useEffect(() => {
     load();

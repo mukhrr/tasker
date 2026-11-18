@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getUser } from '@/lib/supabase/server';
 import { Navbar } from '@/components/navbar';
+import { DashboardDataProvider } from '@/components/dashboard-data-provider';
 
 export default async function DashboardLayout({
   children,
@@ -17,7 +18,9 @@ export default async function DashboardLayout({
     <div className="min-h-screen bg-background">
       <Navbar user={user} />
       <main className="px-4 py-5 sm:px-6 sm:py-8 lg:px-10">
-        {children}
+        <DashboardDataProvider userId={user.id}>
+          {children}
+        </DashboardDataProvider>
       </main>
     </div>
   );

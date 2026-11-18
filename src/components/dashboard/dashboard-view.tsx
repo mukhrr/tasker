@@ -1,13 +1,12 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useTasks } from '@/hooks/use-tasks';
+import { useDashboardData } from '@/components/dashboard-data-provider';
 import { useDashboardStats } from '@/hooks/use-dashboard-stats';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard } from './stat-card';
 import { StatusChart } from './status-chart';
 import { LastSyncCard } from './last-sync-card';
-import { DASHBOARD_TASK_COLUMNS, type DashboardTask } from '@/types/database';
 
 // Lazy-load the recharts-based charts so recharts stays out of the initial bundle
 const EarningsChart = dynamic(
@@ -19,17 +18,10 @@ const ActivityChart = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
 );
 
-export function DashboardView({
-  userId,
-  initialTasks,
-}: {
-  userId: string;
-  initialTasks?: DashboardTask[];
-}) {
-  const { tasks, loading } = useTasks<DashboardTask>(userId, {
-    initialTasks,
-    columns: DASHBOARD_TASK_COLUMNS,
-  });
+export function DashboardView() {
+  const {
+    tasks: { tasks, loading },
+  } = useDashboardData();
   const stats = useDashboardStats(tasks);
 
   if (loading) {
@@ -104,7 +96,7 @@ export function DashboardView({
         />
       </div>
 
-      <LastSyncCard userId={userId} />
+      <LastSyncCard />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <EarningsChart data={stats.earningsOverTime} />

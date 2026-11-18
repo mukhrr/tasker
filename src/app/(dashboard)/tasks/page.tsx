@@ -17,7 +17,7 @@ export default async function TasksPage() {
           Track your open source tasks and contributions
         </p>
       </div>
-      <TaskTable userId={user.id} />
+      <TaskTable />
     </div>
   );
 }

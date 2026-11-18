@@ -9,15 +9,21 @@ import { createClient } from '@/lib/supabase/client';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { getStatusByKey, getStatusColor } from '@/lib/status';
-import { useStatuses } from '@/hooks/use-statuses';
+import { useDashboardData } from '@/components/dashboard-data-provider';
 import { shortenGitHubUrl } from '@/lib/github';
 import type { Task } from '@/types/database';
 
-export function TaskDetail({ task }: { task: Task }) {
+export function TaskDetail({ task: serverTask }: { task: Task }) {
   const [deleting, setDeleting] = useState(false);
   const router = useRouter();
   const supabase = createClient();
-  const { statuses } = useStatuses(task.user_id);
+  const {
+    statuses: { statuses },
+    tasks: { tasks },
+  } = useDashboardData();
+  // The page payload can be up to 30s old (router reuse) and is all there is
+  // on a deep link before the shared list loads; prefer the live row.
+  const task = tasks.find((t) => t.id === serverTask.id) ?? serverTask;
   const currentStatus = getStatusByKey(statuses, task.status);
   const colorConfig = getStatusColor(currentStatus?.color ?? 'gray');
 

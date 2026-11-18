@@ -32,8 +32,8 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
   currency: 'USD',
 });
 
-export function TaskTable({ userId }: { userId: string }) {
-  const ctx = useTaskTable(userId);
+export function TaskTable() {
+  const ctx = useTaskTable();
 
   if (ctx.loading) {
     return (

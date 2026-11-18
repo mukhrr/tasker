@@ -119,5 +119,6 @@ export function useCustomColumns(userId: string) {
     deleteColumn,
     setFieldValue,
     getFieldValue,
+    refetch: fetchColumns,
   };
 }

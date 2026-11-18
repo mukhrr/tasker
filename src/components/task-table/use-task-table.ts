@@ -2,9 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
-import { useTasks } from '@/hooks/use-tasks';
-import { useCustomColumns } from '@/hooks/use-custom-columns';
-import { useStatuses } from '@/hooks/use-statuses';
+import { useDashboardData } from '@/components/dashboard-data-provider';
 import { waitForQueuedSync } from '@/lib/sync-poll';
 import { getAttentionScore, getStatusGroup, getStaleDays } from '@/lib/status';
 import type { Task, TaskStatusGroup } from '@/types/database';
@@ -22,10 +20,13 @@ import {
   saveActiveTab,
 } from './column-config';
 
-export function useTaskTable(userId: string) {
-  const tasksCrud = useTasks(userId);
-  const customColumns = useCustomColumns(userId);
-  const statusesCrud = useStatuses(userId);
+export function useTaskTable() {
+  const {
+    tasks: tasksCrud,
+    customColumns,
+    statuses: statusesCrud,
+    snapshots,
+  } = useDashboardData();
 
   const [activeTab, setActiveTabState] = useState(() => loadActiveTab());
   const [search, setSearch] = useState('');
@@ -35,14 +36,20 @@ export function useTaskTable(userId: string) {
     error?: string;
   } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [syncReady, setSyncReady] = useState(true); // optimistic default
+  // Optimistic until known; the last answer is kept across page switches.
+  const [syncReady, setSyncReady] = useState(
+    () => (snapshots.current.syncReady as boolean | undefined) ?? true
+  );
 
   useEffect(() => {
     fetch('/api/settings', { cache: 'no-store' })
       .then((res) => res.json())
-      .then((data) => setSyncReady(!!data.sync_ready))
+      .then((data) => {
+        snapshots.current.syncReady = !!data.sync_ready;
+        setSyncReady(!!data.sync_ready);
+      })
       .catch(() => {});
-  }, []);
+  }, [snapshots]);
 
   // A run started elsewhere (dashboard card, worker auto-sync, another tab)
   // should spin this button too: attach to any queued/running row on mount.

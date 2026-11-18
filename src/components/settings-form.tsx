@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -133,6 +134,9 @@ export function SettingsForm({
   settings: UserSettings | null;
   apiKeyMasked: string | null;
 }) {
+  // The form is seeded from the server page, which the router reuses for
+  // 30s; refresh after a save so coming back never shows the old values.
+  const router = useRouter();
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [autoSync, setAutoSync] = useState(
@@ -158,6 +162,7 @@ export function SettingsForm({
     setBackend(next);
     try {
       await postSettings({ ai_backend: next });
+      router.refresh();
       toast.success(`Sync will use ${BACKEND_LABELS[next]}`);
     } catch (err) {
       setBackend(prev);
@@ -175,6 +180,7 @@ export function SettingsForm({
     setSaving(true);
     try {
       await postSettings(body);
+      router.refresh();
       onDone();
       toast.success(okMessage);
     } catch (err) {
@@ -203,6 +209,7 @@ export function SettingsForm({
         body: JSON.stringify({ ai_api_key: apiKey }),
       });
       if (!res.ok) throw new Error('Failed to save');
+      router.refresh();
       const last4 = apiKey.slice(-4);
       setMaskedKey(`${'•'.repeat(apiKey.length - 4)}${last4}`);
       setApiKey('');
@@ -228,6 +235,7 @@ export function SettingsForm({
         }),
       });
       if (!res.ok) throw new Error('Failed to save');
+      router.refresh();
       toast.success('Sync preferences saved');
     } catch {
       toast.error('Failed to save preferences');
@@ -427,6 +435,7 @@ export function SettingsForm({
                         }),
                       });
                       if (!res.ok) throw new Error('Failed to save');
+                      router.refresh();
                       setSavedGithubUsername(githubUsername.trim());
                       toast.success('GitHub username saved');
                     } catch {
