@@ -46,6 +46,8 @@ A task whose link is a comment on a PR is a _lead_ (`lead.ts`): a bug the develo
 
 A full sync first adds open issues assigned to the developer in the last 14 days that have no row yet, as `assigned` (`discover.ts`, `runner.ts` `discoverAssigned`), and syncs them in the same run; `sync_logs.details.discovered` lists them and stops a deleted one being added again. The sync only fills an empty `assigned_date`.
 
+`tasks.is_reviewer` (the C+ badge) is null until decided. The sync fills it once, only on positive evidence (`facts.ts` `reviewerAssigned`, `decideRole`; `manual.ts` `reviewerToWrite`), and never changes a decided value, so the user's toggle wins.
+
 Auto-sync: `user_settings.auto_sync_enabled` + `sync_interval_hours`; a user is due when the latest `sync_logs.started_at` is older than the interval (`schedule.ts` `isSyncDue`). CLI users are scheduled by the syncer worker every tick; API-key users by `GET /api/cron/sync`, whose GitHub Actions schedule is paused (`.github/workflows/sync-cron.yml`). One sync per user in flight; the toolbar polls `sync_logs` for queued runs (`lib/sync-poll.ts`). Full write-up: README "How sync works".
 
 ### Task Table (`components/task-table/`)

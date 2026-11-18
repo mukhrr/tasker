@@ -35,6 +35,8 @@ import {
   regressionFromLinkedBugs,
   keepPending,
   unansweredReviewerFeedback,
+  reviewerAssigned,
+  decideRole,
   DEPLOY_COMMENT_RE,
   type ReviewerNote,
 } from './facts';
@@ -70,8 +72,8 @@ export interface TaskUpdate {
   assigned_date?: string | null;
   payment_date?: string | null;
   amount?: number | null;
-  // contributor | reviewer | unknown, as the model answered.
-  role?: string;
+  // Only set on positive evidence (facts.ts decideRole).
+  role?: 'contributor' | 'reviewer';
   // Set only when a PR-comment lead became a new issue: the task moves to it.
   issue_url?: string;
   // The issue payment was moved to: the task is archived and that one tracked.
@@ -594,7 +596,11 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         assigned_date: result.assigned_date ?? assignedDate,
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
-        role: typeof result.role === 'string' ? result.role : undefined,
+        role: decideRole({
+          reviewerAssigned: reviewerAssigned(comments, username),
+          hasOwnPr: Boolean(result.pr_url ?? discoveredPrUrl ?? task.pr_url),
+          modelRole: typeof result.role === 'string' ? result.role : undefined,
+        }),
         payment_moved_to:
           paymentMoveTarget(
             result.payment_moved_to,

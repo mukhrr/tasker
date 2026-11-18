@@ -273,6 +273,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
   // only records them here and the Last Sync card offers each as an Apply.
   const applyStatus = process.env.SYNC_STATUS_MODE === 'apply';
   const statusSuggestions: typeof statusChanges = [];
+  const fieldErrors: string[] = [];
 
   try {
     const graph = createSyncGraph();
@@ -368,6 +369,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         }
       }
 
+      const isReviewer = reviewerToWrite(currentTask, update.role);
+
       if (update.payment_moved_to && update.confidence >= 0.75) {
         const target = parseIssueUrl(update.payment_moved_to);
         if (target) {
@@ -395,7 +398,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
               status_group: group,
               pr_url: currentTask.pr_url,
               assigned_date: currentTask.assigned_date,
-              is_reviewer: currentTask.is_reviewer,
+              is_reviewer: isReviewer ?? currentTask.is_reviewer,
               note: `Payment moved from ${currentTask.issue_url}`,
             });
             if (insertError) {
@@ -421,21 +424,6 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           `Task write failed for ${update.taskId}: ${error.message}`
         );
       }
-      const isReviewer = reviewerToWrite(currentTask, update.role);
-      if (isReviewer !== null) {
-        // Its own write, filtered on null: a badge the user toggled while
-        // this run was in flight must win.
-        const { error: roleError } = await supabase
-          .from('tasks')
-          .update({ is_reviewer: isReviewer })
-          .eq('id', update.taskId)
-          .is('is_reviewer', null);
-        if (roleError) {
-          throw new Error(
-            `Task write failed for ${update.taskId}: ${roleError.message}`
-          );
-        }
-      }
       if (updateData.status) {
         statusChanges.push({
           taskId: update.taskId,
@@ -445,6 +433,21 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         });
       }
       tasksUpdated++;
+
+      if (isReviewer !== null) {
+        // Its own write, filtered on null: a badge the user toggled while
+        // this run was in flight must win. Not fatal: the badge is a label.
+        const { error: roleError } = await supabase
+          .from('tasks')
+          .update({ is_reviewer: isReviewer })
+          .eq('id', update.taskId)
+          .is('is_reviewer', null);
+        if (roleError) {
+          fieldErrors.push(
+            `Could not set the C+ badge on ${currentTask.issue_url}: ${roleError.message}`
+          );
+        }
+      }
     };
 
     const result = await graph.invoke(
@@ -497,7 +500,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           bounties_updated: tasksUpdated,
           details: {
             updates: result.updates,
-            errors: [...discoveryErrors, ...result.errors],
+            errors: [...discoveryErrors, ...result.errors, ...fieldErrors],
             statusChanges,
             statusSuggestions,
             discovered,

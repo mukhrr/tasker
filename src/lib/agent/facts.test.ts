@@ -7,6 +7,8 @@ import {
   regressionFromLinkedBugs,
   keepPending,
   unansweredReviewerFeedback,
+  reviewerAssigned,
+  decideRole,
   PRODUCTION_DEPLOY_RE,
   DEPLOY_COMMENT_RE,
   type TaskFacts,
@@ -461,5 +463,59 @@ describe('regressionFromLinkedBugs', () => {
     expect(
       regressionFromLinkedBugs('merged', facts(1), new Set(['merged']), done)
     ).toBe('merged');
+  });
+});
+
+describe('reviewerAssigned', () => {
+  const bot = (login: string) => ({
+    body: `Triggered auto assignment to Contributor-plus team member for initial proposal review - @${login} (\`External\`)`,
+  });
+
+  it('sees the bot assigning the developer as C+', () => {
+    expect(reviewerAssigned([bot('mukhrr')], 'Mukhrr')).toBe(true);
+  });
+
+  it('ignores a C+ assignment of someone else', () => {
+    expect(reviewerAssigned([bot('hoangzinh')], 'mukhrr')).toBe(false);
+  });
+
+  it('does not match a longer login that starts the same', () => {
+    expect(reviewerAssigned([bot('mukhrr2')], 'mukhrr')).toBe(false);
+  });
+});
+
+describe('decideRole', () => {
+  const base = {
+    reviewerAssigned: false,
+    hasOwnPr: false,
+    modelRole: 'unknown',
+  };
+
+  it('is reviewer when the bot assigned the developer as C+', () => {
+    expect(
+      decideRole({ ...base, reviewerAssigned: true, modelRole: 'contributor' })
+    ).toBe('reviewer');
+  });
+
+  it('is contributor when the developer has their own PR', () => {
+    expect(decideRole({ ...base, hasOwnPr: true })).toBe('contributor');
+  });
+
+  it('stays undecided when both signals are present', () => {
+    expect(
+      decideRole({ ...base, reviewerAssigned: true, hasOwnPr: true })
+    ).toBeUndefined();
+  });
+
+  it('trusts the model saying reviewer', () => {
+    expect(decideRole({ ...base, modelRole: 'reviewer' })).toBe('reviewer');
+  });
+
+  it('does not freeze a contributor guess made without a PR', () => {
+    expect(decideRole({ ...base, modelRole: 'contributor' })).toBeUndefined();
+  });
+
+  it('stays undecided on unknown', () => {
+    expect(decideRole(base)).toBeUndefined();
   });
 });

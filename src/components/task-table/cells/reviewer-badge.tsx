@@ -2,7 +2,9 @@
 
 const PILL =
   'mt-0.5 inline-flex h-4 flex-shrink-0 items-center rounded px-1 text-[10px] font-semibold leading-none';
-const ON = 'bg-chart-1/15 text-chart-1 ring-1 ring-chart-1/30';
+// chart-1 on its own tint is too faint on a white background.
+const ON =
+  'bg-chart-1/15 text-sky-800 ring-1 ring-chart-1/30 dark:text-chart-1';
 
 // Without onChange it is a label: shown only when the task is a review.
 export function ReviewerBadge({

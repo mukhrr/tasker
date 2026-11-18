@@ -230,3 +230,35 @@ export function regressionFromLinkedBugs(
   if (!facts.open_linked_bugs || !statusKeys.has('regression')) return status;
   return isComplete(status) ? status : 'regression';
 }
+
+// Expensify's bot names the C+ in an early comment ("Triggered auto
+// assignment to Contributor-plus team member ... - @login"), which is
+// usually outside the comment window the model is shown.
+const CPLUS_ASSIGNMENT_RE =
+  /contributor[- ]plus team member[^\n@]*@([a-z\d-]+)/gi;
+
+export function reviewerAssigned(
+  comments: { body: string }[],
+  username: string
+): boolean {
+  const login = username.toLowerCase();
+  return comments.some((c) =>
+    [...c.body.matchAll(CPLUS_ASSIGNMENT_RE)].some(
+      (m) => m[1].toLowerCase() === login
+    )
+  );
+}
+
+// The answer is stored once, so only decide on positive evidence. A model
+// "contributor" without the developer's own PR is usually "assigned, no PR
+// visible", which is also what a review looks like.
+export function decideRole(input: {
+  reviewerAssigned: boolean;
+  hasOwnPr: boolean;
+  modelRole: string | undefined;
+}): 'reviewer' | 'contributor' | undefined {
+  if (input.reviewerAssigned && input.hasOwnPr) return undefined;
+  if (input.reviewerAssigned) return 'reviewer';
+  if (input.hasOwnPr) return 'contributor';
+  return input.modelRole === 'reviewer' ? 'reviewer' : undefined;
+}

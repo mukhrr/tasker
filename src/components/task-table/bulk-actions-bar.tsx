@@ -2,7 +2,13 @@
 
 import { useState } from 'react';
 import { startOfDay } from 'date-fns';
-import { Archive, ArchiveRestore, CircleDot, Trash2, X } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  CircleDot,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
@@ -54,7 +60,9 @@ export function BulkActionsBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-      <span className="text-sm font-medium">{selectedCount} selected</span>
+      <span className="text-sm font-medium">
+        {selectedCount} selected
+      </span>
 
       <div className="h-4 w-px bg-border" />
 

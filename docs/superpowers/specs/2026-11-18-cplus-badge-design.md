@@ -31,3 +31,10 @@ Show at a glance which tasks the user holds as the reviewer (C+ on Expensify), n
 
 - Column name `is_reviewer`, label "C+".
 - Rows not synced (paid, wasted, archived) stay undecided.
+
+## Changed after the branch review (2026-11-18)
+
+- The role is decided in code, not taken from the model as is: the bot's "Contributor-plus team member ... @login" comment means reviewer, the developer's own PR means contributor, both together stay undecided. A model "reviewer" is accepted; a model "contributor" without a PR is not stored, so it is retried.
+- A failed badge write is recorded in `details.errors` and does not stop the sync.
+- The task detail header shows the badge read-only.
+- Known gap: with `JEV_MODE=on`, a task the gate skips is not labelled until it has new activity.
