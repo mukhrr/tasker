@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { newHits, recentAssignment, searchCutoff } from './discover';
+import {
+  discoverAssigned,
+  newHits,
+  recentAssignment,
+  searchCutoff,
+  type DiscoveryDeps,
+  type NewTask,
+} from './discover';
 import type { GitHubEvent } from '@/types/github';
 
 const hit = (number: number, over = {}) => ({
@@ -51,11 +58,17 @@ describe('newHits', () => {
     expect(newHits([hit(2, { pull_request: {} })], [])).toEqual([]);
   });
 
-  it('keeps an issue when only a comment on it is tracked', () => {
-    const lead = row({
+  it('drops an issue when a comment on it is the tracked link', () => {
+    const viaComment = row({
       issue_url: 'https://github.com/Expensify/App/issues/1#issuecomment-555',
     });
-    expect(newHits([hit(1)], [lead])).toEqual([hit(1)]);
+    expect(newHits([hit(1)], [viaComment])).toEqual([]);
+  });
+
+  it('drops an issue an earlier sync already added', () => {
+    expect(
+      newHits([hit(2)], [], ['https://github.com/expensify/app/issues/2'])
+    ).toEqual([]);
   });
 });
 
@@ -91,5 +104,105 @@ describe('recentAssignment', () => {
 describe('searchCutoff', () => {
   it('is the date 14 days back', () => {
     expect(searchCutoff(NOW)).toBe('2026-11-04');
+  });
+});
+
+describe('discoverAssigned', () => {
+  const status = { key: 'assigned', group_name: 'todo' as const };
+  const setup = (over: Partial<DiscoveryDeps> = {}) => {
+    const inserted: NewTask[] = [];
+    const deps: DiscoveryDeps = {
+      search: async () => [hit(2), hit(3)],
+      events: async () => [assigned('mukhrr', '2026-11-15T00:00:00Z')],
+      trackedRows: async () => [row()],
+      offeredUrls: async () => [],
+      insert: async (task) => {
+        inserted.push(task);
+        return `id-${task.issue_number}`;
+      },
+      ...over,
+    };
+    return { deps, inserted };
+  };
+  const run = (
+    deps: DiscoveryDeps,
+    assignedStatus: typeof status | undefined
+  ) => discoverAssigned(deps, { username: 'mukhrr', assignedStatus, now: NOW });
+
+  it('inserts each new issue as assigned with its assignment date', async () => {
+    const { deps, inserted } = setup({ search: async () => [hit(2)] });
+
+    const result = await run(deps, status);
+
+    expect(inserted).toEqual([
+      {
+        issue_url: 'https://github.com/Expensify/App/issues/2',
+        issue_title: 'Issue 2',
+        repo_owner: 'Expensify',
+        repo_name: 'App',
+        issue_number: 2,
+        status: 'assigned',
+        status_group: 'todo',
+        assigned_date: '2026-11-15T00:00:00Z',
+        note: 'Added by sync',
+      },
+    ]);
+    expect(result).toEqual({
+      discovered: [
+        {
+          taskId: 'id-2',
+          issue_url: 'https://github.com/Expensify/App/issues/2',
+          issue_title: 'Issue 2',
+        },
+      ],
+      errors: [],
+    });
+  });
+
+  it('adds nothing and reports once when there is no assigned status', async () => {
+    const { deps, inserted } = setup();
+
+    const result = await run(deps, undefined);
+
+    expect(inserted).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+  });
+
+  it('still adds the other issues when one of them cannot be read', async () => {
+    const { deps, inserted } = setup({
+      events: async (_owner, _repo, number) => {
+        if (number === 2) throw new Error('GitHub API error: 502');
+        return [assigned('mukhrr', '2026-11-15T00:00:00Z')];
+      },
+    });
+
+    const result = await run(deps, status);
+
+    expect(inserted.map((t) => t.issue_number)).toEqual([3]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('issues/2');
+  });
+
+  it('reports a failed search instead of throwing', async () => {
+    const { deps, inserted } = setup({
+      search: async () => {
+        throw new Error('rate limited');
+      },
+    });
+
+    const result = await run(deps, status);
+
+    expect(inserted).toEqual([]);
+    expect(result.errors[0]).toContain('rate limited');
+  });
+
+  it('skips an issue assigned more than 14 days ago', async () => {
+    const { deps, inserted } = setup({
+      events: async () => [assigned('mukhrr', '2026-10-01T00:00:00Z')],
+    });
+
+    await run(deps, status);
+
+    expect(inserted).toEqual([]);
   });
 });

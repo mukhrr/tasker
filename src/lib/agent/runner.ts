@@ -1,21 +1,20 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { createSyncGraph, type TaskUpdate } from './graph';
 import { anthropicAnalyzer, type Analyzer } from './llm';
 import { deciderFromEnv, jevModeFromEnv } from './jev';
 import type { JevObservation } from './graph';
-import { paymentDateToWrite, userSetStatus } from './manual';
+import {
+  assignedDateToWrite,
+  paymentDateToWrite,
+  userSetStatus,
+} from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
 import {
   fetchAllIssueEvents,
   parseIssueUrl,
   searchAssignedIssues,
 } from '@/lib/github';
-import {
-  newHits,
-  recentAssignment,
-  searchCutoff,
-  type DiscoveredTask,
-} from './discover';
+import { discoverAssigned, type DiscoveredTask } from './discover';
 import type { Task, UserStatus } from '@/types/database';
 
 interface SyncCredentials {
@@ -34,93 +33,6 @@ export interface RunSyncOptions {
   // Set when the worker re-queues a run its container was killed during:
   // tasks synced since this time were already done by the first attempt.
   resumeAfter?: string;
-}
-
-const ASSIGNED_STATUS_KEY = 'assigned';
-
-// Never throws: a search rate limit must not cost the user their sync.
-async function discoverAssigned(
-  supabase: SupabaseClient,
-  userId: string,
-  githubToken: string,
-  githubUsername: string,
-  statuses: UserStatus[]
-): Promise<{ discovered: DiscoveredTask[]; errors: string[] }> {
-  const discovered: DiscoveredTask[] = [];
-  const errors: string[] = [];
-  try {
-    const assignedStatus = statuses.find((s) => s.key === ASSIGNED_STATUS_KEY);
-    if (!assignedStatus) {
-      return {
-        discovered,
-        errors: [
-          `New assigned issues were not added: no "${ASSIGNED_STATUS_KEY}" status.`,
-        ],
-      };
-    }
-
-    const now = new Date();
-    const hits = await searchAssignedIssues(
-      githubUsername,
-      searchCutoff(now),
-      githubToken
-    );
-    if (hits.length === 0) return { discovered, errors };
-
-    // Every row, archived and finished ones too, so a closed-out task is
-    // never added again.
-    const { data: existing, error } = await supabase
-      .from('tasks')
-      .select('issue_url, repo_owner, repo_name, issue_number')
-      .eq('user_id', userId);
-    if (error) throw new Error(error.message);
-
-    for (const hit of newHits(hits, existing ?? [])) {
-      const target = parseIssueUrl(hit.html_url);
-      if (!target) continue;
-      const events = await fetchAllIssueEvents(
-        target.owner,
-        target.repo,
-        target.number,
-        githubToken
-      );
-      const assignedAt = recentAssignment(events, githubUsername, now);
-      if (!assignedAt) continue;
-
-      const { data: inserted, error: insertError } = await supabase
-        .from('tasks')
-        .insert({
-          user_id: userId,
-          issue_url: hit.html_url,
-          issue_title: hit.title,
-          repo_owner: target.owner,
-          repo_name: target.repo,
-          issue_number: target.number,
-          status: assignedStatus.key,
-          status_group: assignedStatus.group_name,
-          assigned_date: assignedAt,
-          note: 'Added by sync',
-        })
-        .select('id')
-        .single();
-      if (insertError || !inserted) {
-        errors.push(
-          `Could not add ${hit.html_url}: ${insertError?.message ?? 'no row returned'}`
-        );
-        continue;
-      }
-      discovered.push({
-        taskId: inserted.id,
-        issue_url: hit.html_url,
-        issue_title: hit.title,
-      });
-    }
-  } catch (err) {
-    errors.push(
-      `Looking for newly assigned issues failed: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  return { discovered, errors };
 }
 
 export async function runSync(userId: string, opts: RunSyncOptions = {}) {
@@ -198,18 +110,94 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           .order('group_name')
           .order('position');
 
-  // Before the task query, so rows it adds are synced by this same run.
-  const discovery =
-    taskId || resumeAfter
-      ? { discovered: [], errors: [] }
-      : await discoverAssigned(
-          supabase,
-          userId,
-          githubToken,
-          githubUsername,
-          (finalStatuses as UserStatus[]) ?? []
-        );
-  const { discovered } = discovery;
+  // Created before discovery: the routes' "sync in progress" check looks
+  // for this row, and discovery can take several GitHub calls.
+  const syncLog = syncLogId
+    ? { id: syncLogId }
+    : (
+        await supabase
+          .from('sync_logs')
+          .insert({
+            user_id: userId,
+            status: 'running',
+            task_id: taskId ?? null,
+          })
+          .select('id')
+          .single()
+      ).data;
+
+  let discovered: DiscoveredTask[] = [];
+  let discoveryErrors: string[] = [];
+  if (resumeAfter && syncLog) {
+    // The first attempt already ran discovery; keep what it recorded.
+    const { data: prior } = await supabase
+      .from('sync_logs')
+      .select('details')
+      .eq('id', syncLog.id)
+      .single();
+    discovered = (prior?.details?.discovered as DiscoveredTask[]) ?? [];
+    discoveryErrors = (prior?.details?.discoveryErrors as string[]) ?? [];
+  } else if (!taskId && !resumeAfter) {
+    // Before the task query, so rows it adds are synced by this same run.
+    const found = await discoverAssigned(
+      {
+        search: (since) =>
+          searchAssignedIssues(githubUsername, since, githubToken),
+        events: (owner, repo, number) =>
+          fetchAllIssueEvents(owner, repo, number, githubToken),
+        // Every row, archived and finished ones too, so a closed-out task
+        // is never added again.
+        trackedRows: async () => {
+          const { data, error } = await supabase
+            .from('tasks')
+            .select('issue_url, repo_owner, repo_name, issue_number')
+            .eq('user_id', userId);
+          if (error) throw new Error(error.message);
+          return data ?? [];
+        },
+        offeredUrls: async (since) => {
+          const { data, error } = await supabase
+            .from('sync_logs')
+            .select('discovered:details->discovered')
+            .eq('user_id', userId)
+            .gte('started_at', since);
+          if (error) throw new Error(error.message);
+          return (data ?? []).flatMap((r) =>
+            ((r.discovered as DiscoveredTask[] | null) ?? []).map(
+              (d) => d.issue_url
+            )
+          );
+        },
+        insert: async (task) => {
+          const { data, error } = await supabase
+            .from('tasks')
+            .insert({ user_id: userId, ...task })
+            .select('id')
+            .single();
+          if (error || !data) {
+            throw new Error(error?.message ?? 'no row returned');
+          }
+          return data.id as string;
+        },
+      },
+      {
+        username: githubUsername,
+        assignedStatus: (finalStatuses as UserStatus[] | null)?.find(
+          (s) => s.key === 'assigned'
+        ),
+        now: new Date(),
+      }
+    );
+    discovered = found.discovered;
+    discoveryErrors = found.errors;
+    // Stored now so a run killed before its first progress write keeps it.
+    if (syncLog && (discovered.length || discoveryErrors.length)) {
+      await supabase
+        .from('sync_logs')
+        .update({ details: { discovered, discoveryErrors } })
+        .eq('id', syncLog.id);
+    }
+  }
 
   // Get tasks that need syncing
   let query = supabase.from('tasks').select('*').eq('user_id', userId);
@@ -229,13 +217,26 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
   }
 
   const { data: tasks, error: tasksError } = await query;
-  if (tasksError)
+  if (tasksError) {
+    if (syncLog) {
+      await supabase
+        .from('sync_logs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: `Could not load tasks: ${tasksError.message}`,
+          details: { discovered, discoveryErrors },
+        })
+        .eq('id', syncLog.id)
+        .eq('status', 'running');
+    }
     throw new Error(`Could not load tasks: ${tasksError.message}`);
+  }
 
   if (!tasks || tasks.length === 0) {
-    // The worker already flipped its row to running; close it or the user
-    // is blocked by "sync in progress" until the reaper gets to it.
-    if (syncLogId) {
+    // Close the row, or the user is blocked by "sync in progress" until
+    // the reaper gets to it.
+    if (syncLog) {
       await supabase
         .from('sync_logs')
         .update({
@@ -244,29 +245,16 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           bounties_updated: 0,
           details: {
             updates: [],
-            errors: discovery.errors,
+            errors: discoveryErrors,
             statusChanges: [],
             discovered,
+            discoveryErrors,
           },
         })
-        .eq('id', syncLogId);
+        .eq('id', syncLog.id);
     }
-    return { tasks_updated: 0, errors: discovery.errors, skipped: 0 };
+    return { tasks_updated: 0, errors: [], skipped: 0 };
   }
-
-  const syncLog = syncLogId
-    ? { id: syncLogId }
-    : (
-        await supabase
-          .from('sync_logs')
-          .insert({
-            user_id: userId,
-            status: 'running',
-            task_id: taskId ?? null,
-          })
-          .select('id')
-          .single()
-      ).data;
 
   let tasksUpdated = 0;
   // from → to per applied status change; the dashboard's Last Sync card
@@ -340,8 +328,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
       if (update.issue_title != null)
         updateData.issue_title = update.issue_title;
       if (update.pr_url != null) updateData.pr_url = update.pr_url;
-      if (update.assigned_date != null)
-        updateData.assigned_date = update.assigned_date;
+      const assignedDate = assignedDateToWrite(
+        currentTask,
+        update.assigned_date
+      );
+      if (assignedDate) updateData.assigned_date = assignedDate;
       const paymentDate = paymentDateToWrite(currentTask, update.payment_date);
       if (paymentDate) updateData.payment_date = paymentDate;
       // Only set amount if not already set by user
@@ -464,6 +455,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
                 statusChanges,
                 statusSuggestions,
                 discovered,
+                discoveryErrors,
               },
             })
             .eq('id', syncLog.id);
@@ -488,10 +480,11 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
           bounties_updated: tasksUpdated,
           details: {
             updates: result.updates,
-            errors: [...discovery.errors, ...result.errors],
+            errors: [...discoveryErrors, ...result.errors],
             statusChanges,
             statusSuggestions,
             discovered,
+            discoveryErrors,
             progress: { done: tasks.length, total: tasks.length },
             jev: jevObservations,
             skipped: result.skipped.length,
@@ -505,7 +498,9 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
 
     return {
       tasks_updated: tasksUpdated,
-      errors: [...discovery.errors, ...result.errors],
+      // Discovery errors stay in the log: the route treats returned errors
+      // with nothing updated as a failed sync.
+      errors: result.errors,
       skipped: result.skipped.length,
     };
   } catch (err) {
@@ -523,6 +518,8 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
             statusSuggestions,
             jev: jevObservations,
             discovered,
+            errors: discoveryErrors,
+            discoveryErrors,
           },
         })
         .eq('id', syncLog.id)

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { paymentDateToWrite, userSetStatus } from './manual';
+import {
+  assignedDateToWrite,
+  paymentDateToWrite,
+  userSetStatus,
+} from './manual';
 import type { Task } from '@/types/database';
 
 const task = (over: Partial<Task>) =>
@@ -75,5 +79,19 @@ describe('paymentDateToWrite', () => {
 
   it('writes nothing without a suggestion', () => {
     expect(paymentDateToWrite({ payment_date: null }, undefined)).toBeNull();
+  });
+});
+
+describe('assignedDateToWrite', () => {
+  it('keeps a date the row already has', () => {
+    expect(
+      assignedDateToWrite({ assigned_date: '2026-11-15' }, '2026-03-01')
+    ).toBeNull();
+  });
+
+  it('fills an empty date', () => {
+    expect(assignedDateToWrite({ assigned_date: null }, '2026-03-01')).toBe(
+      '2026-03-01'
+    );
   });
 });

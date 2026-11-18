@@ -44,7 +44,7 @@ A `Decider` (`jev.ts`) optionally runs before the analyzer: a deterministic chan
 
 A task whose link is a comment on a PR is a _lead_ (`lead.ts`): a bug the developer reported on someone's PR. The sync reads the replies after it and any issue linking back, then relinks the task to a new issue, suggests `wasted` (fixed in that PR, duplicate, declined), or leaves it as is while nobody has decided. When a comment moves payment to another issue (`payment_moved_to`, `payment-move.ts`), the runner archives the task and inserts one for that issue.
 
-A full sync first adds open issues assigned to the developer in the last 14 days that have no row yet, as `assigned` (`discover.ts`, `runner.ts` `discoverAssigned`), and syncs them in the same run; `sync_logs.details.discovered` lists them.
+A full sync first adds open issues assigned to the developer in the last 14 days that have no row yet, as `assigned` (`discover.ts`, `runner.ts` `discoverAssigned`), and syncs them in the same run; `sync_logs.details.discovered` lists them and stops a deleted one being added again. The sync only fills an empty `assigned_date`.
 
 Auto-sync: `user_settings.auto_sync_enabled` + `sync_interval_hours`; a user is due when the latest `sync_logs.started_at` is older than the interval (`schedule.ts` `isSyncDue`). CLI users are scheduled by the syncer worker every tick; API-key users by `GET /api/cron/sync`, whose GitHub Actions schedule is paused (`.github/workflows/sync-cron.yml`). One sync per user in flight; the toolbar polls `sync_logs` for queued runs (`lib/sync-poll.ts`). Full write-up: README "How sync works".
 

@@ -33,3 +33,11 @@ Each full sync notices issues GitHub has newly assigned to the user and adds the
 
 - 14 day window and all repos (both shown to the user and accepted).
 - Pure logic (filtering hits, picking the assignment date) lives in `src/lib/agent/discover.ts` with Vitest tests; the runner does the I/O.
+
+## Changed after the branch review (2026-11-18)
+
+- A row linked to a comment on an issue counts as tracking that issue.
+- Issues an earlier sync added (read from `sync_logs.details.discovered` over the window) are never added again, so deleting an auto-added row sticks.
+- The sync only fills an empty `assigned_date`; it no longer rewrites one already set.
+- The `sync_logs` row is created before discovery, and discovery errors are stored in `details`, not returned to the route.
+- One issue that cannot be read does not stop the others.

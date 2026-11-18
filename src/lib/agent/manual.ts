@@ -22,3 +22,12 @@ export function paymentDateToWrite(
 ): string | null {
   return task.payment_date ? null : (suggested ?? null);
 }
+
+// Same rule for the assignment date: discovery stores the latest assignment,
+// and the per-task sync reads the first one, which can be months older.
+export function assignedDateToWrite(
+  task: Pick<Task, 'assigned_date'>,
+  suggested: string | null | undefined
+): string | null {
+  return task.assigned_date ? null : (suggested ?? null);
+}
