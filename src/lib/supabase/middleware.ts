@@ -30,7 +30,7 @@ export async function updateSession(request: NextRequest) {
   );
 
   // Use getSession (from cookie, no network call) for fast routing decisions.
-  // The dashboard layout does the secure getUser() check.
+  // The dashboard layout verifies the token's signature (session-user.ts).
   const {
     data: { session },
   } = await supabase.auth.getSession();

@@ -14,9 +14,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
-import type { User } from '@supabase/supabase-js';
+import type { SessionUser } from '@/lib/supabase/session-user';
 
-export function Navbar({ user }: { user: User }) {
+export function Navbar({ user }: { user: SessionUser }) {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();

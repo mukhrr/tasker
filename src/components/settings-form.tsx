@@ -10,7 +10,7 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import type { User } from '@supabase/supabase-js';
+import type { SessionUser } from '@/lib/supabase/session-user';
 import type { AiBackend, UserSettings } from '@/types/database';
 
 const BACKEND_LABELS: Record<AiBackend, string> = {
@@ -130,7 +130,7 @@ export function SettingsForm({
   settings,
   apiKeyMasked: initialApiKeyMasked,
 }: {
-  user: User;
+  user: SessionUser;
   settings: UserSettings | null;
   apiKeyMasked: string | null;
 }) {

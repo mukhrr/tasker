@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { cache } from 'react';
+import { sessionUser } from './session-user';
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -28,11 +29,5 @@ export async function createClient() {
   );
 }
 
-// Deduplicated per-request: layout + page share one getUser() call
-export const getUser = cache(async () => {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
-});
+// Deduplicated per-request: layout + page share one lookup.
+export const getUser = cache(async () => sessionUser(await createClient()));

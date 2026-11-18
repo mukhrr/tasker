@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { sessionUser } from '@/lib/supabase/session-user';
 import { encrypt, decrypt } from '@/lib/encryption';
 import { syncReady } from '@/lib/agent/backend';
 import type { AiBackend } from '@/types/database';
@@ -24,9 +25,7 @@ function isCodexAuthJson(raw: string): boolean {
 
 export async function GET() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await sessionUser(supabase);
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
