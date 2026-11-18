@@ -31,3 +31,15 @@ export function assignedDateToWrite(
 ): string | null {
   return task.assigned_date ? null : (suggested ?? null);
 }
+
+// null means nobody has decided yet. The sync fills that once and never
+// changes a decided value, so a badge the user turned off stays off.
+export function reviewerToWrite(
+  task: Pick<Task, 'is_reviewer'>,
+  role: string | null | undefined
+): boolean | null {
+  if (task.is_reviewer !== null) return null;
+  if (role === 'reviewer') return true;
+  if (role === 'contributor') return false;
+  return null;
+}

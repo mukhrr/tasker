@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assignedDateToWrite,
+  reviewerToWrite,
   paymentDateToWrite,
   userSetStatus,
 } from './manual';
@@ -93,5 +94,32 @@ describe('assignedDateToWrite', () => {
     expect(assignedDateToWrite({ assigned_date: null }, '2026-03-01')).toBe(
       '2026-03-01'
     );
+  });
+});
+
+describe('reviewerToWrite', () => {
+  const undecided = { is_reviewer: null };
+
+  it('marks an undecided task the model calls a review', () => {
+    expect(reviewerToWrite(undecided, 'reviewer')).toBe(true);
+  });
+
+  it('marks an undecided task the model calls a contribution', () => {
+    expect(reviewerToWrite(undecided, 'contributor')).toBe(false);
+  });
+
+  it.each(['unknown', 'maintainer', '', null, undefined])(
+    'writes nothing for the role %s',
+    (role) => {
+      expect(reviewerToWrite(undecided, role)).toBeNull();
+    }
+  );
+
+  it('keeps a badge the user turned off', () => {
+    expect(reviewerToWrite({ is_reviewer: false }, 'reviewer')).toBeNull();
+  });
+
+  it('keeps a badge that is already on', () => {
+    expect(reviewerToWrite({ is_reviewer: true }, 'contributor')).toBeNull();
   });
 });

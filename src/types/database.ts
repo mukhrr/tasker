@@ -35,6 +35,8 @@ export interface Task {
   repo_name: string | null;
   issue_number: number | null;
   archived: boolean;
+  // null until the sync or the user decides.
+  is_reviewer: boolean | null;
   last_synced_at: string | null;
   status_changed_at: string;
   created_at: string;

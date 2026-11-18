@@ -56,6 +56,7 @@ export const TASK_UPDATE_SCHEMA = {
     'payment_date',
     'amount',
     'payment_moved_to',
+    'role',
   ],
   properties: {
     suggestedStatus: { type: 'string' },
@@ -68,6 +69,8 @@ export const TASK_UPDATE_SCHEMA = {
     payment_date: { type: ['string', 'null'] },
     amount: { type: ['number', 'null'] },
     payment_moved_to: { type: ['string', 'null'] },
+    // A plain enum, not a nullable one: Codex enforces this schema.
+    role: { type: 'string', enum: ['contributor', 'reviewer', 'unknown'] },
   },
 } as const;
 
@@ -166,12 +169,15 @@ Return ONLY a JSON object, no prose and no code fences, with ALL of these fields
   "assigned_date": "<ISO date the developer was assigned, or null>",
   "payment_date": "<ISO date payment is due or was made, or null>",
   "amount": <bounty amount in USD from the title, labels, body or comments, or null>,
-  "payment_moved_to": "<full URL of the other issue, or null>"
+  "payment_moved_to": "<full URL of the other issue, or null>",
+  "role": "<contributor | reviewer | unknown>"
 }
 
 Return null for any field you cannot confirm; null keeps the existing value. Only return pr_url when you are confident the PR is the developer's PR for this issue.
 
 payment_moved_to: only when a comment explicitly says payment for this issue will be handled in another issue (e.g. "payment and checklist will be handled in #84139"). Return that issue's full URL. Otherwise null.
+
+role: the developer's part in this issue. "reviewer" when they are assigned to review other people's proposals and PR for it (on Expensify, the Contributor Plus or C+ reviewer). "contributor" when they proposed a fix, were assigned to implement it, or the PR for it is theirs. "unknown" unless the issue, its comments or its events show one of these; do not guess, the first answer is kept.
 
 payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.
 
@@ -206,10 +212,13 @@ Return ONLY a JSON object, no prose and no code fences:
   "assigned_date": "<ISO date the developer was assigned, or null>",
   "payment_date": "<ISO date, see below, or null>",
   "amount": <bounty amount in USD, or null>,
-  "payment_moved_to": "<full URL of the other issue, or null>"
+  "payment_moved_to": "<full URL of the other issue, or null>",
+  "role": "<contributor | reviewer | unknown>"
 }
 
 Return null for any field you cannot confirm; null keeps the existing value.
+
+role: the developer's part in this issue. "reviewer" when they are assigned to review other people's proposals and PR for it (on Expensify, the Contributor Plus or C+ reviewer). "contributor" when they proposed a fix, were assigned to implement it, or the PR for it is theirs. "unknown" unless the issue, its comments or its events show one of these; do not guess, the first answer is kept.
 
 payment_date: if a comment states an actual payment date, use it. Otherwise use \`payment_due_at\` from Computed Facts when it is present. Otherwise null. Never calculate a date yourself.
 

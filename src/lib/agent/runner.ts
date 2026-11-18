@@ -6,6 +6,7 @@ import type { JevObservation } from './graph';
 import {
   assignedDateToWrite,
   paymentDateToWrite,
+  reviewerToWrite,
   userSetStatus,
 } from './manual';
 import { decrypt, decryptIfEncrypted } from '@/lib/encryption';
@@ -394,6 +395,7 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
               status_group: group,
               pr_url: currentTask.pr_url,
               assigned_date: currentTask.assigned_date,
+              is_reviewer: currentTask.is_reviewer,
               note: `Payment moved from ${currentTask.issue_url}`,
             });
             if (insertError) {
@@ -418,6 +420,21 @@ export async function runSync(userId: string, opts: RunSyncOptions = {}) {
         throw new Error(
           `Task write failed for ${update.taskId}: ${error.message}`
         );
+      }
+      const isReviewer = reviewerToWrite(currentTask, update.role);
+      if (isReviewer !== null) {
+        // Its own write, filtered on null: a badge the user toggled while
+        // this run was in flight must win.
+        const { error: roleError } = await supabase
+          .from('tasks')
+          .update({ is_reviewer: isReviewer })
+          .eq('id', update.taskId)
+          .is('is_reviewer', null);
+        if (roleError) {
+          throw new Error(
+            `Task write failed for ${update.taskId}: ${roleError.message}`
+          );
+        }
       }
       if (updateData.status) {
         statusChanges.push({

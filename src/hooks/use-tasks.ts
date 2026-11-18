@@ -168,6 +168,7 @@ export function useTasks<T extends TaskListItem = Task>(
       note: null,
       ai_summary: null,
       archived: false,
+      is_reviewer: null,
       last_synced_at: null,
       status_changed_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
