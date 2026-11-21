@@ -245,6 +245,7 @@ export function buildAnalysisPrompt(data: {
   wasManuallyEdited?: boolean;
   developerNote?: string;
   assignedToOther?: boolean;
+  asReviewer?: boolean;
   facts?: TaskFacts;
 }): string {
   let prompt = '';
@@ -256,6 +257,9 @@ export function buildAnalysisPrompt(data: {
 
   if (data.developerNote) {
     prompt += `Developer's own note: "${data.developerNote.slice(0, 500)}"\nThis is context the developer has and GitHub may not show. Respect it: a note like "waiting for other PR" or "@someone should finish PR" means they expect the issue may come back to them, so another contributor's PR or assignment is not a lost bounty.\n`;
+  }
+  if (data.asReviewer) {
+    prompt += `Role: **C+ reviewer**. The developer reviews other people's proposals and PR on this issue; the PR is not theirs. Only the statuses listed for this role apply. \`approved_by_reviewer\` means the developer's own approval here. Rules about the developer's own PR, reviewer feedback to them, or a lost bounty do not apply.\n`;
   }
   if (data.wasManuallyEdited) {
     prompt += `User changed the status by hand since the last sync: **yes**\n`;

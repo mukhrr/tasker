@@ -13,7 +13,11 @@ export interface UserStatus {
   group_name: TaskStatusGroup;
   position: number;
   created_at: string;
+  // Which role tab lists it: the Committer tab, the Reviewer tab, or both.
+  role: StatusRole;
 }
+
+export type StatusRole = 'both' | 'contributor' | 'reviewer';
 
 export type CustomFieldType = 'text' | 'date' | 'number' | 'url' | 'select';
 

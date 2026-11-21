@@ -49,9 +49,9 @@ async function handleMessage(msg: MessageRequest): Promise<MessageResponse> {
     case 'QUERY_STATUSES':
       return handleQueryStatuses();
     case 'UPDATE_STATUS':
-      return handleUpdateStatus(msg.taskId, msg.status, msg.statusGroup);
+      return handleUpdateStatus(msg.taskId, msg.status, msg.statusGroup, msg.isReviewer);
     case 'CREATE_TASK':
-      return handleCreateTask(msg.owner, msg.repo, msg.number);
+      return handleCreateTask(msg.owner, msg.repo, msg.number, msg.isReviewer === true);
     case 'QUERY_TASKS_BATCH':
       return handleQueryTasksBatch(msg.owner, msg.repo, msg.issueNumbers);
     case 'UPDATE_LINKED_STATUSES':
@@ -228,11 +228,17 @@ function todayDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function handleUpdateStatus(taskId: string, status: string, statusGroup: string): Promise<MessageResponse> {
+async function handleUpdateStatus(
+  taskId: string,
+  status: string,
+  statusGroup: string,
+  isReviewer?: boolean
+): Promise<MessageResponse> {
   if (!taskId || typeof taskId !== 'string') return { ok: false, error: 'Invalid task ID' };
   if (!status || typeof status !== 'string') return { ok: false, error: 'Invalid status' };
   const validGroups = ['todo', 'in_progress', 'pending', 'complete'];
   if (!validGroups.includes(statusGroup)) return { ok: false, error: 'Invalid status group' };
+  if (isReviewer !== undefined && typeof isReviewer !== 'boolean') return { ok: false, error: 'Invalid reviewer flag' };
 
   const supabase = getSupabaseClient();
   const { data: session } = await supabase.auth.getSession();
@@ -241,7 +247,12 @@ async function handleUpdateStatus(taskId: string, status: string, statusGroup: s
 
   const { error } = await supabase
     .from('tasks')
-    .update({ status, status_group: statusGroup, status_changed_at: new Date().toISOString() })
+    .update({
+      status,
+      status_group: statusGroup,
+      status_changed_at: new Date().toISOString(),
+      ...(isReviewer !== undefined ? { is_reviewer: isReviewer } : {}),
+    })
     .eq('id', taskId)
     .eq('user_id', userId);
 
@@ -415,7 +426,7 @@ async function fetchIssueEnrichment(
   }
 }
 
-async function handleCreateTask(owner: string, repo: string, number: number): Promise<MessageResponse<Task>> {
+async function handleCreateTask(owner: string, repo: string, number: number, isReviewer = false): Promise<MessageResponse<Task>> {
   const ghNameRegex = /^[a-zA-Z0-9._-]+$/;
   if (!owner || !repo || !ghNameRegex.test(owner) || !ghNameRegex.test(repo)) {
     return { ok: false, error: 'Invalid owner or repo name' };
@@ -449,6 +460,7 @@ async function handleCreateTask(owner: string, repo: string, number: number): Pr
       ...(enrichment.issueTitle ? { issue_title: enrichment.issueTitle } : {}),
       ...(enrichment.amount != null ? { amount: enrichment.amount } : {}),
       ...(enrichment.assignedDate ? { assigned_date: enrichment.assignedDate } : {}),
+      ...(isReviewer ? { is_reviewer: true } : {}),
     })
     .select()
     .single();

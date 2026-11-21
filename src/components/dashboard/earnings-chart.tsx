@@ -20,20 +20,39 @@ const chartConfig = {
     label: 'Earnings',
     color: 'var(--chart-1)',
   },
+  contributor: {
+    label: 'Committer',
+    color: 'var(--chart-1)',
+  },
   reviewer: {
-    label: 'of which C+',
+    label: 'C+',
     color: '#f59e0b',
   },
 } satisfies ChartConfig;
 
 interface EarningsChartProps {
   data: { month: string; amount: number; reviewer: number }[];
+  /** Stack contributor and C+ earnings as two series (the All view). */
+  split?: boolean;
+  /** Draw the single series in the C+ amber (the Reviewer view). */
+  reviewerOnly?: boolean;
 }
 
-export function EarningsChart({ data }: EarningsChartProps) {
+const ACTIVE_DOT = { r: 4, stroke: 'var(--card)', strokeWidth: 2 };
+
+export function EarningsChart({
+  data,
+  split = false,
+  reviewerOnly = false,
+}: EarningsChartProps) {
   const hasData = data.some((d) => d.amount > 0);
   const total = data.reduce((sum, d) => sum + d.amount, 0);
   const reviewerTotal = data.reduce((sum, d) => sum + d.reviewer, 0);
+  const stacked = split && reviewerTotal > 0;
+  const rows = data.map((d) => ({ ...d, contributor: d.amount - d.reviewer }));
+  const singleColor = reviewerOnly
+    ? 'var(--color-reviewer)'
+    : 'var(--color-amount)';
 
   return (
     <Card>
@@ -42,7 +61,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
         <CardDescription>
           {hasData
             ? `$${total.toLocaleString()} in the last 12 months${
-                reviewerTotal > 0
+                stacked
                   ? `, $${reviewerTotal.toLocaleString()} of it as C+`
                   : ''
               }`
@@ -57,7 +76,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
         ) : (
           <>
             <ChartContainer config={chartConfig} className="h-[250px] w-full">
-              <AreaChart data={data} accessibilityLayer>
+              <AreaChart data={rows} accessibilityLayer>
                 <CartesianGrid vertical={false} />
                 <XAxis
                   dataKey="month"
@@ -83,34 +102,41 @@ export function EarningsChart({ data }: EarningsChartProps) {
                     />
                   }
                 />
-                <Area
-                  type="monotone"
-                  dataKey="amount"
-                  stroke="var(--color-amount)"
-                  strokeWidth={2}
-                  fill="var(--color-amount)"
-                  fillOpacity={0.1}
-                  dot={false}
-                  activeDot={{
-                    r: 4,
-                    stroke: 'var(--card)',
-                    strokeWidth: 2,
-                  }}
-                />
-                {reviewerTotal > 0 && (
+                {stacked ? (
+                  <>
+                    <Area
+                      type="monotone"
+                      dataKey="contributor"
+                      stackId="earnings"
+                      stroke="var(--color-contributor)"
+                      strokeWidth={2}
+                      fill="var(--color-contributor)"
+                      fillOpacity={0.1}
+                      dot={false}
+                      activeDot={ACTIVE_DOT}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="reviewer"
+                      stackId="earnings"
+                      stroke="var(--color-reviewer)"
+                      strokeWidth={2}
+                      fill="var(--color-reviewer)"
+                      fillOpacity={0.15}
+                      dot={false}
+                      activeDot={ACTIVE_DOT}
+                    />
+                  </>
+                ) : (
                   <Area
                     type="monotone"
-                    dataKey="reviewer"
-                    stroke="var(--color-reviewer)"
+                    dataKey="amount"
+                    stroke={singleColor}
                     strokeWidth={2}
-                    fill="var(--color-reviewer)"
-                    fillOpacity={0.15}
+                    fill={singleColor}
+                    fillOpacity={0.1}
                     dot={false}
-                    activeDot={{
-                      r: 4,
-                      stroke: 'var(--card)',
-                      strokeWidth: 2,
-                    }}
+                    activeDot={ACTIVE_DOT}
                   />
                 )}
               </AreaChart>
@@ -121,7 +147,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
                 <tr>
                   <th scope="col">Month</th>
                   <th scope="col">Earnings</th>
-                  <th scope="col">Of which C+</th>
+                  {stacked && <th scope="col">Of which C+</th>}
                 </tr>
               </thead>
               <tbody>
@@ -129,7 +155,7 @@ export function EarningsChart({ data }: EarningsChartProps) {
                   <tr key={d.month}>
                     <td>{d.month}</td>
                     <td>${d.amount.toLocaleString()}</td>
-                    <td>${d.reviewer.toLocaleString()}</td>
+                    {stacked && <td>${d.reviewer.toLocaleString()}</td>}
                   </tr>
                 ))}
               </tbody>

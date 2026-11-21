@@ -23,6 +23,7 @@ function status(
     group_name: group,
     position: 0,
     created_at: '',
+    role: 'both',
   };
 }
 

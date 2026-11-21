@@ -22,6 +22,7 @@ import {
   STATUS_GROUP_LABELS,
 } from '@/lib/status';
 import type { Task, UserStatus } from '@/types/database';
+import { statusesForRole, type TaskRole } from '@/lib/role';
 
 /** Date → the `YYYY-MM-DD` shape the date columns are stored in. */
 function toDateString(date: Date | null): string | null {
@@ -35,6 +36,7 @@ function toDateString(date: Date | null): string | null {
 export function BulkActionsBar({
   selectedCount,
   statuses,
+  role,
   isArchivedView,
   onStatusChange,
   onUpdate,
@@ -43,6 +45,7 @@ export function BulkActionsBar({
 }: {
   selectedCount: number;
   statuses: UserStatus[];
+  role: TaskRole;
   /** The archived tab shows Restore instead of Archive. */
   isArchivedView: boolean;
   onStatusChange: (statusKey: string) => void;
@@ -78,7 +81,7 @@ export function BulkActionsBar({
         />
         <PopoverContent align="start" className="w-56">
           <div className="max-h-72 overflow-y-auto">
-            {Object.entries(getStatusesByGroup(statuses)).map(
+            {Object.entries(getStatusesByGroup(statusesForRole(statuses, role))).map(
               ([group, groupStatuses]) =>
                 groupStatuses.length > 0 && (
                   <div key={group}>

@@ -26,7 +26,8 @@ export const BUILT_IN_COLUMNS: ColumnDef[] = [
 export type SortDirection = 'asc' | 'desc';
 
 export interface SortConfig {
-  key: ColumnKey | 'created_at' | 'updated_at' | 'priority';
+  // 'turn' is the reviewer tab's computed Whose turn column, not a ColumnKey.
+  key: ColumnKey | 'created_at' | 'updated_at' | 'priority' | 'turn';
   direction: SortDirection;
 }
 
@@ -136,6 +137,14 @@ export function loadSortConfig(): SortConfig {
     if (stored) return JSON.parse(stored) as SortConfig;
   } catch {}
   return DEFAULT_SORT;
+}
+
+export function hasStoredSortConfig(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SORT_KEY) !== null;
+  } catch {}
+  return false;
 }
 
 export function saveSortConfig(config: SortConfig): void {

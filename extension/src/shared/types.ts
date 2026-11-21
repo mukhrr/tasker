@@ -12,6 +12,7 @@ export interface UserStatus {
   group_name: TaskStatusGroup;
   position: number;
   created_at: string;
+  role?: 'both' | 'contributor' | 'reviewer';
 }
 
 export interface Task {
@@ -32,6 +33,7 @@ export interface Task {
   repo_name: string | null;
   issue_number: number | null;
   archived: boolean;
+  is_reviewer: boolean | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;

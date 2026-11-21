@@ -66,6 +66,7 @@ interface TaskRef {
   archived: boolean;
   payment_date: string | null;
   status_changed_at: string;
+  is_reviewer: boolean | null;
 }
 
 // sync_logs.details.jev, written while JEV_MODE is shadow.
@@ -156,7 +157,7 @@ function StatusPill({ status }: { status: UserStatus | undefined }) {
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ${color.badge}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
-      {status?.label ?? 'Unknown'}
+      {status ? status.label : 'Unknown'}
     </span>
   );
 }
@@ -267,7 +268,7 @@ export function LastSyncCard() {
       const { data } = await supabase
         .from('tasks')
         .select(
-          'id, issue_title, issue_url, pr_url, amount, status, archived, payment_date, status_changed_at'
+          'id, issue_title, issue_url, pr_url, amount, status, archived, payment_date, status_changed_at, is_reviewer'
         )
         .in('id', ids);
       nextTasks = Object.fromEntries(

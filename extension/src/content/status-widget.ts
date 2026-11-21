@@ -8,6 +8,9 @@ import type {
   TasksBatchResponse,
 } from '../shared/messages';
 import { COLOR_HEX, STATUS_GROUP_LABELS, STATUS_GROUP_ORDER } from '../shared/constants';
+import { statusesForTab, whoseTurn } from '../shared/role';
+
+const CPLUS_CHIP = '<span class="cplus-chip" title="You are the C+ reviewer on this issue">C+</span>';
 
 function sendMessage<T>(msg: MessageRequest): Promise<T> {
   return chrome.runtime.sendMessage(msg);
@@ -33,6 +36,7 @@ export class StatusWidget {
   private linkedTasks: Task[] = [];
   private statuses: UserStatus[] = [];
   private dropdownOpen = false;
+  private dropdownTab: 'committer' | 'reviewer' = 'committer';
   private loading = true;
   private error: string | null = null;
   private owner: string;
@@ -207,6 +211,7 @@ export class StatusWidget {
       <span class="tasker-icon">T</span>
       <span class="dot" style="background:${colorHex}"></span>
       <span class="status-label">${this.escapeHtml(label)}</span>
+      ${this.prIsReview() ? CPLUS_CHIP : ''}
       <span class="linked-count">${this.linkedTasks.length} issue${this.linkedTasks.length > 1 ? 's' : ''}</span>
       <span class="chevron">${this.dropdownOpen ? '&#9650;' : '&#9660;'}</span>
     `;
@@ -236,7 +241,8 @@ export class StatusWidget {
     notice.innerHTML = `Updating <strong>${this.linkedTasks.length}</strong> tracked issue${this.linkedTasks.length > 1 ? 's' : ''}: ${this.linkedTasks.map(t => `#${t.issue_number}`).join(', ')}`;
     dropdown.appendChild(notice);
 
-    const grouped = this.groupStatuses();
+    const isReview = this.prIsReview();
+    const grouped = this.groupStatuses(statusesForTab(this.statuses, isReview));
 
     for (const group of STATUS_GROUP_ORDER) {
       const items = grouped[group];
@@ -264,6 +270,11 @@ export class StatusWidget {
     }
 
     return dropdown;
+  }
+
+  // A mixed set of reviews and own tasks falls back to the user's own labels.
+  private prIsReview(): boolean {
+    return this.linkedTasks.length > 0 && this.linkedTasks.every(t => t.is_reviewer === true);
   }
 
   private async updateLinkedStatuses(statusKey: string, groupName: TaskStatusGroup) {
@@ -339,7 +350,8 @@ export class StatusWidget {
     const btn = document.createElement('button');
     btn.className = 'add-btn';
     btn.textContent = 'Add to Tasker';
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       btn.disabled = true;
       btn.textContent = 'Adding...';
 
@@ -352,7 +364,7 @@ export class StatusWidget {
 
       if (res.ok && res.data) {
         this.task = res.data;
-        this.render();
+        this.openDropdown();
       } else {
         btn.textContent = res.error ?? 'Failed';
         setTimeout(() => { btn.disabled = false; btn.textContent = 'Add to Tasker'; }, 2000);
@@ -361,6 +373,12 @@ export class StatusWidget {
 
     section.appendChild(btn);
     this.root.appendChild(section);
+  }
+
+  private openDropdown() {
+    this.dropdownTab = this.task?.is_reviewer === true ? 'reviewer' : 'committer';
+    this.dropdownOpen = true;
+    this.render();
   }
 
   private renderAdditionalBugsBadge(count: number): HTMLSpanElement {
@@ -376,6 +394,7 @@ export class StatusWidget {
     const task = this.task!;
     const currentStatus = this.statuses.find((s) => s.key === task.status);
     const colorHex = currentStatus ? getColorHex(currentStatus.color) : getColorHex('gray');
+    const isReview = task.is_reviewer === true;
     const label = currentStatus?.label ?? task.status;
 
     const section = document.createElement('div');
@@ -388,16 +407,29 @@ export class StatusWidget {
     badge.innerHTML = `
       <span class="dot" style="background:${colorHex}"></span>
       <span class="label">${this.escapeHtml(label)}</span>
+      ${isReview ? CPLUS_CHIP : ''}
       <span class="chevron">${this.dropdownOpen ? '&#9650;' : '&#9660;'}</span>
     `;
     badge.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.dropdownOpen = !this.dropdownOpen;
-      this.render();
+      if (this.dropdownOpen) {
+        this.dropdownOpen = false;
+        this.render();
+      } else {
+        this.openDropdown();
+      }
     });
 
     if ((task.additional_bugs_fixed ?? 0) > 0) badge.appendChild(this.renderAdditionalBugsBadge(task.additional_bugs_fixed));
     section.appendChild(badge);
+
+    if (whoseTurn(task.status, isReview) === 'me') {
+      const turn = document.createElement('div');
+      turn.className = 'your-turn';
+      turn.innerHTML = '<span class="turn-dot"></span>Your turn';
+      section.appendChild(turn);
+    }
+
 
     if (this.dropdownOpen) {
       section.appendChild(this.renderDropdown());
@@ -410,7 +442,29 @@ export class StatusWidget {
     const dropdown = document.createElement('div');
     dropdown.className = 'dropdown';
 
-    const grouped = this.groupStatuses();
+    const tabs = document.createElement('div');
+    tabs.className = 'role-tabs';
+    tabs.setAttribute('role', 'tablist');
+    for (const [tab, text] of [['committer', 'Committer'], ['reviewer', 'Reviewer']] as const) {
+      const btn = document.createElement('button');
+      btn.className = `role-tab ${this.dropdownTab === tab ? 'selected' : ''}`;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(this.dropdownTab === tab));
+      btn.textContent = text;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.dropdownTab = tab;
+        this.render();
+      });
+      tabs.appendChild(btn);
+    }
+    dropdown.appendChild(tabs);
+
+    const isReviewer = this.dropdownTab === 'reviewer';
+    const grouped = this.groupStatuses(
+      statusesForTab(this.statuses, isReviewer, this.task && (this.task.is_reviewer === true) === isReviewer ? this.task.status : undefined)
+    );
+    const sameRole = (this.task?.is_reviewer === true) === isReviewer;
 
     for (const group of STATUS_GROUP_ORDER) {
       const items = grouped[group];
@@ -423,14 +477,14 @@ export class StatusWidget {
 
       for (const status of items) {
         const row = document.createElement('button');
-        row.className = `status-row ${this.task?.status === status.key ? 'active' : ''}`;
+        row.className = `status-row ${sameRole && this.task?.status === status.key ? 'active' : ''}`;
         row.innerHTML = `
           <span class="dot" style="background:${getColorHex(status.color)}"></span>
           <span class="label">${this.escapeHtml(status.label)}</span>
         `;
         row.addEventListener('click', async (e) => {
           e.stopPropagation();
-          await this.updateStatus(status.key, status.group_name);
+          await this.updateStatus(status.key, status.group_name, isReviewer);
         });
         dropdown.appendChild(row);
       }
@@ -439,14 +493,18 @@ export class StatusWidget {
     return dropdown;
   }
 
-  private async updateStatus(statusKey: string, groupName: TaskStatusGroup) {
+  private async updateStatus(statusKey: string, groupName: TaskStatusGroup, isReviewer: boolean) {
     if (!this.task) return;
 
     const oldStatus = this.task.status;
     const oldGroup = this.task.status_group;
+    const oldReviewer = this.task.is_reviewer;
+    // Null counts as a change too: picking in Committer records the role as decided.
+    const roleChanged = oldReviewer !== isReviewer;
 
     this.task.status = statusKey;
     this.task.status_group = groupName;
+    this.task.is_reviewer = isReviewer;
     this.dropdownOpen = false;
     this.render();
 
@@ -455,11 +513,13 @@ export class StatusWidget {
       taskId: this.task.id,
       status: statusKey,
       statusGroup: groupName,
+      ...(roleChanged ? { isReviewer } : {}),
     });
 
     if (!res.ok) {
       this.task.status = oldStatus;
       this.task.status_group = oldGroup;
+      this.task.is_reviewer = oldReviewer;
       this.error = res.error ?? 'Update failed';
       this.render();
       setTimeout(() => { this.error = null; this.render(); }, 3000);
@@ -468,14 +528,14 @@ export class StatusWidget {
 
   // ── Shared helpers ──
 
-  private groupStatuses(): Record<TaskStatusGroup, UserStatus[]> {
+  private groupStatuses(statuses: UserStatus[] = this.statuses): Record<TaskStatusGroup, UserStatus[]> {
     const groups: Record<TaskStatusGroup, UserStatus[]> = {
       todo: [],
       in_progress: [],
       pending: [],
       complete: [],
     };
-    for (const s of this.statuses) {
+    for (const s of statuses) {
       groups[s.group_name]?.push(s);
     }
     for (const group of STATUS_GROUP_ORDER) {
@@ -593,6 +653,18 @@ export class StatusWidget {
         font-size: 8px;
         opacity: 0.5;
         margin-left: 2px;
+      }
+
+      .cplus-chip {
+        display: inline-block;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: #fdf3d7;
+        color: #8a5a00;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 16px;
+        flex-shrink: 0;
       }
 
       .linked-notice {
@@ -804,6 +876,48 @@ export class StatusWidget {
       .add-btn:hover { background: #f6f8fa; }
       .tasker-root.dark .add-btn:hover { background: #21262d; }
       .add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .role-tabs {
+        display: flex;
+        gap: 2px;
+        padding: 2px;
+        margin-bottom: 4px;
+        border-radius: 6px;
+        background: #f6f8fa;
+      }
+      .tasker-root.dark .role-tabs { background: #22272e; }
+      .role-tab {
+        flex: 1;
+        padding: 4px 0;
+        border: none;
+        border-radius: 4px;
+        background: transparent;
+        color: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        opacity: 0.7;
+        cursor: pointer;
+      }
+      .role-tab.selected {
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(31,35,40,0.12);
+        opacity: 1;
+      }
+      .tasker-root.dark .role-tab.selected {
+        background: #373e47;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      }
+
+      .cplus-chip {
+        display: inline-block;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: #fdf3d7;
+        color: #8a5a00;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 16px;
+        flex-shrink: 0;
+      }
 
       .error-msg {
         font-size: 12px;

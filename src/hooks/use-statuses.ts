@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import type { UserStatus, TaskStatusGroup } from '@/types/database';
+import type { UserStatus, TaskStatusGroup, StatusRole } from '@/types/database';
 
 const supabase = createClient();
 
@@ -47,6 +47,7 @@ export function useStatuses(userId: string) {
     description: string;
     color: string;
     group_name: TaskStatusGroup;
+    role?: StatusRole;
   }) => {
     // Position = max position in group + 1
     const groupStatuses = statuses.filter(
@@ -69,7 +70,10 @@ export function useStatuses(userId: string) {
   const updateStatus = async (
     id: string,
     updates: Partial<
-      Pick<UserStatus, 'label' | 'description' | 'color' | 'group_name' | 'key'>
+      Pick<
+        UserStatus,
+        'label' | 'description' | 'color' | 'group_name' | 'key' | 'role'
+      >
     >
   ) => {
     // Optimistic
@@ -84,7 +88,14 @@ export function useStatuses(userId: string) {
     return { error };
   };
 
-  const deleteStatus = async (id: string) => {
+  // From one tab, a status shared by both tabs only leaves that tab.
+  const deleteStatus = async (id: string, tab?: 'contributor' | 'reviewer') => {
+    const status = statuses.find((s) => s.id === id);
+    if (tab && status?.role === 'both') {
+      return updateStatus(id, {
+        role: tab === 'reviewer' ? 'contributor' : 'reviewer',
+      });
+    }
     setStatuses((prev) => prev.filter((s) => s.id !== id));
     const { error } = await supabase
       .from('user_statuses')

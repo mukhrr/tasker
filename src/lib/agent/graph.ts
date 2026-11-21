@@ -27,6 +27,7 @@ import {
   statusesMissingDescriptions,
 } from './questions';
 import { userSetStatus } from './manual';
+import { statusesForRole } from '@/lib/role';
 import {
   computeTaskFacts,
   paymentStatus,
@@ -37,6 +38,10 @@ import {
   unansweredReviewerFeedback,
   reviewerAssigned,
   decideRole,
+  myDecisiveReview,
+  authorMovedSinceMyReview,
+  unassignedFrom,
+  reviewerStatus,
   DEPLOY_COMMENT_RE,
   type ReviewerNote,
 } from './facts';
@@ -50,6 +55,7 @@ import {
   parsePrUrl,
   parsePrCommentUrl,
   findLinkedPR,
+  findReviewedPR,
   fetchFailingChecks,
   fetchComment,
   fetchPRCommentsSince,
@@ -214,14 +220,54 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         ]);
       }
     } else if (username) {
-      // Try to discover linked PR by user
-      const linkedPR = await findLinkedPR(owner, repo, number, username, token);
+      // A decided review never looks for the user's own PR; an undecided
+      // task with a C+ assignment tries theirs first, then the reviewed one.
+      const linkedPR =
+        task.is_reviewer === true
+          ? null
+          : await findLinkedPR(owner, repo, number, username, token);
       if (linkedPR) {
         prData = linkedPR;
         discoveredPrUrl = linkedPR.html_url;
         reviews = await fetchPRReviews(owner, repo, linkedPR.number, token);
+      } else if (
+        task.is_reviewer === true ||
+        (task.is_reviewer === null && reviewerAssigned(comments, username))
+      ) {
+        const reviewed = await findReviewedPR(
+          owner,
+          repo,
+          number,
+          username,
+          issue.assignees.map((a) => a.login),
+          token
+        );
+        if (reviewed) {
+          prData = reviewed.pr;
+          reviews = reviewed.reviews;
+          discoveredPrUrl = reviewed.pr.html_url;
+        }
       }
     }
+
+    const ownPr =
+      !!prData &&
+      !!username &&
+      prData.user.login.toLowerCase() === username.toLowerCase();
+    // The user's toggle wins: false never takes the reviewer path, and an
+    // undecided task with their own PR is a contribution.
+    const asReviewer =
+      !!username &&
+      (task.is_reviewer === true ||
+        (task.is_reviewer === null &&
+          !ownPr &&
+          reviewerAssigned(comments, username)));
+    // Each role tab has its own statuses; the model only chooses among them.
+    const roleStatuses = statusesForRole(
+      state.userStatuses,
+      asReviewer ? 'reviewer' : 'contributor',
+      task.status
+    );
 
     // CI and merge state are what changes_required keys on; only an open,
     // unmerged PR needs them.
@@ -229,6 +275,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     // that as "checks pass".
     let failingChecks: string[] | null = [];
     let reviewerFeedback: ReviewerNote[] | null = null;
+    let authorMoved = false;
     if (prData && prData.state === 'open' && !prData.merged) {
       const prParsed = parsePrUrl(prData.html_url);
       if (prParsed && prData.mergeable === null) {
@@ -268,6 +315,30 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
           });
         }
       }
+      if (prParsed && asReviewer) {
+        const [lastPushAt, prComments] = await Promise.all([
+          fetchCommitDate(
+            prParsed.owner,
+            prParsed.repo,
+            prData.head.sha,
+            token
+          ).catch(() => null),
+          fetchPRCommentsSince(
+            prParsed.owner,
+            prParsed.repo,
+            prParsed.number,
+            prData.created_at,
+            token
+          ).catch(() => []),
+        ]);
+        authorMoved = authorMovedSinceMyReview({
+          me: username,
+          author: prData.user.login,
+          reviews: reviews ?? [],
+          comments: prComments,
+          lastPushAt,
+        });
+      }
       if (prParsed) {
         failingChecks =
           (
@@ -282,12 +353,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     }
 
     let linkedBugs: LeadCandidate[] | null = null;
-    if (
-      prData?.merged &&
-      prData.merged_at &&
-      username &&
-      prData.user.login.toLowerCase() === username.toLowerCase()
-    ) {
+    if (prData?.merged && prData.merged_at && (ownPr || asReviewer)) {
       const prParsed = parsePrUrl(prData.html_url);
       if (prParsed) {
         const timeline = await fetchTimeline(
@@ -386,8 +452,14 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       new Date()
     );
     facts.unanswered_reviewer_feedback = reviewerFeedback?.length ?? null;
+    const myReview =
+      asReviewer && prData ? myDecisiveReview(humanReviews, username) : null;
     facts.approved_by_reviewer =
-      prData && username ? approvedByReviewer(humanReviews, username) : null;
+      !prData || !username
+        ? null
+        : asReviewer
+          ? myReview === 'APPROVED'
+          : approvedByReviewer(humanReviews, username);
     facts.open_linked_bugs = linkedBugs
       ? linkedBugs.filter((b) => b.state === 'open').length
       : null;
@@ -418,7 +490,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     let jevChoice: JevChoiceAnswer | null = null;
 
     if (state.jevMode !== 'off' && state.decide) {
-      const missing = statusesMissingDescriptions(state.userStatuses);
+      const missing = statusesMissingDescriptions(roleStatuses);
       if (missing.length) {
         console.warn(
           `[jev] statuses without descriptions will be guessed: ${missing.join(', ')}`
@@ -433,7 +505,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         },
         {
           material: materialChangeQuestion(),
-          status: statusChoiceQuestion(state.userStatuses),
+          status: statusChoiceQuestion(roleStatuses),
         }
       );
       observation.latencyMs = Date.now() - startedAt;
@@ -469,7 +541,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       currentStatus: task.status,
       isFirstSync,
       wasManuallyEdited,
-      assignedToOther,
+      assignedToOther: asReviewer ? false : assignedToOther,
+      asReviewer,
       developerNote: task.note?.trim() || undefined,
       facts,
       githubUsername: username,
@@ -572,8 +645,8 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
 
     const content = await state.analyze(
       useJevStatus
-        ? buildGenerationPrompt(state.userStatuses)
-        : buildSystemPrompt(state.userStatuses),
+        ? buildGenerationPrompt(roleStatuses)
+        : buildSystemPrompt(roleStatuses),
       useJevStatus && jevChoice
         ? `${prompt}\n\n## Decided Status\nThe status is **${jevChoice.choice}**. Echo it as suggestedStatus.`
         : prompt,
@@ -598,7 +671,11 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         amount: result.amount ?? undefined,
         role: decideRole({
           reviewerAssigned: reviewerAssigned(comments, username),
-          hasOwnPr: Boolean(result.pr_url ?? discoveredPrUrl ?? task.pr_url),
+          // pr_url can be the PR the user reviewed, so only its author counts.
+          hasOwnPr:
+            prData || asReviewer
+              ? ownPr
+              : Boolean(result.pr_url ?? task.pr_url),
           modelRole: typeof result.role === 'string' ? result.role : undefined,
         }),
         payment_moved_to:
@@ -630,6 +707,24 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         // to switch to the model's own confidence field.
         update.confidence =
           jevChoice.probabilities?.[jevChoice.choice] ?? jevChoice.confidence;
+      }
+
+      if (asReviewer && !terminal.has(task.status)) {
+        const decided = reviewerStatus(
+          {
+            pr: prData,
+            issueOpen: issue.state === 'open',
+            unassigned: unassignedFrom(events, username),
+            myReview,
+            authorMoved,
+            openLinkedBugs: facts.open_linked_bugs,
+          },
+          new Set(roleStatuses.map((s) => s.key))
+        );
+        if (decided && decided !== update.suggestedStatus) {
+          update.suggestedStatus = decided;
+          update.confidence = Math.max(update.confidence, 0.8);
+        }
       }
 
       update.suggestedStatus = paymentStatus(

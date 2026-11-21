@@ -349,6 +349,53 @@ export async function findLinkedPR(
   return fetchPR(owner, repo, latestPrNumber, token);
 }
 
+// A C+ reviews someone else's PR, and unrelated PRs also cross-reference
+// issues, so a candidate must be one the reviewer reviewed or one opened by
+// an issue assignee. A closed, unmerged PR is an abandoned attempt.
+export async function findReviewedPR(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  reviewer: string,
+  issueAssignees: string[],
+  token: string
+): Promise<{ pr: GitHubPullRequest; reviews: GitHubReview[] } | null> {
+  const me = reviewer.toLowerCase();
+  const assignees = new Set(issueAssignees.map((a) => a.toLowerCase()));
+  let candidates: number[] = [];
+  try {
+    const timeline = await fetchIssueTimeline(owner, repo, issueNumber, token);
+    for (const event of timeline) {
+      if (event.event !== 'cross-referenced' || !event.source) continue;
+      const source = event.source as Record<string, unknown>;
+      const issue = source.issue as Record<string, unknown> | undefined;
+      const repoName = (
+        issue?.repository as Record<string, unknown> | undefined
+      )?.full_name;
+      if (!issue?.pull_request) continue;
+      if (repoName && repoName !== `${owner}/${repo}`) continue;
+      const author = (issue.user as Record<string, unknown> | undefined)?.login;
+      if (typeof author === 'string' && author.toLowerCase() === me) continue;
+      candidates.push(issue.number as number);
+    }
+  } catch {
+    return null;
+  }
+  candidates = [...new Set(candidates)].sort((a, b) => b - a).slice(0, 3);
+  for (const number of candidates) {
+    const [pr, reviews] = await Promise.all([
+      fetchPR(owner, repo, number, token),
+      fetchPRReviews(owner, repo, number, token),
+    ]);
+    if (pr.state === 'closed' && !pr.merged) continue;
+    const reviewedByMe = reviews.some((r) => r.user.login.toLowerCase() === me);
+    if (reviewedByMe || assignees.has(pr.user.login.toLowerCase())) {
+      return { pr, reviews };
+    }
+  }
+  return null;
+}
+
 export function normalizeUrl(url: string): string {
   // Strip markdown link format: [text](url) → url
   const mdMatch = url.match(/\[.*?\]\((.*?)\)/);

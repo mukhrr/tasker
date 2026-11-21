@@ -135,7 +135,7 @@ export function useTasks<T extends TaskListItem = Task>(
     }
   };
 
-  const addTask = async (issueUrl: string) => {
+  const addTask = async (issueUrl: string, opts?: { isReviewer?: boolean }) => {
     const parsed = parseIssueUrl(issueUrl);
     const key = issueKey({ issue_url: issueUrl });
     const duplicate = tasks.find((t) => issueKey(t) === key);
@@ -151,6 +151,7 @@ export function useTasks<T extends TaskListItem = Task>(
       repo_owner: parsed?.owner ?? null,
       repo_name: parsed?.repo ?? null,
       issue_number: parsed?.number ?? null,
+      ...(opts?.isReviewer ? { is_reviewer: true } : {}),
     };
 
     // Optimistic: add a temp task
@@ -168,7 +169,7 @@ export function useTasks<T extends TaskListItem = Task>(
       note: null,
       ai_summary: null,
       archived: false,
-      is_reviewer: null,
+      is_reviewer: opts?.isReviewer ? true : null,
       last_synced_at: null,
       status_changed_at: new Date().toISOString(),
       created_at: new Date().toISOString(),

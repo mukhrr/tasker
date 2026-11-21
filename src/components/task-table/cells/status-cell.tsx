@@ -29,11 +29,13 @@ import {
   COLOR_NAMES,
   STATUS_COLORS,
 } from '@/lib/status';
+import { statusesForRole, type TaskRole } from '@/lib/role';
 import { Info, Pencil, Trash2, Plus, X, Check } from 'lucide-react';
 import type { UserStatus, TaskStatusGroup } from '@/types/database';
 
 interface StatusCellProps {
   value: string;
+  role: TaskRole;
   additionalBugsFixed: number;
   onAdditionalBugsChange: (count: number) => Promise<void>;
   statuses: UserStatus[];
@@ -75,6 +77,7 @@ const emptyEdit = (group: TaskStatusGroup): EditState => ({
 
 export function StatusCell({
   value,
+  role,
   additionalBugsFixed,
   onAdditionalBugsChange,
   statuses,
@@ -92,7 +95,7 @@ export function StatusCell({
 
   const currentStatus = getStatusByKey(statuses, value);
   const colorConfig = getStatusColor(currentStatus?.color ?? 'gray');
-  const grouped = getStatusesByGroup(statuses);
+  const grouped = getStatusesByGroup(statusesForRole(statuses, role, value));
 
   const startEdit = (status: UserStatus) => {
     setEditState({

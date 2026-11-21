@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { getUser } from '@/lib/supabase/server';
 import { TaskTable } from '@/components/task-table/task-table';
@@ -17,7 +18,10 @@ export default async function TasksPage() {
           Track your open source tasks and contributions
         </p>
       </div>
-      <TaskTable />
+      {/* useSearchParams (?role=) needs a Suspense boundary. */}
+      <Suspense>
+        <TaskTable />
+      </Suspense>
     </div>
   );
 }

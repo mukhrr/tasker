@@ -1,12 +1,22 @@
 'use client';
 
+import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
+import { taskRole } from '@/lib/role';
+import { useRoleParam } from '@/hooks/use-role-param';
+import {
+  RoleCount,
+  RoleSwitch,
+  ReviewerRoleLabel,
+} from '@/components/role-switch';
 import { useDashboardData } from '@/components/dashboard-data-provider';
 import { useDashboardStats } from '@/hooks/use-dashboard-stats';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard } from './stat-card';
 import { StatusChart } from './status-chart';
 import { LastSyncCard } from './last-sync-card';
+
+type DashboardRole = 'all' | 'contributor' | 'reviewer';
 
 // Lazy-load the recharts-based charts so recharts stays out of the initial bundle
 const EarningsChart = dynamic(
@@ -18,11 +28,62 @@ const ActivityChart = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
 );
 
+const DASHBOARD_ROLES: readonly DashboardRole[] = [
+  'all',
+  'contributor',
+  'reviewer',
+];
+
 export function DashboardView() {
   const {
     tasks: { tasks, loading },
   } = useDashboardData();
-  const stats = useDashboardStats(tasks);
+  const [role, setRole] = useRoleParam<DashboardRole>(DASHBOARD_ROLES, 'all');
+  const roleTasks = useMemo(
+    () => (role === 'all' ? tasks : tasks.filter((t) => taskRole(t) === role)),
+    [tasks, role]
+  );
+  const counts = useMemo(() => {
+    let reviewer = 0;
+    for (const t of tasks) if (taskRole(t) === 'reviewer') reviewer += 1;
+    return {
+      all: tasks.length,
+      contributor: tasks.length - reviewer,
+      reviewer,
+    };
+  }, [tasks]);
+  const stats = useDashboardStats(roleTasks);
+  const isAll = role === 'all';
+
+  const roleSwitch = (
+    <RoleSwitch
+      value={role}
+      onChange={setRole}
+      ariaLabel="Dashboard role"
+      options={[
+        {
+          value: 'all',
+          label: (
+            <>
+              All <RoleCount value={counts.all} />
+            </>
+          ),
+        },
+        {
+          value: 'contributor',
+          label: (
+            <>
+              Committer <RoleCount value={counts.contributor} />
+            </>
+          ),
+        },
+        {
+          value: 'reviewer',
+          label: <ReviewerRoleLabel count={counts.reviewer} />,
+        },
+      ]}
+    />
+  );
 
   if (loading) {
     return (
@@ -67,10 +128,11 @@ export function DashboardView() {
       : undefined;
 
   const share = (amount: number) =>
-    amount > 0 ? `$${amount.toLocaleString()}` : undefined;
+    isAll && amount > 0 ? `$${amount.toLocaleString()}` : undefined;
 
   return (
     <div className="space-y-6">
+      {roleSwitch}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <StatCard
           title="Total Earned"
@@ -99,7 +161,11 @@ export function DashboardView() {
       <LastSyncCard />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <EarningsChart data={stats.earningsOverTime} />
+        <EarningsChart
+          data={stats.earningsOverTime}
+          split={isAll}
+          reviewerOnly={role === 'reviewer'}
+        />
         <StatusChart data={stats.tasksByStatusGroup} />
       </div>
 

@@ -262,3 +262,91 @@ export function decideRole(input: {
   if (input.hasOwnPr) return 'contributor';
   return input.modelRole === 'reviewer' ? 'reviewer' : undefined;
 }
+
+// The reviewer's own latest decisive review. A later COMMENTED review is a
+// note, not a change of mind, so it does not undo an approval.
+export function myDecisiveReview(
+  reviews: GitHubReview[],
+  me: string
+): 'APPROVED' | 'CHANGES_REQUESTED' | null {
+  const login = me.toLowerCase();
+  const mine = newest(
+    reviews.filter(
+      (r) =>
+        r.user.login.toLowerCase() === login &&
+        (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED')
+    ),
+    (r) => r.submitted_at
+  );
+  return (mine?.state as 'APPROVED' | 'CHANGES_REQUESTED' | undefined) ?? null;
+}
+
+// The ball is with the reviewer when the author pushed or replied after the
+// reviewer last spoke, or the reviewer has not said anything yet.
+export function authorMovedSinceMyReview(input: {
+  me: string;
+  author: string;
+  reviews: GitHubReview[];
+  comments: GitHubComment[];
+  lastPushAt: string | null;
+}): boolean {
+  const me = input.me.toLowerCase();
+  const author = input.author.toLowerCase();
+  const mineAt = [
+    ...input.reviews
+      .filter((r) => r.user.login.toLowerCase() === me)
+      .map((r) => r.submitted_at),
+    ...input.comments
+      .filter((c) => c.user.login.toLowerCase() === me)
+      .map((c) => c.created_at),
+  ].filter(Boolean);
+  if (mineAt.length === 0) return true;
+  const myLast = mineAt.sort().at(-1)!;
+  if (input.lastPushAt && input.lastPushAt > myLast) return true;
+  return input.comments.some(
+    (c) => c.user.login.toLowerCase() === author && c.created_at > myLast
+  );
+}
+
+// Being named as someone else's replacement is not enough: a false wasted
+// hides a task that still pays, so only the user's own unassign counts.
+export function unassignedFrom(events: GitHubEvent[], me: string): boolean {
+  const login = me.toLowerCase();
+  let last: 'assigned' | 'unassigned' | null = null;
+  let lastAt = '';
+  for (const e of events) {
+    if (e.event !== 'assigned' && e.event !== 'unassigned') continue;
+    if (e.assignee?.login?.toLowerCase() !== login) continue;
+    if (e.created_at >= lastAt) {
+      last = e.event;
+      lastAt = e.created_at;
+    }
+  }
+  return last === 'unassigned';
+}
+
+// The C+ side of the flow. null leaves the model's answer standing.
+export function reviewerStatus(
+  input: {
+    pr: { state: 'open' | 'closed'; merged: boolean } | null;
+    issueOpen: boolean;
+    unassigned: boolean;
+    myReview: 'APPROVED' | 'CHANGES_REQUESTED' | null;
+    authorMoved: boolean;
+    openLinkedBugs: number | null;
+  },
+  statusKeys: Set<string>
+): string | null {
+  const pick = (key: string) => (statusKeys.has(key) ? key : null);
+  if (input.unassigned) return pick('wasted');
+  const pr =
+    input.pr && (input.pr.merged || input.pr.state === 'open')
+      ? input.pr
+      : null;
+  if (!pr) return input.issueOpen ? pick('assigned') : null;
+  if (pr.merged) {
+    return input.openLinkedBugs ? pick('regression') : pick('merged');
+  }
+  if (input.myReview === 'APPROVED') return pick('approved');
+  return input.authorMoved ? pick('review_due') : pick('waiting_on_author');
+}

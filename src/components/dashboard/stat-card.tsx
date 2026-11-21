@@ -90,7 +90,7 @@ export function StatCard({
         {reviewerShare && (
           <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="size-2 rounded-full bg-amber-400" />
-            of which C+{' '}
+            C+{' '}
             <span className="font-medium text-foreground">{reviewerShare}</span>
           </p>
         )}

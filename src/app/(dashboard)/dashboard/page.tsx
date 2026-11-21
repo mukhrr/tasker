@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { getUser } from '@/lib/supabase/server';
 import { DashboardView } from '@/components/dashboard/dashboard-view';
@@ -17,7 +18,10 @@ export default async function DashboardPage() {
           Overview of your bounty earnings and task activity
         </p>
       </div>
-      <DashboardView />
+      {/* useSearchParams (?role=) needs a Suspense boundary. */}
+      <Suspense>
+        <DashboardView />
+      </Suspense>
     </div>
   );
 }

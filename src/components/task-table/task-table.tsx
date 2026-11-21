@@ -9,11 +9,7 @@ import { ColumnHeader } from './column-header';
 import { TaskRow } from './task-row';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTaskTable } from './use-task-table';
-import {
-  getReviewerTotal,
-  getStatusColor,
-  getStatusTotals,
-} from '@/lib/status';
+import { getStatusColor, getStatusTotals } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import type { ColumnKey } from './column-config';
 
@@ -45,16 +41,37 @@ export function TaskTable() {
   }
 
   const visibleColumnKeys = ctx.columnOrder.filter(ctx.isColumnVisible);
+  // The computed Whose turn column sits after Status, or after Issue when
+  // Status is hidden.
+  const turnAfter: ColumnKey = visibleColumnKeys.includes('status')
+    ? 'status'
+    : 'issue';
+  const turnHeader = (
+    <th key="turn" className="px-3 py-2.5 text-left sm:px-4">
+      <ColumnHeader
+        name="Whose turn"
+        sortDirection={
+          ctx.sortConfig.key === 'turn' ? ctx.sortConfig.direction : null
+        }
+        onSort={() => ctx.toggleColumnSort('turn')}
+      />
+    </th>
+  );
   const totalAmount = ctx.filteredTasks.reduce(
     (sum, task) => sum + (task.amount ?? 0),
     0
   );
   const statusTotals = getStatusTotals(ctx.filteredTasks, ctx.statuses);
-  const reviewerTotal = getReviewerTotal(ctx.filteredTasks);
+  const isReviewerTab = ctx.role === 'reviewer';
 
   return (
     <div className="space-y-4">
       <Toolbar
+        role={ctx.role}
+        onRoleChange={ctx.setRole}
+        roleCounts={ctx.roleCounts}
+        yourTurnOnly={ctx.yourTurnOnly}
+        onYourTurnOnlyChange={ctx.setYourTurnOnly}
         activeTab={ctx.activeTab}
         onTabChange={ctx.setActiveTab}
         search={ctx.search}
@@ -78,6 +95,7 @@ export function TaskTable() {
       <BulkActionsBar
         selectedCount={ctx.selectedCount}
         statuses={ctx.statuses}
+        role={ctx.role}
         isArchivedView={ctx.activeTab === 'archived'}
         onStatusChange={ctx.handleBulkStatusChange}
         onUpdate={ctx.handleBulkUpdate}
@@ -101,19 +119,24 @@ export function TaskTable() {
                     aria-label="Select all rows"
                   />
                 </th>
-                {visibleColumnKeys.map((key) => (
-                  <th key={key} className="px-3 py-2.5 text-left sm:px-4">
-                    <ColumnHeader
-                      name={COLUMN_LABELS[key]}
-                      sortDirection={
-                        ctx.sortConfig.key === key
-                          ? ctx.sortConfig.direction
-                          : null
-                      }
-                      onSort={() => ctx.toggleColumnSort(key)}
-                    />
-                  </th>
-                ))}
+                {visibleColumnKeys.flatMap((key) => {
+                  const header = (
+                    <th key={key} className="px-3 py-2.5 text-left sm:px-4">
+                      <ColumnHeader
+                        name={COLUMN_LABELS[key]}
+                        sortDirection={
+                          ctx.sortConfig.key === key
+                            ? ctx.sortConfig.direction
+                            : null
+                        }
+                        onSort={() => ctx.toggleColumnSort(key)}
+                      />
+                    </th>
+                  );
+                  return isReviewerTab && key === turnAfter
+                    ? [header, turnHeader]
+                    : [header];
+                })}
                 {/* {ctx.columns.map((col) => (
                   <th key={col.id} className="px-3 py-2.5 text-left sm:px-4">
                     <ColumnHeader
@@ -127,7 +150,7 @@ export function TaskTable() {
                 <th className="w-10 px-2 py-2.5">
                   <AddColumnButton onAdd={ctx.addColumn} />
                 </th> */}
-                <th className="sticky right-0 z-20 w-10 bg-muted px-2 py-2.5 text-left backdrop-blur-sm lg:w-[184px] lg:text-right">
+                <th className="sticky right-0 z-20 w-10 bg-muted px-2 py-2.5 text-left backdrop-blur-sm lg:w-[216px] lg:text-right">
                   <span className="text-sm font-medium text-muted-foreground">
                     Actions
                   </span>
@@ -138,11 +161,13 @@ export function TaskTable() {
               {ctx.filteredTasks.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={visibleColumnKeys.length + 2}
+                    colSpan={visibleColumnKeys.length + (isReviewerTab ? 3 : 2)}
                     className="px-4 py-12 text-center text-sm text-muted-foreground"
                   >
-                    {ctx.tasks.length === 0
-                      ? 'No tasks yet. Add your first task below.'
+                    {ctx.roleTasks.length === 0
+                      ? isReviewerTab
+                        ? 'No reviews yet. Add one below or move a task here from its row menu.'
+                        : 'No tasks yet. Add your first task below.'
                       : 'No tasks match your filters.'}
                   </td>
                 </tr>
@@ -154,6 +179,7 @@ export function TaskTable() {
                     isSyncing={ctx.syncingTaskIds.has(task.id)}
                     search={ctx.search}
                     visibleColumnKeys={visibleColumnKeys}
+                    showTurn={isReviewerTab}
                     ctx={ctx}
                   />
                 ))
@@ -164,10 +190,10 @@ export function TaskTable() {
         <AddRow onAdd={ctx.handleAddTask} />
       </div>
 
-      {ctx.tasks.length > 0 && (
+      {ctx.roleTasks.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-sm text-muted-foreground">
           <p>
-            {ctx.filteredTasks.length} of {ctx.tasks.length} tasks
+            {ctx.filteredTasks.length} of {ctx.roleTasks.length} tasks
           </p>
           <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 tabular-nums">
             {statusTotals.map((total) => (
@@ -184,21 +210,19 @@ export function TaskTable() {
                 </span>
               </span>
             ))}
-            <span className="shrink-0">
-              Total{' '}
-              <span className="font-medium text-foreground">
-                {currencyFormatter.format(totalAmount)}
-              </span>
-            </span>
-            {reviewerTotal > 0 && (
-              <span
-                className="flex shrink-0 items-center gap-1.5"
-                title="Part of the total that comes from C+ reviews"
-              >
+            {isReviewerTab ? (
+              <span className="flex shrink-0 items-center gap-1.5">
                 <span className="size-2 rounded-full bg-amber-400" />
-                of which C+{' '}
+                C+ total{' '}
                 <span className="font-medium text-foreground">
-                  {currencyFormatter.format(reviewerTotal)}
+                  {currencyFormatter.format(totalAmount)}
+                </span>
+              </span>
+            ) : (
+              <span className="shrink-0">
+                Total{' '}
+                <span className="font-medium text-foreground">
+                  {currencyFormatter.format(totalAmount)}
                 </span>
               </span>
             )}

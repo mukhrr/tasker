@@ -9,6 +9,10 @@ import {
   unansweredReviewerFeedback,
   reviewerAssigned,
   decideRole,
+  myDecisiveReview,
+  authorMovedSinceMyReview,
+  unassignedFrom,
+  reviewerStatus,
   PRODUCTION_DEPLOY_RE,
   DEPLOY_COMMENT_RE,
   type TaskFacts,
@@ -517,5 +521,138 @@ describe('decideRole', () => {
 
   it('stays undecided on unknown', () => {
     expect(decideRole(base)).toBeUndefined();
+  });
+});
+
+describe('reviewer path', () => {
+  const rv = (login: string, state: GitHubReview['state'], at: string) =>
+    ({ user: { login }, state, submitted_at: at }) as GitHubReview;
+  const said = (login: string, at: string) =>
+    ({ user: { login }, body: 'x', created_at: at }) as GitHubComment;
+  const ev = (event: string, login: string, at: string) =>
+    ({ event, assignee: { login }, created_at: at }) as GitHubEvent;
+  const keys = new Set([
+    'assigned',
+    'review_due',
+    'waiting_on_author',
+    'approved',
+    'merged',
+    'regression',
+    'wasted',
+  ]);
+  const base = {
+    pr: { state: 'open' as const, merged: false },
+    issueOpen: true,
+    unassigned: false,
+    myReview: null,
+    authorMoved: false,
+    openLinkedBugs: null,
+  };
+
+  it('keeps an approval through a later comment review', () => {
+    expect(
+      myDecisiveReview(
+        [
+          rv('Me', 'APPROVED', '2026-11-01T00:00:00Z'),
+          rv('me', 'COMMENTED', '2026-11-02T00:00:00Z'),
+          rv('other', 'CHANGES_REQUESTED', '2026-11-03T00:00:00Z'),
+        ],
+        'me'
+      )
+    ).toBe('APPROVED');
+    expect(myDecisiveReview([], 'me')).toBeNull();
+  });
+
+  it('gives me the turn when I have not reviewed yet', () => {
+    expect(
+      authorMovedSinceMyReview({
+        me: 'me',
+        author: 'dev',
+        reviews: [],
+        comments: [],
+        lastPushAt: null,
+      })
+    ).toBe(true);
+  });
+
+  it('gives me the turn after a push or an author reply', () => {
+    const reviews = [rv('me', 'COMMENTED', '2026-11-05T00:00:00Z')];
+    const args = { me: 'me', author: 'dev', reviews, comments: [] };
+    expect(
+      authorMovedSinceMyReview({ ...args, lastPushAt: '2026-11-06T00:00:00Z' })
+    ).toBe(true);
+    expect(
+      authorMovedSinceMyReview({
+        ...args,
+        comments: [said('dev', '2026-11-06T00:00:00Z')],
+        lastPushAt: '2026-11-01T00:00:00Z',
+      })
+    ).toBe(true);
+    expect(
+      authorMovedSinceMyReview({
+        ...args,
+        comments: [said('someone', '2026-11-06T00:00:00Z')],
+        lastPushAt: '2026-11-01T00:00:00Z',
+      })
+    ).toBe(false);
+  });
+
+  it('counts my latest comment as speaking', () => {
+    expect(
+      authorMovedSinceMyReview({
+        me: 'me',
+        author: 'dev',
+        reviews: [rv('me', 'COMMENTED', '2026-11-01T00:00:00Z')],
+        comments: [said('me', '2026-11-07T00:00:00Z')],
+        lastPushAt: '2026-11-06T00:00:00Z',
+      })
+    ).toBe(false);
+  });
+
+  it('reads only my own unassign, and a later reassign undoes it', () => {
+    expect(
+      unassignedFrom([ev('unassigned', 'Me', '2026-11-02T00:00:00Z')], 'me')
+    ).toBe(true);
+    expect(
+      unassignedFrom(
+        [
+          ev('unassigned', 'me', '2026-11-02T00:00:00Z'),
+          ev('assigned', 'me', '2026-11-03T00:00:00Z'),
+        ],
+        'me'
+      )
+    ).toBe(false);
+    expect(
+      unassignedFrom([ev('unassigned', 'other', '2026-11-02T00:00:00Z')], 'me')
+    ).toBe(false);
+  });
+
+  it('maps the PR state onto the C+ statuses', () => {
+    expect(reviewerStatus({ ...base, pr: null }, keys)).toBe('assigned');
+    expect(
+      reviewerStatus({ ...base, pr: null, issueOpen: false }, keys)
+    ).toBeNull();
+    expect(
+      reviewerStatus({ ...base, pr: { state: 'closed', merged: false } }, keys)
+    ).toBe('assigned');
+    expect(reviewerStatus({ ...base, authorMoved: true }, keys)).toBe(
+      'review_due'
+    );
+    expect(reviewerStatus(base, keys)).toBe('waiting_on_author');
+    expect(
+      reviewerStatus({ ...base, myReview: 'APPROVED', authorMoved: true }, keys)
+    ).toBe('approved');
+    const merged = { state: 'closed' as const, merged: true };
+    expect(reviewerStatus({ ...base, pr: merged }, keys)).toBe('merged');
+    expect(
+      reviewerStatus({ ...base, pr: merged, openLinkedBugs: 1 }, keys)
+    ).toBe('regression');
+    expect(reviewerStatus({ ...base, unassigned: true }, keys)).toBe('wasted');
+  });
+
+  it('never suggests a key the user does not have', () => {
+    expect(
+      reviewerStatus({ ...base, authorMoved: true }, new Set(['assigned']))
+    ).toBeNull();
   });
 });

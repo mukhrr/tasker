@@ -9,6 +9,7 @@ import {
   ArchiveRestore,
   MoreHorizontal,
   TimerReset,
+  ArrowLeftRight,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -49,6 +50,8 @@ export function TaskRowActions({
   isConfirmingDelete,
   isArchived,
   isStale,
+  isReviewer,
+  onMoveRole,
   onSync,
   onDelete,
   onRequestDelete,
@@ -62,6 +65,8 @@ export function TaskRowActions({
   isArchived: boolean;
   /** Row is currently stale-highlighted — only then is clearing it meaningful. */
   isStale: boolean;
+  isReviewer: boolean;
+  onMoveRole: () => void;
   onSync: () => void;
   onDelete: () => void;
   onRequestDelete: () => void;
@@ -69,6 +74,8 @@ export function TaskRowActions({
   onArchive: () => void;
   onClearHighlight: () => void;
 }) {
+  const moveLabel = isReviewer ? 'Move to Committer' : 'Move to Reviewer';
+
   if (isConfirmingDelete) {
     return (
       <div className="flex items-center justify-end gap-1.5">
@@ -127,6 +134,15 @@ export function TaskRowActions({
               <Eye className="h-4 w-4" />
             </Link>
           </InlineAction>
+          <InlineAction label={moveLabel}>
+            <button
+              onClick={onMoveRole}
+              aria-label={moveLabel}
+              className={ICON_BUTTON}
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+            </button>
+          </InlineAction>
           <InlineAction label={isArchived ? 'Unarchive' : 'Archive'}>
             <button
               onClick={onArchive}
@@ -184,6 +200,10 @@ export function TaskRowActions({
           <DropdownMenuItem render={<Link href={`/tasks/${taskId}`} />}>
             <Eye className="h-3.5 w-3.5" />
             View
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onMoveRole}>
+            <ArrowLeftRight className="h-3.5 w-3.5" />
+            {moveLabel}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onArchive}>
             {isArchived ? (

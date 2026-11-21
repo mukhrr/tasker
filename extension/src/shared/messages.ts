@@ -30,6 +30,7 @@ export interface UpdateStatusRequest {
   taskId: string;
   status: string;
   statusGroup: string;
+  isReviewer?: boolean;
 }
 
 export interface CreateTaskRequest {
@@ -37,6 +38,7 @@ export interface CreateTaskRequest {
   owner: string;
   repo: string;
   number: number;
+  isReviewer?: boolean;
 }
 
 export interface QueryTasksBatchRequest {

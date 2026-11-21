@@ -5,6 +5,9 @@ import { toast } from 'sonner';
 import { useDashboardData } from '@/components/dashboard-data-provider';
 import { waitForQueuedSync } from '@/lib/sync-poll';
 import { getAttentionScore, getStatusGroup, getStaleDays } from '@/lib/status';
+import { taskRole, whoseTurn } from '@/lib/role';
+import type { TaskRole } from '@/lib/role';
+import { useRoleParam } from '@/hooks/use-role-param';
 import type { Task, TaskStatusGroup } from '@/types/database';
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import {
@@ -14,11 +17,16 @@ import {
   saveColumnOrder,
   loadSortConfig,
   saveSortConfig,
+  hasStoredSortConfig,
   loadFilters,
   saveFilters,
   loadActiveTab,
   saveActiveTab,
 } from './column-config';
+
+const ROLES: readonly TaskRole[] = ['contributor', 'reviewer'];
+
+const TURN_RANK: Record<string, number> = { me: 0, author: 1, merge: 2 };
 
 export function useTaskTable() {
   const {
@@ -29,6 +37,8 @@ export function useTaskTable() {
   } = useDashboardData();
 
   const [activeTab, setActiveTabState] = useState(() => loadActiveTab());
+  const [role, setRole] = useRoleParam<TaskRole>(ROLES, 'contributor');
+  const [yourTurnOnly, setYourTurnOnly] = useState(false);
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<{
@@ -93,6 +103,7 @@ export function useTaskTable() {
   const [sortConfig, setSortConfig] = useState<SortConfig>(() =>
     loadSortConfig()
   );
+  const [sortChosen, setSortChosen] = useState(() => hasStoredSortConfig());
   const [filters, setFiltersState] = useState<TaskFilters>(() => loadFilters());
 
   // Column visibility
@@ -132,11 +143,12 @@ export function useTaskTable() {
   // Sorting
   const handleSortChange = useCallback((config: SortConfig) => {
     setSortConfig(config);
+    setSortChosen(true);
     saveSortConfig(config);
   }, []);
 
   const toggleColumnSort = useCallback(
-    (key: ColumnKey) => {
+    (key: SortConfig['key']) => {
       if (sortConfig.key === key) {
         handleSortChange({
           key,
@@ -149,9 +161,27 @@ export function useTaskTable() {
     [sortConfig, handleSortChange]
   );
 
+  const roleTasks = useMemo(
+    () => tasksCrud.tasks.filter((t) => taskRole(t) === role),
+    [tasksCrud.tasks, role]
+  );
+
+  const roleCounts = useMemo(() => {
+    const counts = { contributor: 0, reviewer: 0, myTurn: 0 };
+    for (const t of tasksCrud.tasks) {
+      if (t.archived) continue;
+      const r = taskRole(t);
+      counts[r] += 1;
+      if (whoseTurn(t.status, r) === 'me') counts.myTurn += 1;
+    }
+    return counts;
+  }, [tasksCrud.tasks]);
+
+  const yourTurnActive = role === 'reviewer' && yourTurnOnly;
+
   // Filtered + sorted tasks
   const filteredTasks = useMemo(() => {
-    let filtered = tasksCrud.tasks;
+    let filtered = roleTasks;
 
     if (activeTab === 'archived') {
       filtered = filtered.filter((t) => t.archived);
@@ -164,6 +194,12 @@ export function useTaskTable() {
             (activeTab as TaskStatusGroup)
         );
       }
+    }
+
+    if (yourTurnActive) {
+      filtered = filtered.filter(
+        (t) => whoseTurn(t.status, 'reviewer') === 'me'
+      );
     }
 
     // Apply filters
@@ -187,8 +223,19 @@ export function useTaskTable() {
       );
     }
 
+    const yourTurnFirst = role === 'reviewer' && !sortChosen;
+    // A Whose turn sort saved in the reviewer tab means nothing here.
+    const sort: SortConfig =
+      sortConfig.key === 'turn' && role !== 'reviewer'
+        ? { key: 'created_at', direction: 'desc' }
+        : sortConfig;
     const sorted = [...filtered].sort((a, b) => {
-      const dir = sortConfig.direction === 'asc' ? 1 : -1;
+      if (yourTurnFirst) {
+        const aMine = whoseTurn(a.status, role) === 'me' ? 0 : 1;
+        const bMine = whoseTurn(b.status, role) === 'me' ? 0 : 1;
+        if (aMine !== bMine) return aMine - bMine;
+      }
+      const dir = sort.direction === 'asc' ? 1 : -1;
       const fieldMap: Record<string, (t: Task) => string | number | null> = {
         issue: (t) => (t.issue_title || t.issue_url).toLowerCase(),
         pr: (t) => t.pr_url?.toLowerCase() ?? null,
@@ -201,8 +248,9 @@ export function useTaskTable() {
         note: (t) => t.note?.toLowerCase() ?? null,
         created_at: (t) => t.created_at,
         updated_at: (t) => t.updated_at,
+        turn: (t) => TURN_RANK[String(whoseTurn(t.status, taskRole(t)))],
       };
-      const getter = fieldMap[sortConfig.key];
+      const getter = fieldMap[sort.key];
       if (!getter) return 0;
       const aVal = getter(a);
       const bVal = getter(b);
@@ -219,7 +267,10 @@ export function useTaskTable() {
 
     return sorted;
   }, [
-    tasksCrud.tasks,
+    roleTasks,
+    role,
+    yourTurnActive,
+    sortChosen,
     statusesCrud.statuses,
     activeTab,
     search,
@@ -378,13 +429,15 @@ export function useTaskTable() {
   const handleAddTask = useCallback(
     async (issueUrl: string) => {
       try {
-        await tasksCrud.addTask(issueUrl);
+        await tasksCrud.addTask(issueUrl, {
+          isReviewer: role === 'reviewer',
+        });
         toast.success('Task added');
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to add task');
       }
     },
-    [tasksCrud]
+    [tasksCrud, role]
   );
 
   const handleUpdateTask = useCallback(
@@ -394,6 +447,33 @@ export function useTaskTable() {
       } catch {
         toast.error('Failed to update');
       }
+    },
+    [tasksCrud]
+  );
+
+  const handleMoveRole = useCallback(
+    async (task: Task, isReviewer: boolean) => {
+      const previous = task.is_reviewer;
+      const ref = task.issue_number != null ? `#${task.issue_number}` : 'Task';
+      try {
+        await tasksCrud.updateTask(task.id, { is_reviewer: isReviewer });
+      } catch {
+        toast.error('Failed to update');
+        return;
+      }
+      toast.success(
+        `${ref} moved to ${isReviewer ? 'Reviewer' : 'Committer'}`,
+        {
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              void tasksCrud
+                .updateTask(task.id, { is_reviewer: previous })
+                .catch(() => toast.error('Undo failed'));
+            },
+          },
+        }
+      );
     },
     [tasksCrud]
   );
@@ -458,7 +538,15 @@ export function useTaskTable() {
   return {
     // Data
     tasks: tasksCrud.tasks,
+    roleTasks,
     filteredTasks,
+
+    // Role
+    role,
+    setRole,
+    roleCounts,
+    yourTurnOnly: yourTurnActive,
+    setYourTurnOnly,
     loading: tasksCrud.loading || statusesCrud.loading,
     syncingTaskIds: tasksCrud.syncingTaskIds,
     statuses: statusesCrud.statuses,
@@ -508,15 +596,17 @@ export function useTaskTable() {
     // CRUD
     handleAddTask,
     handleUpdateTask,
+    handleMoveRole,
     handleDeleteTask,
     handleSyncTask,
     deleteConfirmId,
     setDeleteConfirmId,
 
     // Status CRUD (passed through for StatusCell)
-    addStatus: statusesCrud.addStatus,
+    addStatus: (data: Parameters<typeof statusesCrud.addStatus>[0]) =>
+      statusesCrud.addStatus({ ...data, role }),
     updateStatus: statusesCrud.updateStatus,
-    deleteStatus: statusesCrud.deleteStatus,
+    deleteStatus: (id: string) => statusesCrud.deleteStatus(id, role),
 
     // Custom column CRUD
     addColumn: customColumns.addColumn,

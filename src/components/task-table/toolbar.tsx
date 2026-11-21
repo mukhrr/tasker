@@ -23,6 +23,13 @@ import {
 import type { ColumnKey, SortConfig, TaskFilters } from './column-config';
 import { BUILT_IN_COLUMNS } from './column-config';
 import type { UserStatus } from '@/types/database';
+import { statusesForRole, type TaskRole } from '@/lib/role';
+import {
+  RoleCount,
+  RoleSwitch,
+  ReviewerRoleLabel,
+} from '@/components/role-switch';
+import { cn } from '@/lib/utils';
 import {
   getStatusColor,
   getStatusesByGroup,
@@ -47,6 +54,11 @@ interface SyncStatus {
 }
 
 export function Toolbar({
+  role,
+  onRoleChange,
+  roleCounts,
+  yourTurnOnly,
+  onYourTurnOnlyChange,
   activeTab,
   onTabChange,
   search,
@@ -66,6 +78,11 @@ export function Toolbar({
   activeFilterCount,
   statuses,
 }: {
+  role: TaskRole;
+  onRoleChange: (role: TaskRole) => void;
+  roleCounts: { contributor: number; reviewer: number; myTurn: number };
+  yourTurnOnly: boolean;
+  onYourTurnOnlyChange: (on: boolean) => void;
   activeTab: string;
   onTabChange: (tab: string) => void;
   search: string;
@@ -177,6 +194,30 @@ export function Toolbar({
 
   return (
     <div className="space-y-2">
+      <RoleSwitch
+        value={role}
+        onChange={onRoleChange}
+        ariaLabel="Task role"
+        options={[
+          {
+            value: 'contributor',
+            label: (
+              <>
+                Committer <RoleCount value={roleCounts.contributor} />
+              </>
+            ),
+          },
+          {
+            value: 'reviewer',
+            label: (
+              <ReviewerRoleLabel
+                count={roleCounts.reviewer}
+                myTurn={roleCounts.myTurn}
+              />
+            ),
+          },
+        ]}
+      />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         {/* Left: Tabs + Search */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -189,6 +230,22 @@ export function Toolbar({
               ))}
             </TabsList>
           </Tabs>
+          {role === 'reviewer' && (
+            <button
+              type="button"
+              aria-pressed={yourTurnOnly}
+              onClick={() => onYourTurnOnlyChange(!yourTurnOnly)}
+              className={cn(
+                'inline-flex h-8 w-fit shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition-colors',
+                yourTurnOnly
+                  ? 'border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              )}
+            >
+              <span className="size-2 rounded-full bg-blue-500" />
+              Your turn · {roleCounts.myTurn}
+            </button>
+          )}
           <Input
             placeholder="Search tasks..."
             value={search}
@@ -243,7 +300,9 @@ export function Toolbar({
               <div className="border-t pt-2">
                 <p className="pb-1.5 text-xs font-medium">Status</p>
                 <div className="max-h-40 space-y-0.5 overflow-y-auto">
-                  {Object.entries(getStatusesByGroup(statuses)).map(
+                  {Object.entries(
+                    getStatusesByGroup(statusesForRole(statuses, role))
+                  ).map(
                     ([group, groupStatuses]) =>
                       groupStatuses.length > 0 && (
                         <div key={group}>

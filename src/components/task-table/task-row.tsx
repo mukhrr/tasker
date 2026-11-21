@@ -11,13 +11,14 @@ import {
 import type { UserStatus } from '@/types/database';
 import { UrlCell } from './cells/url-cell';
 import { IssueCell } from './cells/issue-cell';
-import { ReviewerBadge } from './cells/reviewer-badge';
 import { StatusCell } from './cells/status-cell';
 import { DateCell } from './cells/date-cell';
 import { AmountCell } from './cells/amount-cell';
 import { TextCell } from './cells/text-cell';
 import { NoteCell } from './cells/note-cell';
+import { TurnCell } from './cells/turn-cell';
 import { HighlightText } from './highlight-text';
+import { taskRole, whoseTurn } from '@/lib/role';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TaskRowActions } from './task-row-actions';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -30,6 +31,8 @@ interface TaskRowProps {
   isSyncing: boolean;
   search: string;
   visibleColumnKeys: ColumnKey[];
+  /** Reviewer tab only: render the computed Whose turn cell. */
+  showTurn: boolean;
   ctx: Pick<
     TaskTableContext,
     | 'statuses'
@@ -37,6 +40,7 @@ interface TaskRowProps {
     | 'getFieldValue'
     | 'setFieldValue'
     | 'handleUpdateTask'
+    | 'handleMoveRole'
     | 'handleDeleteTask'
     | 'handleSyncTask'
     | 'handleArchiveTask'
@@ -56,8 +60,11 @@ export function TaskRow({
   isSyncing,
   search,
   visibleColumnKeys,
+  showTurn,
   ctx,
 }: TaskRowProps) {
+  const role = taskRole(task);
+  const turn = whoseTurn(task.status, role);
   const isConfirmingDelete = ctx.deleteConfirmId === task.id;
 
   const staleRowBg = getStaleRowBg(
@@ -67,9 +74,9 @@ export function TaskRow({
   );
 
   const rowBg =
-    !task.archived && isPaymentOverdue(task.payment_date, task.status_group)
+    (!task.archived && isPaymentOverdue(task.payment_date, task.status_group)
       ? PAYMENT_OVERDUE_ROW_BG
-      : staleRowBg;
+      : staleRowBg) || (turn === 'me' && !task.archived ? 'bg-blue-500/5' : '');
 
   const selected = ctx.isSelected(task.id);
 
@@ -102,49 +109,58 @@ export function TaskRow({
                 query={search}
               />
             </a>
-            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-              {task.issue_title && (
-                <span className="truncate">
-                  <HighlightText
-                    text={shortenGitHubUrl(task.issue_url)}
-                    query={search}
-                  />
-                </span>
-              )}
-              <ReviewerBadge isReviewer={task.is_reviewer} />
-            </div>
+            {task.issue_title && (
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                <HighlightText
+                  text={shortenGitHubUrl(task.issue_url)}
+                  query={search}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <IssueCell
             issueUrl={task.issue_url}
             issueTitle={task.issue_title}
-            isReviewer={task.is_reviewer}
             onChange={(title) =>
               ctx.handleUpdateTask(task.id, { issue_title: title })
-            }
-            onReviewerChange={(value) =>
-              ctx.handleUpdateTask(task.id, { is_reviewer: value })
             }
             highlight={search}
           />
         )}
       </td>
 
+      {showTurn && !visibleColumnKeys.includes('status') && (
+        <td className="whitespace-nowrap px-3 py-2 sm:px-4">
+          <TurnCell turn={turn} />
+        </td>
+      )}
+
       {/* Dynamic built-in columns */}
       {visibleColumnKeys
         .filter((k) => k !== 'issue')
-        .map((key) => (
-          <td key={key} className={getCellClassName(key)}>
-            <CellContent
-              columnKey={key}
-              task={task}
-              isSyncing={isSyncing}
-              search={search}
-              readOnly={task.archived}
-              ctx={ctx}
-            />
-          </td>
-        ))}
+        .flatMap((key) => {
+          const cell = (
+            <td key={key} className={getCellClassName(key)}>
+              <CellContent
+                columnKey={key}
+                task={task}
+                isSyncing={isSyncing}
+                search={search}
+                readOnly={task.archived}
+                ctx={ctx}
+              />
+            </td>
+          );
+          return showTurn && key === 'status'
+            ? [
+                cell,
+                <td key="turn" className="whitespace-nowrap px-3 py-2 sm:px-4">
+                  <TurnCell turn={turn} />
+                </td>,
+              ]
+            : [cell];
+        })}
 
       {/* Custom columns (disabled for now)
       {ctx.columns.map((col) => (
@@ -165,6 +181,8 @@ export function TaskRow({
           isConfirmingDelete={isConfirmingDelete}
           isArchived={task.archived}
           isStale={Boolean(staleRowBg)}
+          isReviewer={role === 'reviewer'}
+          onMoveRole={() => ctx.handleMoveRole(task, role !== 'reviewer')}
           onSync={() => ctx.handleSyncTask(task.id)}
           onDelete={() => {
             ctx.handleDeleteTask(task.id);
@@ -243,6 +261,7 @@ function CellContent({
       ) : (
         <StatusCell
           value={task.status}
+          role={taskRole(task)}
           additionalBugsFixed={task.additional_bugs_fixed ?? 0}
           onAdditionalBugsChange={(count) =>
             ctx.handleUpdateTask(task.id, { additional_bugs_fixed: count })
