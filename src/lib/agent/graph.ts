@@ -51,7 +51,7 @@ import {
   fetchIssueComments,
   fetchPRReviews,
   fetchIssueEvents,
-  parseIssueUrl,
+  parseTaskUrl,
   parsePrUrl,
   parsePrCommentUrl,
   findLinkedPR,
@@ -181,7 +181,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
   const task = state.tasks[state.currentIndex];
   if (!task) return state;
 
-  const parsed = parseIssueUrl(task.issue_url);
+  const parsed = parseTaskUrl(task.issue_url);
   if (!parsed) {
     const lead = parsePrCommentUrl(task.issue_url);
     if (lead) return analyzeLead(state, task, lead);
@@ -210,7 +210,13 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     let reviews = null;
     let discoveredPrUrl: string | null = null;
 
-    if (task.pr_url) {
+    if (parsed.isPr) {
+      [prData, reviews] = await Promise.all([
+        fetchPR(owner, repo, number, token),
+        fetchPRReviews(owner, repo, number, token),
+      ]);
+      discoveredPrUrl = prData.html_url;
+    } else if (task.pr_url) {
       // PR already known
       const prParsed = parsePrUrl(task.pr_url);
       if (prParsed) {
@@ -254,14 +260,16 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       !!prData &&
       !!username &&
       prData.user.login.toLowerCase() === username.toLowerCase();
+    // A tracked PR by someone else is one the user reviews.
+    const reviewSignal = parsed.isPr
+      ? !!prData && !ownPr
+      : reviewerAssigned(comments, username);
     // The user's toggle wins: false never takes the reviewer path, and an
     // undecided task with their own PR is a contribution.
     const asReviewer =
       !!username &&
       (task.is_reviewer === true ||
-        (task.is_reviewer === null &&
-          !ownPr &&
-          reviewerAssigned(comments, username)));
+        (task.is_reviewer === null && !ownPr && reviewSignal));
     // Each role tab has its own statuses; the model only chooses among them.
     const roleStatuses = statusesForRole(
       state.userStatuses,
@@ -670,7 +678,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
         payment_date: result.payment_date ?? undefined,
         amount: result.amount ?? undefined,
         role: decideRole({
-          reviewerAssigned: reviewerAssigned(comments, username),
+          reviewerAssigned: reviewSignal,
           // pr_url can be the PR the user reviewed, so only its author counts.
           hasOwnPr:
             prData || asReviewer

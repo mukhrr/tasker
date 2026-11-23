@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchAllIssueEvents, searchAssignedIssues } from './github';
+import {
+  fetchAllIssueEvents,
+  parseTaskUrl,
+  searchAssignedIssues,
+} from './github';
 
 const respond = (body: unknown) =>
   Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
@@ -51,5 +55,27 @@ describe('searchAssignedIssues', () => {
     );
     expect(url).toContain('sort=updated');
     expect(url).toContain('per_page=50');
+  });
+});
+
+describe('parseTaskUrl', () => {
+  it('reads an issue link', () => {
+    expect(
+      parseTaskUrl('https://github.com/Expensify/App/issues/106007')
+    ).toEqual({ owner: 'Expensify', repo: 'App', number: 106007, isPr: false });
+  });
+
+  it('reads a bare PR link as a PR task', () => {
+    expect(
+      parseTaskUrl('https://github.com/Expensify/App/pull/104756/files')
+    ).toEqual({ owner: 'Expensify', repo: 'App', number: 104756, isPr: true });
+  });
+
+  it('leaves a PR comment link to the lead path', () => {
+    expect(
+      parseTaskUrl(
+        'https://github.com/Expensify/App/pull/104756#issuecomment-123'
+      )
+    ).toBeNull();
   });
 });

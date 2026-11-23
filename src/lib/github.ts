@@ -142,6 +142,25 @@ export function parsePrUrl(url: string): {
   return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
 }
 
+// A bare PR link is a task of its own. GitHub serves a PR's comments and
+// events through the issues API under the same number.
+export function parseTaskUrl(
+  url: string
+): { owner: string; repo: string; number: number; isPr: boolean } | null {
+  const issue = parseIssueUrl(url);
+  if (issue) {
+    return {
+      owner: issue.owner,
+      repo: issue.repo,
+      number: issue.number,
+      isPr: false,
+    };
+  }
+  if (parsePrCommentUrl(url)) return null;
+  const pr = parsePrUrl(url);
+  return pr ? { ...pr, isPr: true } : null;
+}
+
 export async function fetchIssue(
   owner: string,
   repo: string,
