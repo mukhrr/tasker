@@ -246,6 +246,7 @@ export function buildAnalysisPrompt(data: {
   developerNote?: string;
   assignedToOther?: boolean;
   asReviewer?: boolean;
+  reviewTurn?: 'me' | 'author';
   facts?: TaskFacts;
 }): string {
   let prompt = '';
@@ -260,6 +261,13 @@ export function buildAnalysisPrompt(data: {
   }
   if (data.asReviewer) {
     prompt += `Role: **C+ reviewer**. The developer reviews other people's proposals and PR on this issue; the PR is not theirs. Only the statuses listed for this role apply. \`approved_by_reviewer\` means the developer's own approval here. Rules about the developer's own PR, reviewer feedback to them, or a lost bounty do not apply.\n`;
+  }
+  // Computed from push and comment timestamps; the model misorders them.
+  if (data.reviewTurn) {
+    prompt +=
+      data.reviewTurn === 'me'
+        ? `Whose move on the PR: **the developer's**. The PR author pushed or replied after the developer's last review or comment, or the developer has not reviewed yet. Trust this over your own reading of the timeline.\n`
+        : `Whose move on the PR: **the PR author's**. Nothing from the author since the developer's last review or comment. Trust this over your own reading of the timeline.\n`;
   }
   if (data.wasManuallyEdited) {
     prompt += `User changed the status by hand since the last sync: **yes**\n`;

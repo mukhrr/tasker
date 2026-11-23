@@ -284,6 +284,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
     let failingChecks: string[] | null = [];
     let reviewerFeedback: ReviewerNote[] | null = null;
     let authorMoved = false;
+    let reviewTurn: 'me' | 'author' | undefined;
     if (prData && prData.state === 'open' && !prData.merged) {
       const prParsed = parsePrUrl(prData.html_url);
       if (prParsed && prData.mergeable === null) {
@@ -346,6 +347,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
           comments: prComments,
           lastPushAt,
         });
+        reviewTurn = authorMoved ? 'me' : 'author';
       }
       if (prParsed) {
         failingChecks =
@@ -551,6 +553,7 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
       wasManuallyEdited,
       assignedToOther: asReviewer ? false : assignedToOther,
       asReviewer,
+      reviewTurn,
       developerNote: task.note?.trim() || undefined,
       facts,
       githubUsername: username,
