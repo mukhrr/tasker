@@ -145,6 +145,9 @@ const LEAD_REPLY_WINDOW = 20;
 const LEAD_CANDIDATE_CAP = 5;
 const TIMELINE_PAGE_CAP = 5;
 const FEEDBACK_WINDOW = 8;
+// The seeded reviewer statuses the sync decides itself; any other reviewer
+// status was added by the user.
+const BUILT_IN_REVIEWER_KEYS = new Set(['review_due', 'waiting_on_author']);
 // GitHub computes mergeability lazily and answers null until it has.
 const MERGEABLE_RETRY_MS = 2000;
 // Timeline noise (mentioned, subscribed, renamed, ...) never changes a status.
@@ -729,6 +732,14 @@ async function fetchGithubData(state: State): Promise<Partial<State>> {
             myReview,
             authorMoved,
             openLinkedBugs: facts.open_linked_bugs,
+            customStatus: roleStatuses.some(
+              (s) =>
+                s.key === task.status &&
+                s.role === 'reviewer' &&
+                !BUILT_IN_REVIEWER_KEYS.has(s.key)
+            )
+              ? task.status
+              : undefined,
           },
           new Set(roleStatuses.map((s) => s.key))
         );

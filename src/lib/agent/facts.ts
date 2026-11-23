@@ -334,6 +334,9 @@ export function reviewerStatus(
     myReview: 'APPROVED' | 'CHANGES_REQUESTED' | null;
     authorMoved: boolean;
     openLinkedBugs: number | null;
+    // A reviewer status the user added (e.g. Selected) says more about a
+    // PR-less issue than Assigned does, so it stays until a PR appears.
+    customStatus?: string;
   },
   statusKeys: Set<string>
 ): string | null {
@@ -343,7 +346,9 @@ export function reviewerStatus(
     input.pr && (input.pr.merged || input.pr.state === 'open')
       ? input.pr
       : null;
-  if (!pr) return input.issueOpen ? pick('assigned') : null;
+  if (!pr) {
+    return input.issueOpen ? (input.customStatus ?? pick('assigned')) : null;
+  }
   if (pr.merged) {
     return input.openLinkedBugs ? pick('regression') : pick('merged');
   }

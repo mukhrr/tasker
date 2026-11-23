@@ -650,6 +650,15 @@ describe('reviewer path', () => {
     expect(reviewerStatus({ ...base, unassigned: true }, keys)).toBe('wasted');
   });
 
+  it('keeps a reviewer status the user added until a PR appears', () => {
+    expect(
+      reviewerStatus({ ...base, pr: null, customStatus: 'selected' }, keys)
+    ).toBe('selected');
+    expect(reviewerStatus({ ...base, customStatus: 'selected' }, keys)).toBe(
+      'waiting_on_author'
+    );
+  });
+
   it('never suggests a key the user does not have', () => {
     expect(
       reviewerStatus({ ...base, authorMoved: true }, new Set(['assigned']))
