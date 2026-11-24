@@ -13,8 +13,15 @@ import { useDashboardData } from '@/components/dashboard-data-provider';
 import { useDashboardStats } from '@/hooks/use-dashboard-stats';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard } from './stat-card';
-import { StatusChart } from './status-chart';
 import { LastSyncCard } from './last-sync-card';
+import { PayoutsCard } from './payouts-card';
+import { UnpaidCard } from './unpaid-card';
+import { PayoutTimeChart } from './payout-time-chart';
+import {
+  assignedToPaid,
+  payoutsDue,
+  unpaidByStatus,
+} from '@/lib/dashboard-charts';
 
 type DashboardRole = 'all' | 'contributor' | 'reviewer';
 
@@ -23,9 +30,9 @@ const EarningsChart = dynamic(
   () => import('./earnings-chart').then((m) => m.EarningsChart),
   { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
 );
-const ActivityChart = dynamic(
-  () => import('./activity-chart').then((m) => m.ActivityChart),
-  { ssr: false, loading: () => <Skeleton className="h-[360px] rounded-xl" /> }
+const AssignedChart = dynamic(
+  () => import('./assigned-chart').then((m) => m.AssignedChart),
+  { ssr: false, loading: () => <Skeleton className="h-[280px] rounded-xl" /> }
 );
 
 const DASHBOARD_ROLES: readonly DashboardRole[] = [
@@ -37,6 +44,7 @@ const DASHBOARD_ROLES: readonly DashboardRole[] = [
 export function DashboardView() {
   const {
     tasks: { tasks, loading },
+    statuses: { statuses },
   } = useDashboardData();
   const [role, setRole] = useRoleParam<DashboardRole>(DASHBOARD_ROLES, 'all');
   const roleTasks = useMemo(
@@ -53,6 +61,14 @@ export function DashboardView() {
     };
   }, [tasks]);
   const stats = useDashboardStats(roleTasks);
+  const charts = useMemo(() => {
+    const now = new Date();
+    return {
+      payouts: payoutsDue(roleTasks, now),
+      unpaid: unpaidByStatus(roleTasks, statuses),
+      payoutTime: assignedToPaid(roleTasks),
+    };
+  }, [roleTasks, statuses]);
   const isAll = role === 'all';
 
   const roleSwitch = (
@@ -160,16 +176,14 @@ export function DashboardView() {
 
       <LastSyncCard />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <EarningsChart
-          data={stats.earningsOverTime}
-          split={isAll}
-          reviewerOnly={role === 'reviewer'}
-        />
-        <StatusChart data={stats.tasksByStatusGroup} />
-      </div>
+      <AssignedChart tasks={roleTasks} />
 
-      <ActivityChart data={stats.monthlyActivity} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PayoutsCard data={charts.payouts} />
+        <UnpaidCard data={charts.unpaid} />
+        <EarningsChart data={stats.earningsOverTime} />
+        <PayoutTimeChart data={charts.payoutTime} />
+      </div>
     </div>
   );
 }

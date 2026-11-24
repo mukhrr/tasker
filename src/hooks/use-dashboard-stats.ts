@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { format, parseISO, startOfMonth, subMonths } from 'date-fns';
-import type { Task, TaskStatusGroup } from '@/types/database';
+import type { Task } from '@/types/database';
 
 export interface DashboardStats {
   totalEarned: number;
@@ -19,8 +19,6 @@ export interface DashboardStats {
   /** Signed change vs the month before last */
   lastMonthDelta: number;
   earningsOverTime: { month: string; amount: number; reviewer: number }[];
-  tasksByStatusGroup: { name: string; value: number; group: TaskStatusGroup }[];
-  monthlyActivity: { month: string; created: number; completed: number }[];
 }
 
 type StatsTask = Pick<
@@ -113,63 +111,6 @@ export function computeDashboardStats(
     (t) => paidMonth(t) === lastMonthKey
   ).length;
 
-  // Tasks by status group
-  const groupLabels: Record<TaskStatusGroup, string> = {
-    todo: 'To-do',
-    in_progress: 'In Progress',
-    pending: 'Pending',
-    complete: 'Complete',
-  };
-  const groupCounts: Record<TaskStatusGroup, number> = {
-    todo: 0,
-    in_progress: 0,
-    pending: 0,
-    complete: 0,
-  };
-  for (const t of tasks) {
-    groupCounts[t.status_group] = (groupCounts[t.status_group] ?? 0) + 1;
-  }
-  const tasksByStatusGroup = (
-    ['todo', 'in_progress', 'pending', 'complete'] as TaskStatusGroup[]
-  ).map((g) => ({
-    name: groupLabels[g],
-    value: groupCounts[g],
-    group: g,
-  }));
-
-  // Monthly activity — last 6 months
-  const activityKeys: string[] = [];
-  for (let i = 5; i >= 0; i--) {
-    activityKeys.push(format(startOfMonth(subMonths(now, i)), 'yyyy-MM'));
-  }
-
-  const createdMap = new Map<string, number>();
-  const completedMap = new Map<string, number>();
-  for (const key of activityKeys) {
-    createdMap.set(key, 0);
-    completedMap.set(key, 0);
-  }
-
-  for (const t of tasks) {
-    const createdKey = format(parseISO(t.created_at), 'yyyy-MM');
-    if (createdMap.has(createdKey)) {
-      createdMap.set(createdKey, createdMap.get(createdKey)! + 1);
-    }
-
-    if (t.status_group === 'complete') {
-      const compKey = paidMonth(t);
-      if (completedMap.has(compKey)) {
-        completedMap.set(compKey, completedMap.get(compKey)! + 1);
-      }
-    }
-  }
-
-  const monthlyActivity = activityKeys.map((key) => ({
-    month: format(parseISO(key + '-01'), 'MMM'),
-    created: createdMap.get(key)!,
-    completed: completedMap.get(key)!,
-  }));
-
   return {
     totalEarned,
     pendingAmount,
@@ -182,7 +123,5 @@ export function computeDashboardStats(
     lastMonthCompletedCount,
     lastMonthDelta,
     earningsOverTime,
-    tasksByStatusGroup,
-    monthlyActivity,
   };
 }
